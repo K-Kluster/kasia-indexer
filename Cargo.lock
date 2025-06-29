@@ -1263,6 +1263,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flume",
+ "futures-util",
  "itertools 0.14.0",
  "kaspa-core",
  "kaspa-rpc-core",
@@ -1271,6 +1272,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "workflow-core",
 ]
 
 [[package]]

@@ -4,16 +4,17 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow.workspace = true
+flume.workspace = true
+futures-util.workspace = true
+itertools.workspace = true
 kaspa-core.workspace = true
 kaspa-rpc-core.workspace = true
 kaspa-wrpc-client.workspace = true
-
-anyhow.workspace = true
-flume.workspace = true
-itertools.workspace = true
 ringmap.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 tracing.workspace = true
+workflow-core = "0.18.0"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["signal"] }

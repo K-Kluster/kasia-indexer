@@ -1,7 +1,8 @@
+use crate::BlockOrMany;
 use itertools::FoldWhile::{Continue, Done};
 use itertools::Itertools;
 use kaspa_rpc_core::api::rpc::RpcApi;
-use kaspa_rpc_core::{GetBlocksResponse, RpcBlock, RpcHash};
+use kaspa_rpc_core::{GetBlocksResponse, RpcHash, RpcHeader};
 use kaspa_wrpc_client::KaspaRpcClient;
 use tracing::{debug, error, info, trace, warn};
 
@@ -9,6 +10,15 @@ use tracing::{debug, error, info, trace, warn};
 pub struct Cursor {
     pub blue_score: u64,
     pub hash: RpcHash,
+}
+
+impl From<&RpcHeader> for Cursor {
+    fn from(value: &RpcHeader) -> Self {
+        Self {
+            blue_score: value.blue_score,
+            hash: value.hash,
+        }
+    }
 }
 
 impl Cursor {
@@ -49,7 +59,7 @@ pub struct HistoricalDataSyncer {
     /// RPC client for communicating with Kaspa node
     rpc_client: KaspaRpcClient,
     /// Channel to send processed blocks to handler
-    block_handler: flume::Sender<Vec<RpcBlock>>,
+    block_handler: flume::Sender<BlockOrMany>,
     /// Shutdown signal receiver
     shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 
@@ -64,7 +74,7 @@ impl HistoricalDataSyncer {
         rpc_client: KaspaRpcClient,
         start_cursor: Cursor,
         target_cursor: Cursor,
-        block_handler: flume::Sender<Vec<RpcBlock>>,
+        block_handler: flume::Sender<BlockOrMany>,
         shutdown_rx: tokio::sync::oneshot::Receiver<()>,
     ) -> Self {
         info!(
@@ -122,7 +132,11 @@ impl HistoricalDataSyncer {
             let target_status = self.process_blocks_batch(&blocks_response)?;
 
             // Send blocks to handler
-            if let Err(e) = self.block_handler.send(blocks_response.blocks) {
+            if let Err(e) = self
+                .block_handler
+                .send_async(BlockOrMany::Many(blocks_response.blocks))
+                .await
+            {
                 error!("Failed to send blocks to handler: {}", e);
                 return Err(anyhow::anyhow!("Block handler channel closed: {}", e));
             }

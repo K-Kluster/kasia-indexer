@@ -1,5 +1,6 @@
+use indexer_lib::BlockOrMany;
 use indexer_lib::historical_syncer::{Cursor, HistoricalDataSyncer};
-use kaspa_rpc_core::{GetBlockDagInfoResponse, GetServerInfoResponse, RpcBlock, api::rpc::RpcApi};
+use kaspa_rpc_core::{GetBlockDagInfoResponse, GetServerInfoResponse, api::rpc::RpcApi};
 use kaspa_wrpc_client::{
     KaspaRpcClient, Resolver, WrpcEncoding,
     client::{ConnectOptions, ConnectStrategy},
@@ -57,7 +58,7 @@ async fn run_syncer() -> anyhow::Result<()> {
     );
 
     // Create communication channels
-    let (block_tx, block_rx) = flume::unbounded::<Vec<RpcBlock>>();
+    let (block_tx, block_rx) = flume::unbounded::<BlockOrMany>();
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
     // Clone client for syncer task
