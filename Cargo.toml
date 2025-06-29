@@ -12,6 +12,7 @@ kaspa-rpc-core = "1.*"
 kaspa-wrpc-client = "1.*"
 
 anyhow = "1.0.98"
+faster-hex = "0.10.0"
 flume = "0.11.1"
 indexmap = "2.10.0"
 itertools = "0.14.0"

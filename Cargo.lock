@@ -721,6 +721,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "faster-hex"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7223ae2d2f179b803433d9c830478527e92b8117eab39460edae7f1614d9fb73"
+dependencies = [
+ "heapless",
+ "serde",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -940,6 +950,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hash32"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47d60b12902ba28e2730cd37e95b8c9223af2808df9e902d4df49588d1470606"
+dependencies = [
+ "byteorder",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -953,6 +972,16 @@ name = "hashbrown"
 version = "0.15.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5971ac85611da7067dbfcabef3c70ebb5606018acd9e2a3903a0da507521e0d5"
+
+[[package]]
+name = "heapless"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bfb9eb618601c89945a70e254898da93b13be0388091d42117462b265bb3fad"
+dependencies = [
+ "hash32",
+ "stable_deref_trait",
+]
 
 [[package]]
 name = "hermit-abi"
@@ -1370,7 +1399,7 @@ source = "git+https://github.com/kaspanet/rusty-kaspa.git?tag=v1.0.0#eb71df4d284
 dependencies = [
  "ahash",
  "cfg-if",
- "faster-hex",
+ "faster-hex 0.9.0",
  "hex",
  "itertools 0.13.0",
  "js-sys",
@@ -1401,7 +1430,7 @@ dependencies = [
  "async-trait",
  "borsh",
  "cfg-if",
- "faster-hex",
+ "faster-hex 0.9.0",
  "futures-util",
  "getrandom 0.2.16",
  "itertools 0.13.0",
@@ -1454,7 +1483,7 @@ version = "1.0.0"
 source = "git+https://github.com/kaspanet/rusty-kaspa.git?tag=v1.0.0#eb71df4d284593fccd1342094c37edc8c000da85"
 dependencies = [
  "cfg-if",
- "faster-hex",
+ "faster-hex 0.9.0",
  "js-sys",
  "kaspa-addresses",
  "kaspa-consensus-client",
@@ -1501,7 +1530,7 @@ dependencies = [
  "blake2b_simd",
  "borsh",
  "cc",
- "faster-hex",
+ "faster-hex 0.9.0",
  "js-sys",
  "kaspa-utils",
  "keccak",
@@ -1538,7 +1567,7 @@ version = "1.0.0"
 source = "git+https://github.com/kaspanet/rusty-kaspa.git?tag=v1.0.0#eb71df4d284593fccd1342094c37edc8c000da85"
 dependencies = [
  "borsh",
- "faster-hex",
+ "faster-hex 0.9.0",
  "js-sys",
  "kaspa-utils",
  "malachite-base",
@@ -1623,7 +1652,7 @@ dependencies = [
  "cfg-if",
  "derive_more",
  "downcast",
- "faster-hex",
+ "faster-hex 0.9.0",
  "hex",
  "js-sys",
  "kaspa-addresses",
@@ -1718,7 +1747,7 @@ dependencies = [
  "cfg-if",
  "duct",
  "event-listener 2.5.3",
- "faster-hex",
+ "faster-hex 0.9.0",
  "ipnet",
  "itertools 0.13.0",
  "log",
@@ -1742,7 +1771,7 @@ name = "kaspa-wasm-core"
 version = "1.0.0"
 source = "git+https://github.com/kaspanet/rusty-kaspa.git?tag=v1.0.0#eb71df4d284593fccd1342094c37edc8c000da85"
 dependencies = [
- "faster-hex",
+ "faster-hex 0.9.0",
  "hexplay",
  "js-sys",
  "wasm-bindgen",
@@ -2317,6 +2346,10 @@ dependencies = [
 [[package]]
 name = "protocol"
 version = "0.1.0"
+dependencies = [
+ "faster-hex 0.10.0",
+ "tracing",
+]
 
 [[package]]
 name = "quinn"
@@ -4044,7 +4077,7 @@ dependencies = [
  "cfg-if",
  "chrono",
  "dirs",
- "faster-hex",
+ "faster-hex 0.9.0",
  "futures",
  "getrandom 0.2.16",
  "instant",
@@ -4244,7 +4277,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "799e5fbf266e0fffb5c24d6103735eb2b94bb31f93b664b91eaaf63b4f959804"
 dependencies = [
  "cfg-if",
- "faster-hex",
+ "faster-hex 0.9.0",
  "futures",
  "js-sys",
  "serde",
