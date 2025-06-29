@@ -1229,6 +1229,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "indexer-lib"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flume",
+ "indexmap",
+ "itertools 0.14.0",
+ "kaspa-core",
+ "kaspa-rpc-core",
+ "kaspa-wrpc-client",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "indexmap"
 version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1847,23 +1863,6 @@ name = "litemap"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "241eaef5fd12c88705a01fc1066c48c4b36e0dd4377dcdc7ec3942cea7a69956"
-
-[[package]]
-name = "local-rusty-indexer-poc"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "flume",
- "indexmap",
- "itertools 0.14.0",
- "kaspa-core",
- "kaspa-rpc-core",
- "kaspa-wrpc-client",
- "rolling-file",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
 
 [[package]]
 name = "lock_api"
@@ -2590,15 +2589,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7043b63bd0cd1aaa628e476b80e6d4023a3b50eb32789f2728908107bd0c793a"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "rolling-file"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8395b4f860856b740f20a296ea2cd4d823e81a2658cf05ef61be22916026a906"
-dependencies = [
- "chrono",
 ]
 
 [[package]]

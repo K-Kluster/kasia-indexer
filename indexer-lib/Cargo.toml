@@ -1,0 +1,20 @@
+[package]
+name = "indexer-lib"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+kaspa-core.workspace = true
+kaspa-rpc-core.workspace = true
+kaspa-wrpc-client.workspace = true
+
+anyhow.workspace = true
+flume.workspace = true
+indexmap.workspace = true
+itertools.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["signal"] }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }

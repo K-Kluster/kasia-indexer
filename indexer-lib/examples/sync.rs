@@ -5,7 +5,7 @@ use kaspa_wrpc_client::{
     prelude::NetworkId,
     prelude::NetworkType,
 };
-use local_rusty_indexer_poc::historical_syncer::{Cursor, HistoricalDataSyncer};
+use indexer_lib::historical_syncer::{Cursor, HistoricalDataSyncer};
 use std::process::ExitCode;
 use std::time::Duration;
 use tokio::signal;
@@ -105,7 +105,7 @@ async fn run_syncer() -> anyhow::Result<()> {
                 let blue_score = block.header.blue_score;
 
                 // Log block information (as requested)
-                if idx == 0 || (idx == batch_size - 1 && idx != 0) {
+                if idx == 0 || idx == batch_size - 1 {
                     info!("Block: hash={:?}, blue_score={}", block_hash, blue_score);
                 }
 

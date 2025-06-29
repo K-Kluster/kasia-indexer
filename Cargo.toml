@@ -1,24 +1,21 @@
-[package]
-name = "local-rusty-indexer-poc"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+members = ["indexer-lib"]
+resolver = "3"
 
-[dependencies]
+
+[workspace.dependencies]
 kaspa-core = "1.*"
 kaspa-rpc-core = "1.*"
 kaspa-wrpc-client = "1.*"
 
-tokio = { version = "1.45.1", features = ["rt-multi-thread", "macros", "time"] }
-indexmap = "2.10.0"
-flume = "0.11.1"
 anyhow = "1.0.98"
+flume = "0.11.1"
+indexmap = "2.10.0"
 itertools = "0.14.0"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-tracing = "0.1.41"
 rolling-file = "0.2.0"
-
-[dev-dependencies]
-tokio = { version = "1.45.1", features = ["signal"] }
+tokio = "1.45.1"
+tracing = "0.1.41"
+tracing-subscriber = "0.3.19"
 
 [patch.crates-io]
 kaspa-core = { git = "https://github.com/kaspanet/rusty-kaspa.git", tag = "v1.0.0" }
