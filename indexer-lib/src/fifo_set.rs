@@ -1,15 +1,13 @@
-use indexmap::IndexSet;
+use ringmap::set::RingSet;
 
 pub struct FifoSet<K> {
-    set: IndexSet<K>,
-    capacity: usize,
+    set: RingSet<K>,
 }
 
 impl<K: std::hash::Hash + Eq> FifoSet<K> {
     pub fn new(capacity: usize) -> Self {
         Self {
-            set: IndexSet::with_capacity(capacity),
-            capacity,
+            set: RingSet::with_capacity(capacity),
         }
     }
 
@@ -18,8 +16,8 @@ impl<K: std::hash::Hash + Eq> FifoSet<K> {
             return false;
         }
 
-        if self.set.len() == self.capacity {
-            self.set.shift_remove_index(0);
+        if self.set.len() == self.set.capacity() {
+            self.set.pop_front();
         }
 
         self.set.insert(key);

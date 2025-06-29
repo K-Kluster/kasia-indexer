@@ -10,8 +10,8 @@ kaspa-wrpc-client.workspace = true
 
 anyhow.workspace = true
 flume.workspace = true
-indexmap.workspace = true
 itertools.workspace = true
+ringmap.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 tracing.workspace = true
 

@@ -1263,11 +1263,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "flume",
- "indexmap",
  "itertools 0.14.0",
  "kaspa-core",
  "kaspa-rpc-core",
  "kaspa-wrpc-client",
+ "ringmap",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -2617,6 +2617,16 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "ringmap"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e281d65739bbe3b6effa840c6317a7e032127303f62d13b3e18e51482da936e7"
+dependencies = [
+ "equivalent",
+ "hashbrown 0.15.4",
 ]
 
 [[package]]
