@@ -6,7 +6,9 @@ use kaspa_rpc_core::api::rpc::RpcApi;
 use kaspa_rpc_core::notify::connection::{ChannelConnection, ChannelType};
 use kaspa_rpc_core::{BlockAddedNotification, Notification};
 use kaspa_wrpc_client::KaspaRpcClient;
+use kaspa_wrpc_client::client::ConnectOptions;
 use kaspa_wrpc_client::prelude::{BlockAddedScope, ListenerId, Scope};
+use std::time::Duration;
 use tracing::{error, info, warn};
 use workflow_core::channel::Channel;
 
@@ -26,7 +28,7 @@ pub struct Subscriber {
     listener_id: Option<ListenerId>,
 
     last_block_cursor: Option<Cursor>,
-    
+
     historical_data_syncer_shutdown_tx: Vec<tokio::sync::oneshot::Sender<()>>,
 }
 
@@ -93,7 +95,7 @@ impl Subscriber {
         }
     }
 
-    async fn handle_connect(&mut self) -> anyhow::Result<()> {
+    async fn handle_connect_impl(&mut self) -> anyhow::Result<()> {
         info!("Connected to {:?}", self.rpc_client.url());
         // now that we have successfully connected we
         // can register for notifications
@@ -105,9 +107,9 @@ impl Subscriber {
             .await?
             .header
             .blue_score;
-        
+
         // todo insert hole to db to be handled by the syncer in future run, here we know target block
-        
+
         if let Some(last) = self.last_block_cursor.take() {
             let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
             self.historical_data_syncer_shutdown_tx.push(shutdown_tx);
@@ -127,6 +129,26 @@ impl Subscriber {
         }
 
         Ok(())
+    }
+
+    async fn handle_connect(&mut self) -> anyhow::Result<()> {
+        match self.handle_connect_impl().await {
+            Err(err) => {
+                error!("Error while connecting to node: {err}");
+                // force disconnect the client if we have failed
+                // to negotiate the connection to the node.
+                // self.rpc_client().trigger_abort()?;
+                self.rpc_client.disconnect().await?;
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                let options = ConnectOptions {
+                    block_async_connect: false,
+                    ..Default::default()
+                };
+                self.rpc_client.connect(Some(options)).await?;
+                Err(err)
+            }
+            Ok(_) => Ok(()),
+        }
     }
 
     async fn register_notification_listeners(&mut self) -> anyhow::Result<()> {

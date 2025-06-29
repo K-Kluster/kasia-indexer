@@ -103,16 +103,24 @@ impl HistoricalDataSyncer {
 
         loop {
             let fetch_next_batch = async || {
-                self.rpc_client
-                    .get_blocks(Some(self.current_cursor.hash), true, true)
-                    .await
-                    .inspect_err(|e| error!("RPC get_blocks failed: {}", e))
+                loop {
+                    let Ok(blocks) = self
+                        .rpc_client
+                        .get_blocks(Some(self.current_cursor.hash), true, true)
+                        .await
+                        .inspect_err(|e| error!("RPC get_blocks failed: {}", e))
+                    else {
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        continue;
+                    };
+                    return blocks;
+                }
             };
 
             // Check for shutdown signal and fetch next batch
             let blocks_response = tokio::select! {
                 biased;
-
+                
                 shutdown_result = &mut self.shutdown_rx => {
                     shutdown_result
                     .inspect(|_| info!("Shutdown signal received, stopping sync"))
@@ -120,9 +128,7 @@ impl HistoricalDataSyncer {
 
                     return Ok(())
                 }
-                response = fetch_next_batch() => {
-                    response?
-                },
+                response = fetch_next_batch() => response,
             };
 
             let batch_size = blocks_response.blocks.len();
