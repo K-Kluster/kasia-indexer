@@ -10,8 +10,7 @@ pub fn deserialize_sealed_operation(payload_bytes: &[u8]) -> Option<SealedOperat
     };
 
     // Check for specific operation types
-    if payload_string.starts_with("ciph_msg:1:payment:") {
-        let payment_hex = &payload_string["ciph_msg:1:payment:".len()..];
+    if let Some(payment_hex) = payload_string.strip_prefix("ciph_msg:1:payment:") {
         return Some(SealedOperation::Payment(SealedPayment {
             sealed_hex: payment_hex.to_string(),
         }));

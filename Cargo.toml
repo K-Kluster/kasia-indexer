@@ -1,5 +1,8 @@
 [workspace]
-members = ["indexer-lib"]
+members = [
+    "indexer-lib",
+    "protocol",
+]
 resolver = "3"
 
 

@@ -279,4 +279,3 @@ pub struct SyncStats {
     pub target_blue_score: u64,
     pub anticone_candidates_count: usize,
 }
-

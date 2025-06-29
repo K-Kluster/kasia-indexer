@@ -1,3 +1,4 @@
+use indexer_lib::historical_syncer::{Cursor, HistoricalDataSyncer};
 use kaspa_rpc_core::{GetBlockDagInfoResponse, GetServerInfoResponse, RpcBlock, api::rpc::RpcApi};
 use kaspa_wrpc_client::{
     KaspaRpcClient, Resolver, WrpcEncoding,
@@ -5,7 +6,6 @@ use kaspa_wrpc_client::{
     prelude::NetworkId,
     prelude::NetworkType,
 };
-use indexer_lib::historical_syncer::{Cursor, HistoricalDataSyncer};
 use std::process::ExitCode;
 use std::time::Duration;
 use tokio::signal;
@@ -162,12 +162,12 @@ async fn run_syncer() -> anyhow::Result<()> {
 
 async fn setup_rpc_client() -> anyhow::Result<KaspaRpcClient> {
     let encoding = WrpcEncoding::Borsh;
-    
+
     let resolver = Some(Resolver::default());
     let url = None;
     let network_type = NetworkType::Mainnet;
     let selected_network = Some(NetworkId::new(network_type));
-    
+
     let subscription_context = None;
 
     info!("Creating RPC client for network: {:?}", network_type);

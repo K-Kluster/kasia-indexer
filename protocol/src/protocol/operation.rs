@@ -1,4 +1,4 @@
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Payment {
     pub r#type: String,
     pub amount: u64,
@@ -7,7 +7,7 @@ pub struct Payment {
     pub version: u32,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Handshake {
     pub alias: String,
     pub timestamp: String,
@@ -18,12 +18,12 @@ pub struct Handshake {
     pub is_response: Option<bool>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Message {
     pub content: String,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 /**
  * ContextualMessage is a message that is sent only once handshake is done.
  */
@@ -32,7 +32,7 @@ pub struct ContextualMessage {
     pub content: String,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct SealedHandshake {
     pub alias: String,
     pub timestamp: String,
@@ -43,13 +43,13 @@ pub struct SealedHandshake {
     pub is_response: Option<bool>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct SealedMessage {
     pub alias: String,
     pub sealed_hex: String,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 /**
  * SealedContextualMessage is a message that is sent only once handshake is done.
  */
@@ -58,17 +58,17 @@ pub struct SealedContextualMessage {
     pub sealed_hex: String,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct SealedPayment {
     pub sealed_hex: String,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct SealedMessageOrSealedHandshake {
     pub sealed_hex: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum SealedOperation {
     /**
      * "ciph_msg:{{SealedHandshake_as_json_string_as_hex}}"
@@ -86,23 +86,4 @@ pub enum SealedOperation {
      * "ciph_msg:1:payment:{{SealedPayment_as_json_string_as_hex}}"
      */
     Payment(SealedPayment),
-}
-
-impl PartialEq for SealedOperation {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (
-                SealedOperation::SealedMessageOrSealedHandshake(handshake1),
-                SealedOperation::SealedMessageOrSealedHandshake(handshake2),
-            ) => handshake1 == handshake2,
-            (SealedOperation::Payment(payment1), SealedOperation::Payment(payment2)) => {
-                payment1 == payment2
-            }
-            (
-                SealedOperation::ContextualMessage(contextual_message1),
-                SealedOperation::ContextualMessage(contextual_message2),
-            ) => contextual_message1 == contextual_message2,
-            _ => false,
-        }
-    }
 }
