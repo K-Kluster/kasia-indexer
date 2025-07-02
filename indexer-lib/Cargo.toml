@@ -14,7 +14,7 @@ kaspa-wrpc-client.workspace = true
 ringmap.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 tracing.workspace = true
-workflow-core = "0.18.0"
+workflow-core.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["signal"] }
