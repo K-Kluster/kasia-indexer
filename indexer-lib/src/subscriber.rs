@@ -126,6 +126,7 @@ impl Subscriber {
                     );
                 }
             });
+            // todo remove processed hole
         }
 
         Ok(())
