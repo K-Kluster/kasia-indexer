@@ -5,6 +5,7 @@ use kaspa_rpc_core::RpcScriptPublicKey;
 use kaspa_txscript::script_class::ScriptClass;
 use std::marker::PhantomData;
 use std::ops::Deref;
+use fjall::WriteTransaction;
 
 const EMPTY_VERSION: u8 = 0; // used when we dont know address at all
 
@@ -65,7 +66,7 @@ impl TryFrom<&RpcScriptPublicKey> for AddressPayload {
 }
 
 #[derive(Clone)]
-pub struct SenderHandshakeBySenderPartition(fjall::Partition);
+pub struct SenderHandshakeBySenderPartition(fjall::TxPartition);
 
 #[derive(Clone, Copy, Debug, AnyBitPattern, NoUninit, PartialEq, Eq)]
 #[repr(C)]
@@ -105,6 +106,11 @@ impl<T: AsRef<[u8]>> Deref for LikeHandshakeKeyBySender<T> {
 impl SenderHandshakeBySenderPartition {
     pub fn insert(&self, key: &HandshakeKeyBySender) -> anyhow::Result<()> {
         self.0.insert(bytemuck::bytes_of(key), [])?;
+        Ok(())
+    }
+
+    pub fn insert_wtx(&self, wtx: &mut WriteTransaction, key: &HandshakeKeyBySender) -> anyhow::Result<()> {
+        wtx.insert(&self.0,bytemuck::bytes_of(key), []);
         Ok(())
     }
 }

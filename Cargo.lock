@@ -1370,6 +1370,7 @@ dependencies = [
  "kaspa-wrpc-client",
  "protocol",
  "ringmap",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
