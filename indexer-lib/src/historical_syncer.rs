@@ -120,7 +120,7 @@ impl HistoricalDataSyncer {
             // Check for shutdown signal and fetch next batch
             let blocks_response = tokio::select! {
                 biased;
-                
+
                 shutdown_result = &mut self.shutdown_rx => {
                     shutdown_result
                     .inspect(|_| info!("Shutdown signal received, stopping sync"))

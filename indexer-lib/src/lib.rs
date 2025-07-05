@@ -7,6 +7,8 @@ pub mod fifo_set;
 pub mod historical_syncer;
 pub mod subscriber;
 
+pub mod database;
+
 pub enum BlockOrMany {
     Many(Vec<RpcBlock>),
     Block(Arc<RpcBlock>),

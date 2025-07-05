@@ -67,7 +67,7 @@ pub struct SealedPayment<'a> {
     pub sealed_hex: &'a [u8],
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct SealedMessageOrSealedHandshake<'a> {
     pub sealed_hex: &'a [u8],
 }
