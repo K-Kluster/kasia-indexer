@@ -5,9 +5,9 @@ use kaspa_rpc_core::RpcScriptPublicKey;
 use kaspa_txscript::script_class::ScriptClass;
 use std::marker::PhantomData;
 use std::ops::Deref;
-use fjall::WriteTransaction;
+use fjall::{PartitionCreateOptions, WriteTransaction};
 
-const EMPTY_VERSION: u8 = 0; // used when we dont know address at all
+const EMPTY_VERSION: u8 = 0; // used when we don't know address at all
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, AnyBitPattern, NoUninit)]
@@ -66,7 +66,16 @@ impl TryFrom<&RpcScriptPublicKey> for AddressPayload {
 }
 
 #[derive(Clone)]
-pub struct SenderHandshakeBySenderPartition(fjall::TxPartition);
+pub struct HandshakeBySenderPartition(fjall::TxPartition);
+
+impl HandshakeBySenderPartition {
+    pub fn new(keyspace: &fjall::TxKeyspace) -> anyhow::Result<Self> {
+        Ok(Self(keyspace.open_partition(
+            "handshake_by_receiver",
+            PartitionCreateOptions::default(),
+        )?))
+    }
+}
 
 #[derive(Clone, Copy, Debug, AnyBitPattern, NoUninit, PartialEq, Eq)]
 #[repr(C)]
@@ -103,7 +112,7 @@ impl<T: AsRef<[u8]>> Deref for LikeHandshakeKeyBySender<T> {
     }
 }
 
-impl SenderHandshakeBySenderPartition {
+impl HandshakeBySenderPartition {
     pub fn insert(&self, key: &HandshakeKeyBySender) -> anyhow::Result<()> {
         self.0.insert(bytemuck::bytes_of(key), [])?;
         Ok(())
@@ -126,9 +135,9 @@ pub struct HandshakeKeyByReceiver {
 }
 
 #[derive(Clone)]
-pub struct SenderHandshakeByReceiverPartition(fjall::Partition);
+pub struct HandshakeByReceiverPartition(fjall::TxPartition);
 
-impl SenderHandshakeByReceiverPartition {
+impl HandshakeByReceiverPartition {
     pub fn insert(
         &self,
         key: &HandshakeKeyByReceiver,
@@ -142,9 +151,16 @@ impl SenderHandshakeByReceiverPartition {
 }
 
 #[derive(Clone)]
-pub struct TxIdToHandshakePartition(fjall::Partition);
+pub struct TxIdToHandshakePartition(fjall::TxPartition);
 
 impl TxIdToHandshakePartition {
+    pub fn new(keyspace: &fjall::TxKeyspace) -> anyhow::Result<Self> {
+        Ok(Self(keyspace.open_partition(
+            "tx-id-to-handshake",
+            PartitionCreateOptions::default(),
+        )?))
+    }
+    
     pub fn insert(&self, tx_id: &[u8], sealed_hex: &[u8]) -> anyhow::Result<()> {
         assert_eq!(tx_id.len(), 32);
         self.0.insert(tx_id, sealed_hex)?;

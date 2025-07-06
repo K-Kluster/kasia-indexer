@@ -1,9 +1,8 @@
 use bytemuck::{AnyBitPattern, NoUninit};
-use fjall::{PartitionCreateOptions, ReadTransaction, UserKey};
+use fjall::{PartitionCreateOptions, ReadTransaction, UserKey, WriteTransaction};
 use std::marker::PhantomData;
 use std::ops::Deref;
 
-pub mod trigger;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, AnyBitPattern, NoUninit, PartialEq, Eq)]
@@ -60,6 +59,22 @@ impl AcceptanceToTxIDPartition {
             accepted_by_block_hash: acceptance.0,
         };
         Ok(self.0.insert(bytemuck::bytes_of(&key), [])?)
+    }
+
+    pub fn insert_wtx(
+        &self,
+        wtx: &mut WriteTransaction,
+        tx_id: [u8; 32],
+        acceptance: Option<([u8; 32], [u8; 8])>,
+    ) -> anyhow::Result<()> {
+        let acceptance = acceptance.unwrap_or_default();
+        let key = TxAcceptanceKey {
+            tx_id,
+            accepted_at_daa: acceptance.1,
+            accepted_by_block_hash: acceptance.0,
+        };
+        wtx.insert(&self.0, bytemuck::bytes_of(&key), []);
+        Ok(())
     }
 
     pub fn unknown_acceptance(
@@ -130,5 +145,44 @@ impl TxIDToAcceptancePartition {
             accepted_by_block_hash: acceptance.0,
         };
         Ok(self.0.insert(bytemuck::bytes_of(&key), [])?)
+    }
+
+    pub fn insert_wtx(
+        &self,
+        wtx: &mut WriteTransaction,
+        tx_id: [u8; 32],
+        acceptance: Option<([u8; 32], [u8; 8])>,
+    ) -> anyhow::Result<()> {
+        let acceptance = acceptance.unwrap_or_default();
+        let key = AcceptanceTxKey {
+            tx_id,
+            accepted_at_daa: acceptance.1,
+            accepted_by_block_hash: acceptance.0,
+        };
+        wtx.insert(&self.0, bytemuck::bytes_of(&key), []);
+        Ok(())
+    }
+
+    pub fn get_wtx(
+        &self,
+        wtx: &mut WriteTransaction,
+        tx_id: [u8; 32],
+    ) -> anyhow::Result<Option<AcceptanceTxKey>> {
+        // We need to scan for the key since tx_id is the first field
+        let start = tx_id;
+        let mut end = [0u8; 72]; // tx_id(32) + daa(8) + block_hash(32)
+        end[..32].copy_from_slice(&tx_id);
+        end[32..].fill(0xff);
+        
+        let mut result = None;
+        for item in wtx.range(&self.0, start.as_slice()..=end.as_slice()) {
+            let (key_bytes, _) = item?;
+            let key: AcceptanceTxKey = *bytemuck::from_bytes(&key_bytes);
+            if key.tx_id == tx_id {
+                result = Some(key);
+                break;
+            }
+        }
+        Ok(result)
     }
 }

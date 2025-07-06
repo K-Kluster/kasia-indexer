@@ -1,3 +1,5 @@
+extern crate core;
+
 use kaspa_rpc_core::RpcBlock;
 use std::ops::Deref;
 use std::slice;
