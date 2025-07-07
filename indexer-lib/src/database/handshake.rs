@@ -95,14 +95,14 @@ pub struct LikeHandshakeKeyBySender<T: AsRef<[u8]>> {
     phantom_data: PhantomData<HandshakeKeyBySender>,
 }
 
-impl<T: AsRef<[u8]>> LikeHandshakeKeyBySender<T> {
-    fn new(bts: T) -> Self {
-        Self {
-            bts,
-            phantom_data: PhantomData,
-        }
-    }
-}
+// impl<T: AsRef<[u8]>> LikeHandshakeKeyBySender<T> {
+//     fn new(bts: T) -> Self {
+//         Self {
+//             bts,
+//             phantom_data: PhantomData,
+//         }
+//     }
+// }
 
 impl<T: AsRef<[u8]>> Deref for LikeHandshakeKeyBySender<T> {
     type Target = HandshakeKeyBySender;

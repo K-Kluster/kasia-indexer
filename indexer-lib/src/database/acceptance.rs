@@ -106,14 +106,14 @@ pub struct LikeAcceptanceTxKey<T: AsRef<[u8]>> {
     phantom_data: PhantomData<AcceptanceTxKey>,
 }
 
-impl<T: AsRef<[u8]>> LikeAcceptanceTxKey<T> {
-    fn new(bts: T) -> Self {
-        Self {
-            bts,
-            phantom_data: PhantomData,
-        }
-    }
-}
+// impl<T: AsRef<[u8]>> LikeAcceptanceTxKey<T> {
+//     fn new(bts: T) -> Self {
+//         Self {
+//             bts,
+//             phantom_data: PhantomData,
+//         }
+//     }
+// }
 
 impl<T: AsRef<[u8]>> Deref for LikeAcceptanceTxKey<T> {
     type Target = AcceptanceTxKey;
