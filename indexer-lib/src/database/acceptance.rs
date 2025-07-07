@@ -3,7 +3,6 @@ use fjall::{PartitionCreateOptions, ReadTransaction, UserKey, WriteTransaction};
 use std::marker::PhantomData;
 use std::ops::Deref;
 
-
 #[repr(C)]
 #[derive(Clone, Copy, Debug, AnyBitPattern, NoUninit, PartialEq, Eq)]
 pub struct TxAcceptanceKey {
@@ -173,7 +172,7 @@ impl TxIDToAcceptancePartition {
         let mut end = [0u8; 72]; // tx_id(32) + daa(8) + block_hash(32)
         end[..32].copy_from_slice(&tx_id);
         end[32..].fill(0xff);
-        
+
         let mut result = None;
         for item in wtx.range(&self.0, start.as_slice()..=end.as_slice()) {
             let (key_bytes, _) = item?;

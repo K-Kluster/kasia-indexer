@@ -1,12 +1,12 @@
 use anyhow::Result;
+use bytemuck::{AnyBitPattern, NoUninit};
 use fjall::{PartitionCreateOptions, ReadTransaction, WriteTransaction};
 use kaspa_rpc_core::RpcTransactionId;
-use bytemuck::{AnyBitPattern, NoUninit};
 
 /// FIFO partition for tracking transactions that need sender address/payload resolution
 /// Key: accepting_daa_score + tx_id, Value: empty
 /// Simple tracking - just marks what needs processing
-/// 
+///
 /// Uses FIFO compaction strategy because:
 /// - Pending resolutions are temporary - will be processed and removed
 /// - Older entries become irrelevant as blockchain progresses
@@ -80,21 +80,22 @@ impl PendingSenderResolutionPartition {
         &self,
         rtx: &ReadTransaction,
     ) -> impl DoubleEndedIterator<Item = Result<PendingSenderResolution>> + '_ {
-        rtx.iter(&self.0)
-            .map(|item| {
-                let (key_bytes, _) = item?;
-                if key_bytes.len() == 40 {
-                    let key: PendingResolutionKey = *bytemuck::from_bytes(&key_bytes);
-                    let accepting_daa_score = u64::from_be_bytes(key.accepting_daa_score);
-                    let tx_id = RpcTransactionId::from_slice(&key.tx_id);
-                    Ok(PendingSenderResolution {
-                        accepting_daa_score,
-                        tx_id,
-                    })
-                } else {
-                    Err(anyhow::anyhow!("Invalid key length in pending_sender_resolution partition"))
-                }
-            })
+        rtx.iter(&self.0).map(|item| {
+            let (key_bytes, _) = item?;
+            if key_bytes.len() == 40 {
+                let key: PendingResolutionKey = *bytemuck::from_bytes(&key_bytes);
+                let accepting_daa_score = u64::from_be_bytes(key.accepting_daa_score);
+                let tx_id = RpcTransactionId::from_slice(&key.tx_id);
+                Ok(PendingSenderResolution {
+                    accepting_daa_score,
+                    tx_id,
+                })
+            } else {
+                Err(anyhow::anyhow!(
+                    "Invalid key length in pending_sender_resolution partition"
+                ))
+            }
+        })
     }
 
     /// Mark multiple transactions as needing sender resolution
@@ -124,13 +125,13 @@ mod tests {
             accepting_daa_score: 12345u64.to_be_bytes(),
             tx_id: [1u8; 32],
         };
-        
+
         let bytes = bytemuck::bytes_of(&key);
         assert_eq!(bytes.len(), 40);
-        
+
         let deserialized: PendingResolutionKey = *bytemuck::from_bytes(bytes);
         assert_eq!(deserialized, key);
-        
+
         let accepting_daa_score = u64::from_be_bytes(deserialized.accepting_daa_score);
         assert_eq!(accepting_daa_score, 12345);
     }
@@ -141,12 +142,12 @@ mod tests {
             accepting_daa_score: 100u64.to_be_bytes(),
             tx_id: [1u8; 32],
         };
-        
+
         let key2 = PendingResolutionKey {
             accepting_daa_score: 200u64.to_be_bytes(),
             tx_id: [1u8; 32],
         };
-        
+
         assert!(key1 < key2); // Lower DAA score comes first
     }
 
@@ -156,7 +157,7 @@ mod tests {
             accepting_daa_score: 12345,
             tx_id: RpcTransactionId::from_slice(&[1u8; 32]),
         };
-        
+
         assert_eq!(resolution.accepting_daa_score, 12345);
         assert_eq!(resolution.tx_id.as_bytes(), [1u8; 32]);
     }

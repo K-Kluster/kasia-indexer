@@ -1,7 +1,7 @@
+use crate::database::util::TwoPointerIntersect;
 use anyhow::{Result, bail};
 use fjall::{PartitionCreateOptions, ReadTransaction, WriteTransaction};
 use kaspa_rpc_core::{RpcHash, RpcTransactionId};
-use crate::database::util::{TwoPointerIntersect};
 
 /// FIFO partition for storing transactions with unknown acceptance status
 /// Key: tx_id, Value: accepting_block_hash so we can search by transaction and get the block

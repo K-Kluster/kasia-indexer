@@ -93,8 +93,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::convert::Infallible;
     use super::*;
+    use std::convert::Infallible;
 
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
     struct TestKey(u32);
@@ -117,18 +117,10 @@ mod tests {
         ];
 
         // Right iterator: sorted keys to find
-        let right_data = vec![
-            TestKey(2),
-            TestKey(3),
-            TestKey(5),
-            TestKey(8),
-            TestKey(9),
-        ];
+        let right_data = vec![TestKey(2), TestKey(3), TestKey(5), TestKey(8), TestKey(9)];
 
-        let result: Vec<_> = TwoPointerIntersection::new(
-            left_data.into_iter(),
-            right_data.into_iter(),
-        ).collect();
+        let result: Vec<_> =
+            TwoPointerIntersection::new(left_data.into_iter(), right_data.into_iter()).collect();
 
         let expected = vec![
             Ok((TestKey(3), TestValue("b".to_string()))),
@@ -148,16 +140,10 @@ mod tests {
             Ok((TestKey(5), TestValue("c".to_string()))),
         ];
 
-        let right_data = vec![
-            TestKey(1),
-            TestKey(3),
-            TestKey(4),
-        ];
+        let right_data = vec![TestKey(1), TestKey(3), TestKey(4)];
 
-        let result: Vec<_> = TwoPointerIntersection::new(
-            left_data.into_iter(),
-            right_data.into_iter(),
-        ).collect();
+        let result: Vec<_> =
+            TwoPointerIntersection::new(left_data.into_iter(), right_data.into_iter()).collect();
 
         let expected = vec![
             Ok((TestKey(1), TestValue("a".to_string()))),
@@ -176,16 +162,10 @@ mod tests {
             Ok((TestKey(5), TestValue("c".to_string()))),
         ];
 
-        let right_data = vec![
-            TestKey(2),
-            TestKey(4),
-            TestKey(6),
-        ];
+        let right_data = vec![TestKey(2), TestKey(4), TestKey(6)];
 
-        let result: Vec<_> = TwoPointerIntersection::new(
-            left_data.into_iter(),
-            right_data.into_iter(),
-        ).collect();
+        let result: Vec<_> =
+            TwoPointerIntersection::new(left_data.into_iter(), right_data.into_iter()).collect();
 
         assert_eq!(result, vec![]);
     }
@@ -195,10 +175,8 @@ mod tests {
         let left_data: Vec<Result<(TestKey, TestValue), TestError>> = vec![];
         let right_data: Vec<TestKey> = vec![];
 
-        let result: Vec<_> = TwoPointerIntersection::new(
-            left_data.into_iter(),
-            right_data.into_iter(),
-        ).collect();
+        let result: Vec<_> =
+            TwoPointerIntersection::new(left_data.into_iter(), right_data.into_iter()).collect();
 
         assert_eq!(result, vec![]);
     }
@@ -211,10 +189,7 @@ mod tests {
             Ok((TestKey(5), TestValue("c".to_string()))),
         ];
 
-        let right_data = vec![
-            TestKey(1),
-            TestKey(5),
-        ];
+        let right_data = vec![TestKey(1), TestKey(5)];
 
         let result: Vec<_> = left_data
             .into_iter()

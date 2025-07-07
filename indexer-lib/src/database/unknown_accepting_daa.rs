@@ -74,9 +74,8 @@ impl UnknownAcceptingDaaPartition {
         rtx: &ReadTransaction,
     ) -> impl DoubleEndedIterator<Item = Result<RpcHash>> + '_ {
         rtx.iter(&self.0).map(|r| {
-            r.map_err(anyhow::Error::from).map(|(k, _)| {
-                RpcHash::from_slice(k.as_ref())
-            })
+            r.map_err(anyhow::Error::from)
+                .map(|(k, _)| RpcHash::from_slice(k.as_ref()))
         })
     }
 
@@ -110,7 +109,7 @@ mod tests {
     fn test_accepting_block_specificity() {
         // This partition is specifically for accepting blocks in GHOSTDAG
         let accepting_block_hash = RpcHash::from_slice(&[1u8; 32]);
-        
+
         // Accepting blocks are a subset of all blocks
         assert_eq!(accepting_block_hash.as_bytes().len(), 32);
     }

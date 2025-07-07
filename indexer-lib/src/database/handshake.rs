@@ -1,11 +1,11 @@
 use anyhow::bail;
 use bytemuck::{AnyBitPattern, NoUninit};
+use fjall::{PartitionCreateOptions, WriteTransaction};
 use kaspa_addresses::Version;
 use kaspa_rpc_core::RpcScriptPublicKey;
 use kaspa_txscript::script_class::ScriptClass;
 use std::marker::PhantomData;
 use std::ops::Deref;
-use fjall::{PartitionCreateOptions, WriteTransaction};
 
 const EMPTY_VERSION: u8 = 0; // used when we don't know address at all
 
@@ -118,8 +118,12 @@ impl HandshakeBySenderPartition {
         Ok(())
     }
 
-    pub fn insert_wtx(&self, wtx: &mut WriteTransaction, key: &HandshakeKeyBySender) -> anyhow::Result<()> {
-        wtx.insert(&self.0,bytemuck::bytes_of(key), []);
+    pub fn insert_wtx(
+        &self,
+        wtx: &mut WriteTransaction,
+        key: &HandshakeKeyBySender,
+    ) -> anyhow::Result<()> {
+        wtx.insert(&self.0, bytemuck::bytes_of(key), []);
         Ok(())
     }
 }
@@ -160,7 +164,7 @@ impl TxIdToHandshakePartition {
             PartitionCreateOptions::default(),
         )?))
     }
-    
+
     pub fn insert(&self, tx_id: &[u8], sealed_hex: &[u8]) -> anyhow::Result<()> {
         assert_eq!(tx_id.len(), 32);
         self.0.insert(tx_id, sealed_hex)?;

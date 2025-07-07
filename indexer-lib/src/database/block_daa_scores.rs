@@ -5,7 +5,7 @@ use kaspa_rpc_core::RpcHash;
 /// FIFO partition for storing block hash to DAA score mapping
 /// Can store DAA scores for any block
 /// Filled during block notification processing, queried during acceptance processing
-/// 
+///
 /// Uses FIFO compaction strategy because:
 /// - Block score mappings are temporary - older blocks become irrelevant
 /// - Self-balancing: automatically removes old entries when size limit reached
@@ -42,16 +42,13 @@ impl BlockDaaScoresPartition {
     }
 
     /// Get DAA score for a block
-    pub fn get_daa_score(
-        &self,
-        rtx: &ReadTransaction,
-        block_hash: RpcHash,
-    ) -> Result<Option<u64>> {
+    pub fn get_daa_score(&self, rtx: &ReadTransaction, block_hash: RpcHash) -> Result<Option<u64>> {
         if let Some(bytes) = rtx.get(&self.0, block_hash.as_bytes())? {
             if bytes.len() == 8 {
-                let daa_bytes: [u8; 8] = bytes.as_ref().try_into().map_err(|_| {
-                    anyhow::anyhow!("Invalid DAA score length")
-                })?;
+                let daa_bytes: [u8; 8] = bytes
+                    .as_ref()
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("Invalid DAA score length"))?;
                 Ok(Some(u64::from_be_bytes(daa_bytes)))
             } else {
                 Ok(None)
@@ -69,9 +66,10 @@ impl BlockDaaScoresPartition {
     ) -> Result<Option<u64>> {
         if let Some(bytes) = wtx.get(&self.0, block_hash.as_bytes())? {
             if bytes.len() == 8 {
-                let daa_bytes: [u8; 8] = bytes.as_ref().try_into().map_err(|_| {
-                    anyhow::anyhow!("Invalid DAA score length")
-                })?;
+                let daa_bytes: [u8; 8] = bytes
+                    .as_ref()
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("Invalid DAA score length"))?;
                 Ok(Some(u64::from_be_bytes(daa_bytes)))
             } else {
                 Ok(None)
@@ -82,20 +80,12 @@ impl BlockDaaScoresPartition {
     }
 
     /// Check if we have DAA score for a block
-    pub fn has_daa_score(
-        &self,
-        rtx: &ReadTransaction,
-        block_hash: RpcHash,
-    ) -> Result<bool> {
+    pub fn has_daa_score(&self, rtx: &ReadTransaction, block_hash: RpcHash) -> Result<bool> {
         Ok(rtx.contains_key(&self.0, block_hash.as_bytes())?)
     }
 
     /// Remove DAA score for a block (reorg case)
-    pub fn remove_daa_score(
-        &self,
-        wtx: &mut WriteTransaction,
-        block_hash: RpcHash,
-    ) -> Result<()> {
+    pub fn remove_daa_score(&self, wtx: &mut WriteTransaction, block_hash: RpcHash) -> Result<()> {
         wtx.remove(&self.0, block_hash.as_bytes());
         Ok(())
     }
