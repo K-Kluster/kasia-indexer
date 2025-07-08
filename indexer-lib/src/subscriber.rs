@@ -101,12 +101,12 @@ impl Subscriber {
         // can register for notifications
         self.register_notification_listeners().await?;
         let sink = self.rpc_client.get_sink().await?.sink;
-        let blue_score = self
+        let blue_work = self
             .rpc_client
             .get_block(sink, false)
             .await?
             .header
-            .blue_score;
+            .blue_work;
 
         // todo insert hole to db to be handled by the syncer in future run, here we know target block
 
@@ -120,7 +120,7 @@ impl Subscriber {
                     HistoricalDataSyncer::new(
                         rpc_client,
                         last,
-                        Cursor::new(blue_score, sink),
+                        Cursor::new(blue_work, sink),
                         block_handler,
                         shutdown_rx,
                     );

@@ -4,14 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+#kaspa-core.workspace = true
 anyhow.workspace = true
 bytemuck = { workspace = true, features = ["latest_stable_rust"]}
-flume.workspace = true
 fjall.workspace = true
+flume.workspace = true
 futures-util.workspace = true
 itertools.workspace = true
 kaspa-addresses.workspace = true
-#kaspa-core.workspace = true
+kaspa-math.workspace = true
 kaspa-rpc-core.workspace = true
 kaspa-txscript.workspace = true
 kaspa-wrpc-client.workspace = true

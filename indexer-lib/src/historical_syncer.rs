@@ -1,6 +1,7 @@
 use crate::BlockOrMany;
 use itertools::FoldWhile::{Continue, Done};
 use itertools::Itertools;
+use kaspa_math::Uint192;
 use kaspa_rpc_core::api::rpc::RpcApi;
 use kaspa_rpc_core::{GetBlocksResponse, RpcHash, RpcHeader};
 use kaspa_wrpc_client::KaspaRpcClient;
@@ -8,22 +9,22 @@ use tracing::{debug, error, info, trace, warn};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Cursor {
-    pub blue_score: u64,
+    pub blue_work: Uint192,
     pub hash: RpcHash,
 }
 
 impl From<&RpcHeader> for Cursor {
     fn from(value: &RpcHeader) -> Self {
         Self {
-            blue_score: value.blue_score,
+            blue_work: value.blue_work,
             hash: value.hash,
         }
     }
 }
 
 impl Cursor {
-    pub fn new(blue_score: u64, hash: RpcHash) -> Self {
-        Self { blue_score, hash }
+    pub fn new(blue_work: Uint192, hash: RpcHash) -> Self {
+        Self { blue_work, hash }
     }
 }
 
@@ -78,9 +79,9 @@ impl HistoricalDataSyncer {
         shutdown_rx: tokio::sync::oneshot::Receiver<()>,
     ) -> Self {
         info!(
-            "Initializing historical data syncer: start_blue_score={}, target_blue_score={}, start_hash={:?}, target_hash={:?}",
-            start_cursor.blue_score,
-            target_cursor.blue_score,
+            "Initializing historical data syncer: start_blue_work={}, target_blue_work={}, start_hash={:?}, target_hash={:?}",
+            start_cursor.blue_work,
+            target_cursor.blue_work,
             start_cursor.hash,
             target_cursor.hash
         );
@@ -153,11 +154,11 @@ impl HistoricalDataSyncer {
             // Log progress periodically
             if self.batches_processed % 100 == 0 {
                 info!(
-                    "Sync progress: {} batches processed, {} total blocks, current blue score: {}, target blue score: {}",
+                    "Sync progress: {} batches processed, {} total blocks, current blue work: {}, target blue work: {}",
                     self.batches_processed,
                     self.total_blocks_processed,
-                    self.current_cursor.blue_score,
-                    self.target_cursor.blue_score,
+                    self.current_cursor.blue_work,
+                    self.target_cursor.blue_work,
                 );
             }
 
@@ -195,7 +196,7 @@ impl HistoricalDataSyncer {
                 SyncTargetStatus::NotReached(self.current_cursor),
                 |_acc, (block_hash, block)| {
                     // Update cursor for each block processed
-                    last_cursor = Cursor::new(block.header.blue_score, block.header.hash);
+                    last_cursor = Cursor::new(block.header.blue_work, block.header.hash);
 
                     // Check if this block is our direct target
                     if block_hash == &self.target_cursor.hash {
@@ -209,14 +210,14 @@ impl HistoricalDataSyncer {
                             && self.check_target_in_merge_sets(verbose_data)
                         {
                             debug!(
-                                "Target found via anticone in block: {:?}, blue_score: {}",
-                                block_hash, block.header.blue_score
+                                "Target found via anticone in block: {}, blue_work: {}",
+                                block_hash, block.header.blue_work,
                             );
                             return Done(SyncTargetStatus::TargetFoundViaAnticone);
                         }
-                        // Add to anticone candidates if blue score qualifies
-                        if block.header.blue_score >= self.target_cursor.blue_score {
-                            let candidate = Cursor::new(block.header.blue_score, block.header.hash);
+                        // Add to anticone candidates if blue work qualifies
+                        if block.header.blue_work >= self.target_cursor.blue_work {
+                            let candidate = Cursor::new(block.header.blue_work, block.header.hash);
                             trace!("Adding anticone candidate: {:?}", candidate);
                             self.anticone_candidates.push(candidate);
                         }
@@ -283,8 +284,8 @@ impl HistoricalDataSyncer {
         SyncStats {
             total_blocks_processed: self.total_blocks_processed,
             batches_processed: self.batches_processed,
-            current_blue_score: self.current_cursor.blue_score,
-            target_blue_score: self.target_cursor.blue_score,
+            current_blue_work: self.current_cursor.blue_work,
+            target_blue_work: self.target_cursor.blue_work,
             anticone_candidates_count: self.anticone_candidates.len(),
         }
     }
@@ -295,7 +296,7 @@ impl HistoricalDataSyncer {
 pub struct SyncStats {
     pub total_blocks_processed: u64,
     pub batches_processed: u64,
-    pub current_blue_score: u64,
-    pub target_blue_score: u64,
+    pub current_blue_work: Uint192,
+    pub target_blue_work: Uint192,
     pub anticone_candidates_count: usize,
 }

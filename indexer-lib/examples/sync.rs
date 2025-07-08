@@ -49,12 +49,12 @@ async fn run_syncer() -> anyhow::Result<()> {
     let (start_cursor, target_cursor) = setup_sync_cursors(&client, &dag_info).await?;
 
     info!(
-        "Sync range: {} blocks (blue score {} -> {})",
+        "Sync range: {} blocks (blue work {} -> {})",
         target_cursor
-            .blue_score
-            .saturating_sub(start_cursor.blue_score),
-        start_cursor.blue_score,
-        target_cursor.blue_score
+            .blue_work
+            .saturating_sub(start_cursor.blue_work),
+        start_cursor.blue_work,
+        target_cursor.blue_work
     );
 
     // Create communication channels
@@ -103,11 +103,11 @@ async fn run_syncer() -> anyhow::Result<()> {
             // Process each block in the batch
             for (idx, block) in blocks.iter().enumerate() {
                 let block_hash = &block.header.hash;
-                let blue_score = block.header.blue_score;
+                let blue_work = block.header.blue_work;
 
-                // Log block information (as requested)
+                // Log block information
                 if idx == 0 || idx == batch_size - 1 {
-                    info!("Block: hash={:?}, blue_score={}", block_hash, blue_score);
+                    info!("Block: hash={:?}, blue_work={}", block_hash, blue_work);
                 }
 
                 // Here you could add additional block processing logic:
@@ -120,10 +120,10 @@ async fn run_syncer() -> anyhow::Result<()> {
             // Log batch completion
             if batch_count % 10 == 0 {
                 info!(
-                    "Processed {} batches, {} total blocks. Latest blue score: {}",
+                    "Processed {} batches, {} total blocks. Latest blue work: {}",
                     batch_count,
                     total_blocks_processed,
-                    blocks.last().map(|b| b.header.blue_score).unwrap_or(0)
+                    blocks.last().map(|b| b.header.blue_work).unwrap_or(0.into())
                 );
             }
         }
@@ -250,38 +250,38 @@ async fn setup_sync_cursors(
     let pruning_point_hash = dag_info.pruning_point_hash;
     info!("Pruning point hash: {:?}", pruning_point_hash);
 
-    // Get pruning point block to extract blue score
+    // Get pruning point block to extract blue work
     let pruning_point_block = client
         .get_block(pruning_point_hash, true)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to get pruning point block: {}", e))?;
 
-    let start_cursor = Cursor::new(pruning_point_block.header.blue_score, pruning_point_hash);
+    let start_cursor = Cursor::new(pruning_point_block.header.blue_work, pruning_point_hash);
 
     // Target is the sink
     let sink_hash = dag_info.sink;
     info!("Sink hash: {:?}", sink_hash);
 
-    // Get sink block to extract blue score
+    // Get sink block to extract blue work
     let sink_block = client
         .get_block(sink_hash, true)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to get sink block: {}", e))?;
 
-    let target_cursor = Cursor::new(sink_block.header.blue_score, sink_hash);
+    let target_cursor = Cursor::new(sink_block.header.blue_work, sink_hash);
 
     // Validate sync range
-    if start_cursor.blue_score >= target_cursor.blue_score {
+    if start_cursor.blue_work >= target_cursor.blue_work {
         return Err(anyhow::anyhow!(
-            "Invalid sync range: start blue score ({}) >= target blue score ({})",
-            start_cursor.blue_score,
-            target_cursor.blue_score
+            "Invalid sync range: start blue work ({}) >= target blue work ({})",
+            start_cursor.blue_work,
+            target_cursor.blue_work
         ));
     }
 
     info!(
-        "Sync cursors: start={:?} (blue_score={}), target={:?} (blue_score={})",
-        start_cursor.hash, start_cursor.blue_score, target_cursor.hash, target_cursor.blue_score
+        "Sync cursors: start={:?} (blue_work={}), target={:?} (blue_work={})",
+        start_cursor.hash, start_cursor.blue_work, target_cursor.hash, target_cursor.blue_work
     );
 
     Ok((start_cursor, target_cursor))
