@@ -57,18 +57,18 @@ pub struct SealedMessage {
 /**
  * SealedContextualMessage is a message that is sent only once handshake is done.
  */
-pub struct SealedContextualMessage<'a> {
+pub struct SealedContextualMessageV1<'a> {
     pub alias: &'a [u8],
     pub sealed_hex: &'a [u8],
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct SealedPayment<'a> {
+pub struct SealedPaymentV1<'a> {
     pub sealed_hex: &'a [u8],
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub struct SealedMessageOrSealedHandshake<'a> {
+pub struct SealedMessageOrSealedHandshakeVNone<'a> {
     pub sealed_hex: &'a [u8],
 }
 
@@ -81,15 +81,15 @@ pub enum SealedOperation<'a> {
     /**
      * "ciph_msg:{{SealedMessage_as_json_string_as_hex}}"
      */
-    SealedMessageOrSealedHandshake(SealedMessageOrSealedHandshake<'a>),
+    SealedMessageOrSealedHandshakeVNone(SealedMessageOrSealedHandshakeVNone<'a>),
     /**
      * "ciph_msg:1:comm:{alias_as_string}:{{SealedContextualMessage_as_hex}}"
      */
-    ContextualMessage(SealedContextualMessage<'a>),
+    ContextualMessageV1(SealedContextualMessageV1<'a>),
     /**
      * "ciph_msg:1:payment:{{SealedPayment_as_json_string_as_hex}}"
      */
-    Payment(SealedPayment<'a>),
+    PaymentV1(SealedPaymentV1<'a>),
 }
 
 impl<'a> SealedOperation<'a> {
@@ -108,7 +108,7 @@ mod tests {
         let result = parse_sealed_operation(payload);
         assert_eq!(
             result,
-            Some(SealedOperation::Payment(SealedPayment {
+            Some(SealedOperation::PaymentV1(SealedPaymentV1 {
                 sealed_hex: b"abc123",
             }))
         );
@@ -120,8 +120,8 @@ mod tests {
         let result = parse_sealed_operation(payload);
         assert_eq!(
             result,
-            Some(SealedOperation::ContextualMessage(
-                SealedContextualMessage {
+            Some(SealedOperation::ContextualMessageV1(
+                SealedContextualMessageV1 {
                     alias: b"alias123",
                     sealed_hex: b"abc123",
                 }
@@ -135,8 +135,8 @@ mod tests {
         let result = parse_sealed_operation(payload);
         assert_eq!(
             result,
-            Some(SealedOperation::SealedMessageOrSealedHandshake(
-                SealedMessageOrSealedHandshake {
+            Some(SealedOperation::SealedMessageOrSealedHandshakeVNone(
+                SealedMessageOrSealedHandshakeVNone {
                     sealed_hex: b"abc123",
                 }
             ))
