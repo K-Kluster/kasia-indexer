@@ -1,3 +1,4 @@
+use std::fmt::{Debug, Formatter};
 use anyhow::bail;
 use bytemuck::{AnyBitPattern, NoUninit};
 use fjall::{PartitionCreateOptions, WriteTransaction};
@@ -95,14 +96,19 @@ pub struct LikeHandshakeKeyBySender<T: AsRef<[u8]>> {
     phantom_data: PhantomData<HandshakeKeyBySender>,
 }
 
-// impl<T: AsRef<[u8]>> LikeHandshakeKeyBySender<T> {
-//     fn new(bts: T) -> Self {
-//         Self {
-//             bts,
-//             phantom_data: PhantomData,
-//         }
-//     }
-// }
+impl<T: AsRef<[u8]>> Debug for LikeHandshakeKeyBySender<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.deref().fmt(f)
+    }
+}
+impl<T: AsRef<[u8]>> LikeHandshakeKeyBySender<T> {
+    pub(crate) fn new(bts: T) -> Self {
+        Self {
+            bts,
+            phantom_data: PhantomData,
+        }
+    }
+}
 
 impl<T: AsRef<[u8]>> Deref for LikeHandshakeKeyBySender<T> {
     type Target = HandshakeKeyBySender;

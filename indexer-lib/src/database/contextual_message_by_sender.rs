@@ -1,3 +1,4 @@
+use std::fmt::{Debug, Formatter};
 use anyhow::{Result, bail};
 use bytemuck::{AnyBitPattern, NoUninit};
 use fjall::{PartitionCreateOptions, ReadTransaction, WriteTransaction, UserKey};
@@ -29,6 +30,12 @@ pub struct ContextualMessageBySenderKey {
 pub struct LikeContextualMessageBySenderKey<T: AsRef<[u8]>> {
     bts: T,
     phantom_data: PhantomData<ContextualMessageBySenderKey>,
+}
+
+impl<T: AsRef<[u8]>> Debug for LikeContextualMessageBySenderKey<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.deref().fmt(f)
+    }
 }
 
 impl<T: AsRef<[u8]>> LikeContextualMessageBySenderKey<T> {
@@ -134,7 +141,7 @@ impl ContextualMessageBySenderPartition {
                 ))
             })
     }
-    // todo fix me 
+    // todo fix me
     // /// Get all contextual messages for a sender and alias prefix (REST API support)
     // pub fn get_by_sender_and_alias_prefix(
     //     &self,
@@ -145,10 +152,10 @@ impl ContextualMessageBySenderPartition {
     //     if alias_prefix.len() > 16 {
     //         bail!("Alias prefix length cannot exceed 16 bytes, got {}", alias_prefix.len());
     //     }
-    // 
+    //
     //     let mut alias_bytes = [0u8; 16];
     //     alias_bytes[..alias_prefix.len()].copy_from_slice(alias_prefix);
-    // 
+    //
     //     let prefix_key = ContextualMessageBySenderKey {
     //         sender,
     //         alias: alias_bytes,
@@ -157,11 +164,11 @@ impl ContextualMessageBySenderPartition {
     //         version: 0,
     //         tx_id: [0u8; 32],
     //     };
-    // 
+    //
     //     // Create prefix: sender + alias prefix
     //     let prefix_len = 34 + alias_prefix.len(); // AddressPayload + actual alias prefix length
     //     let prefix = &bytemuck::bytes_of(&prefix_key)[..prefix_len];
-    // 
+    //
     //     Ok(rtx.prefix(&self.0, prefix)
     //         .map(|item| {
     //             let (key_bytes, value_bytes) = item?;

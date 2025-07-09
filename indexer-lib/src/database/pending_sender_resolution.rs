@@ -1,30 +1,43 @@
 use anyhow::Result;
 use bytemuck::{AnyBitPattern, NoUninit};
-use fjall::{PartitionCreateOptions, ReadTransaction, WriteTransaction};
+use fjall::{PartitionCreateOptions, ReadTransaction, WriteTransaction, UserKey};
 use kaspa_rpc_core::RpcTransactionId;
+use crate::database::PartitionId;
+use crate::database::handshake::{HandshakeKeyBySender, LikeHandshakeKeyBySender};
+use crate::database::contextual_message_by_sender::{ContextualMessageBySenderKey, LikeContextualMessageBySenderKey};
 
 /// FIFO partition for tracking transactions that need sender address/payload resolution
-/// Key: accepting_daa_score + tx_id, Value: empty
-/// Simple tracking - just marks what needs processing
+/// Key: accepting_daa_score + tx_id + partition_type
+/// Value: key data for the partition that needs sender resolution
 ///
 /// Uses FIFO compaction strategy because:
 /// - Pending resolutions are temporary - will be processed and removed
 /// - Older entries become irrelevant as blockchain progresses
 /// - Self-balancing: automatically removes old entries when size limit reached
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PendingSenderResolution {
-    pub accepting_daa_score: u64,
-    pub tx_id: RpcTransactionId,
-}
-
 #[derive(Clone)]
 pub struct PendingSenderResolutionPartition(fjall::TxPartition);
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, AnyBitPattern, NoUninit, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PendingResolutionKey {
-    pub accepting_daa_score: [u8; 8], // be - for ordering
+    pub accepting_daa_score: [u8; 8], // BE - for processing order (lowest first)
     pub tx_id: [u8; 32],
+    pub partition_type: u8,           // PartitionId as u8 - at the end
+}
+
+/// Return type for sender resolution - contains the appropriate Like key type
+#[derive(Debug, Clone)]
+pub enum SenderResolutionLikeKey<T:AsRef<[u8]> + Clone = UserKey> {
+    HandshakeKey(LikeHandshakeKeyBySender<T>),
+    ContextualMessageKey(LikeContextualMessageBySenderKey<T>),
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingSenderResolution<T: AsRef<[u8]> + Clone = UserKey> {
+    pub accepting_daa_score: u64,
+    pub tx_id: RpcTransactionId,
+    pub partition_type: PartitionId,
+    pub like_key: SenderResolutionLikeKey<T>,
 }
 
 impl PendingSenderResolutionPartition {
@@ -45,71 +58,184 @@ impl PendingSenderResolutionPartition {
         ))
     }
 
-    /// Mark a transaction as needing sender resolution
-    pub fn mark_pending(
+    /// Mark a handshake transaction as needing sender resolution
+    pub fn mark_handshake_pending(
         &self,
         wtx: &mut WriteTransaction,
         accepting_daa_score: u64,
         tx_id: RpcTransactionId,
+        handshake_key: &HandshakeKeyBySender,
     ) -> Result<()> {
         let key = PendingResolutionKey {
             accepting_daa_score: accepting_daa_score.to_be_bytes(),
             tx_id: *tx_id.as_ref(),
+            partition_type: PartitionId::HandshakeBySender as u8,
         };
-        wtx.insert(&self.0, bytemuck::bytes_of(&key), []);
+        wtx.insert(&self.0, bytemuck::bytes_of(&key), bytemuck::bytes_of(handshake_key));
         Ok(())
     }
 
-    /// Remove pending marking (when resolution is complete)
+    /// Mark a contextual message transaction as needing sender resolution
+    pub fn mark_contextual_message_pending(
+        &self,
+        wtx: &mut WriteTransaction,
+        accepting_daa_score: u64,
+        tx_id: RpcTransactionId,
+        contextual_message_key: &ContextualMessageBySenderKey,
+    ) -> Result<()> {
+        let key = PendingResolutionKey {
+            accepting_daa_score: accepting_daa_score.to_be_bytes(),
+            tx_id: *tx_id.as_ref(),
+            partition_type: PartitionId::ContextualMessageBySender as u8,
+        };
+        wtx.insert(&self.0, bytemuck::bytes_of(&key), bytemuck::bytes_of(contextual_message_key));
+        Ok(())
+    }
+
+    /// Remove all pending entries for a transaction (when resolution is complete)
+    /// Returns all the key data for updating the target partitions
     pub fn remove_pending(
         &self,
         wtx: &mut WriteTransaction,
         accepting_daa_score: u64,
         tx_id: RpcTransactionId,
-    ) -> Result<()> {
-        let key = PendingResolutionKey {
+    ) -> Result<Vec<(PartitionId, SenderResolutionLikeKey)>> {
+        let prefix_key = PendingResolutionKey {
             accepting_daa_score: accepting_daa_score.to_be_bytes(),
             tx_id: *tx_id.as_ref(),
+            partition_type: 0,
         };
-        wtx.remove(&self.0, bytemuck::bytes_of(&key));
-        Ok(())
+        
+        // Use prefix up to tx_id (8 + 32 = 40 bytes)
+        let prefix = &bytemuck::bytes_of(&prefix_key)[..40];
+        
+        let mut results = Vec::new();
+        let mut keys_to_remove = Vec::new();
+        
+        // First collect all entries
+        for item in wtx.prefix(&self.0, prefix) {
+            let (key_bytes, value_bytes) = item?;
+            if key_bytes.len() == 41 { // 8 + 32 + 1
+                let key: PendingResolutionKey = *bytemuck::from_bytes(&key_bytes);
+                keys_to_remove.push(key);
+                
+                let partition_type = match key.partition_type {
+                    x if x == PartitionId::HandshakeBySender as u8 => PartitionId::HandshakeBySender,
+                    x if x == PartitionId::ContextualMessageBySender as u8 => PartitionId::ContextualMessageBySender,
+                    _ => return Err(anyhow::anyhow!("Invalid partition type: {}", key.partition_type)),
+                };
+                
+                let like_key = match partition_type {
+                    PartitionId::HandshakeBySender => SenderResolutionLikeKey::HandshakeKey(
+                        LikeHandshakeKeyBySender::new(value_bytes)
+                    ),
+                    PartitionId::ContextualMessageBySender => SenderResolutionLikeKey::ContextualMessageKey(
+                        LikeContextualMessageBySenderKey::new(value_bytes)
+                    ),
+                    _ => return Err(anyhow::anyhow!("Invalid partition type for sender resolution: {:?}", partition_type)),
+                };
+                
+                results.push((partition_type, like_key));
+            }
+        }
+        
+        // Then remove all collected keys
+        for key in keys_to_remove {
+            wtx.remove(&self.0, bytemuck::bytes_of(&key));
+        }
+        
+        Ok(results)
     }
+    
 
-    /// Get all pending resolutions (for processing)
+    /// Get all pending resolutions (for processing in DAA score order)
     pub fn get_all_pending(
         &self,
         rtx: &ReadTransaction,
     ) -> impl DoubleEndedIterator<Item = Result<PendingSenderResolution>> + '_ {
         rtx.iter(&self.0).map(|item| {
-            let (key_bytes, _) = item?;
-            if key_bytes.len() == 40 {
+            let (key_bytes, value_bytes) = item?;
+            if key_bytes.len() == 41 { // 8 + 32 + 1
                 let key: PendingResolutionKey = *bytemuck::from_bytes(&key_bytes);
+                
                 let accepting_daa_score = u64::from_be_bytes(key.accepting_daa_score);
                 let tx_id = RpcTransactionId::from_slice(&key.tx_id);
+                
+                let partition_type = match key.partition_type {
+                    x if x == PartitionId::HandshakeBySender as u8 => PartitionId::HandshakeBySender,
+                    x if x == PartitionId::ContextualMessageBySender as u8 => PartitionId::ContextualMessageBySender,
+                    _ => return Err(anyhow::anyhow!("Invalid partition type: {}", key.partition_type)),
+                };
+                
+                let like_key = match partition_type {
+                    PartitionId::HandshakeBySender => SenderResolutionLikeKey::HandshakeKey(
+                        LikeHandshakeKeyBySender::new(value_bytes)
+                    ),
+                    PartitionId::ContextualMessageBySender => SenderResolutionLikeKey::ContextualMessageKey(
+                        LikeContextualMessageBySenderKey::new(value_bytes)
+                    ),
+                    _ => return Err(anyhow::anyhow!("Invalid partition type for sender resolution: {:?}", partition_type)),
+                };
+                
                 Ok(PendingSenderResolution {
                     accepting_daa_score,
                     tx_id,
+                    partition_type,
+                    like_key,
                 })
             } else {
-                Err(anyhow::anyhow!(
-                    "Invalid key length in pending_sender_resolution partition"
-                ))
+                Err(anyhow::anyhow!("Invalid key length in pending_sender_resolution partition"))
             }
         })
     }
 
-    /// Mark multiple transactions as needing sender resolution
-    pub fn mark_pending_batch<'a, I>(
+    /// Check if a transaction has any pending sender resolution
+    pub fn has_pending(
+        &self,
+        rtx: &ReadTransaction,
+        accepting_daa_score: u64,
+        tx_id: RpcTransactionId,
+    ) -> Result<bool> {
+        let prefix_key = PendingResolutionKey {
+            accepting_daa_score: accepting_daa_score.to_be_bytes(),
+            tx_id: *tx_id.as_ref(),
+            partition_type: 0,
+        };
+        
+        // Use prefix up to tx_id (8 + 32 = 40 bytes)
+        let prefix = &bytemuck::bytes_of(&prefix_key)[..40];
+        
+        Ok(rtx.prefix(&self.0, prefix).next().is_some())
+    }
+
+    /// Mark multiple handshake transactions as needing sender resolution
+    pub fn mark_handshakes_pending_batch<'a, I>(
         &self,
         wtx: &mut WriteTransaction,
         accepting_daa_score: u64,
-        tx_ids: I,
+        entries: I,
     ) -> Result<()>
     where
-        I: Iterator<Item = &'a RpcTransactionId>,
+        I: Iterator<Item = (RpcTransactionId, &'a HandshakeKeyBySender)>,
     {
-        for tx_id in tx_ids {
-            self.mark_pending(wtx, accepting_daa_score, *tx_id)?;
+        for (tx_id, handshake_key) in entries {
+            self.mark_handshake_pending(wtx, accepting_daa_score, tx_id, handshake_key)?;
+        }
+        Ok(())
+    }
+
+    /// Mark multiple contextual message transactions as needing sender resolution
+    pub fn mark_contextual_messages_pending_batch<'a, I>(
+        &self,
+        wtx: &mut WriteTransaction,
+        accepting_daa_score: u64,
+        entries: I,
+    ) -> Result<()>
+    where
+        I: Iterator<Item = (RpcTransactionId, &'a ContextualMessageBySenderKey)>,
+    {
+        for (tx_id, contextual_message_key) in entries {
+            self.mark_contextual_message_pending(wtx, accepting_daa_score, tx_id, contextual_message_key)?;
         }
         Ok(())
     }
@@ -118,16 +244,18 @@ impl PendingSenderResolutionPartition {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::database::handshake::AddressPayload;
 
     #[test]
     fn test_pending_resolution_key_serialization() {
         let key = PendingResolutionKey {
             accepting_daa_score: 12345u64.to_be_bytes(),
             tx_id: [1u8; 32],
+            partition_type: PartitionId::HandshakeBySender as u8,
         };
 
         let bytes = bytemuck::bytes_of(&key);
-        assert_eq!(bytes.len(), 40);
+        assert_eq!(bytes.len(), 41); // 8 + 32 + 1
 
         let deserialized: PendingResolutionKey = *bytemuck::from_bytes(bytes);
         assert_eq!(deserialized, key);
@@ -137,28 +265,64 @@ mod tests {
     }
 
     #[test]
-    fn test_key_ordering() {
+    fn test_key_ordering_by_daa_score() {
         let key1 = PendingResolutionKey {
             accepting_daa_score: 100u64.to_be_bytes(),
             tx_id: [1u8; 32],
+            partition_type: PartitionId::HandshakeBySender as u8,
         };
 
         let key2 = PendingResolutionKey {
             accepting_daa_score: 200u64.to_be_bytes(),
             tx_id: [1u8; 32],
+            partition_type: PartitionId::HandshakeBySender as u8,
         };
 
-        assert!(key1 < key2); // Lower DAA score comes first
+        // Lower DAA score should come first
+        assert!(key1 < key2);
+    }
+
+    #[test]
+    fn test_key_ordering_by_tx_id() {
+        let key1 = PendingResolutionKey {
+            accepting_daa_score: 100u64.to_be_bytes(),
+            tx_id: [1u8; 32],
+            partition_type: PartitionId::HandshakeBySender as u8,
+        };
+
+        let key2 = PendingResolutionKey {
+            accepting_daa_score: 100u64.to_be_bytes(),
+            tx_id: [2u8; 32],
+            partition_type: PartitionId::HandshakeBySender as u8,
+        };
+
+        // Lower tx_id should come first when DAA score is same
+        assert!(key1 < key2);
     }
 
     #[test]
     fn test_pending_sender_resolution_struct() {
+        let handshake_key = HandshakeKeyBySender {
+            sender: AddressPayload::default(),
+            block_time: [0u8; 8],
+            block_hash: [1u8; 32],
+            receiver: AddressPayload::default(),
+            version: 1,
+            tx_id: [2u8; 32],
+        };
+
+        let bytes = bytemuck::bytes_of(&handshake_key);
+        let like_key = LikeHandshakeKeyBySender::new(bytes.to_vec());
+
         let resolution = PendingSenderResolution {
             accepting_daa_score: 12345,
             tx_id: RpcTransactionId::from_slice(&[1u8; 32]),
+            partition_type: PartitionId::HandshakeBySender,
+            like_key: SenderResolutionLikeKey::HandshakeKey(like_key),
         };
 
         assert_eq!(resolution.accepting_daa_score, 12345);
         assert_eq!(resolution.tx_id.as_bytes(), [1u8; 32]);
+        assert_eq!(resolution.partition_type, PartitionId::HandshakeBySender);
     }
 }
