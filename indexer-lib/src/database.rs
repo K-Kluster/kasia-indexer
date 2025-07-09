@@ -15,6 +15,7 @@ pub mod accepting_block_gaps;
 pub mod block_gaps;
 pub mod metadata;
 pub mod pending_sender_resolution;
+pub mod contextual_message_by_sender;
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -35,6 +36,7 @@ pub enum PartitionId {
     Metadata,
     BlockGaps,
     AcceptingBlockGaps,
+    ContextualMessageBySender,
 }
 
 mod util;
