@@ -123,7 +123,10 @@ async fn run_syncer() -> anyhow::Result<()> {
                     "Processed {} batches, {} total blocks. Latest blue work: {}",
                     batch_count,
                     total_blocks_processed,
-                    blocks.last().map(|b| b.header.blue_work).unwrap_or(0.into())
+                    blocks
+                        .last()
+                        .map(|b| b.header.blue_work)
+                        .unwrap_or(0.into())
                 );
             }
         }

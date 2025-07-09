@@ -80,10 +80,7 @@ impl HistoricalDataSyncer {
     ) -> Self {
         info!(
             "Initializing historical data syncer: start_blue_work={}, target_blue_work={}, start_hash={:?}, target_hash={:?}",
-            start_cursor.blue_work,
-            target_cursor.blue_work,
-            start_cursor.hash,
-            target_cursor.hash
+            start_cursor.blue_work, target_cursor.blue_work, start_cursor.hash, target_cursor.hash
         );
 
         Self {

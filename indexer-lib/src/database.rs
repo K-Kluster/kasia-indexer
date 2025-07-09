@@ -11,6 +11,9 @@ pub mod block_daa_scores;
 
 pub mod unknown_accepting_daa;
 
+pub mod accepting_block_gaps;
+pub mod block_gaps;
+pub mod metadata;
 pub mod pending_sender_resolution;
 
 #[repr(u8)]
@@ -28,6 +31,10 @@ pub enum PartitionId {
     BlockDaaScores,
     UnknownAcceptingDaa,
     PendingSenderResolution,
+
+    Metadata,
+    BlockGaps,
+    AcceptingBlockGaps,
 }
 
 mod util;
