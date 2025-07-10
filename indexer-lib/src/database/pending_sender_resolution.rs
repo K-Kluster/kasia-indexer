@@ -279,6 +279,114 @@ impl PendingSenderResolutionPartition {
         }
         Ok(())
     }
+
+    /// Decrement attempt count for all entries with the given DAA score and transaction ID, removing entries that reach 0 attempts
+    /// Returns a vector of (PartitionId, like_key) pairs that were removed due to reaching 0 attempts
+    pub fn decrement_attempt_counts_by_transaction(
+        &self,
+        wtx: &mut WriteTransaction,
+        accepting_daa_score: u64,
+        tx_id: RpcTransactionId,
+    ) -> Result<Vec<(PartitionId, SenderResolutionLikeKey)>> {
+        let prefix_key = PendingResolutionKey {
+            accepting_daa_score: accepting_daa_score.to_be_bytes(),
+            tx_id: *tx_id.as_ref(),
+            partition_type: 0,
+        };
+        
+        // Use prefix up to tx_id (8 + 32 = 40 bytes)
+        let prefix = &bytemuck::bytes_of(&prefix_key)[..40];
+        
+        let mut removed_entries = Vec::new();
+        let mut keys_to_process = Vec::new();
+        
+        // First collect all keys for this transaction
+        for item in wtx.prefix(&self.0, prefix) {
+            let (key_bytes, _) = item?;
+            if key_bytes.len() == 41 { // 8 + 32 + 1
+                let key: PendingResolutionKey = *bytemuck::from_bytes(&key_bytes);
+                keys_to_process.push(key);
+            }
+        }
+        
+        // Process each key individually using fetch_update
+        for key in keys_to_process {
+            let partition_type = match key.partition_type {
+                x if x == PartitionId::HandshakeBySender as u8 => PartitionId::HandshakeBySender,
+                x if x == PartitionId::ContextualMessageBySender as u8 => PartitionId::ContextualMessageBySender,
+                x if x == PartitionId::PaymentBySender as u8 => PartitionId::PaymentBySender,
+                _ => continue, // Skip invalid partition types
+            };
+            
+            let mut removed_entry = None;
+            
+            wtx.fetch_update(&self.0, bytemuck::bytes_of(&key), |current_value| {
+                if let Some(value_bytes) = current_value {
+                    // Extract the current key data and create SenderResolutionLikeKey
+                    let current_like_key = match partition_type {
+                        PartitionId::HandshakeBySender => SenderResolutionLikeKey::HandshakeKey(
+                            LikeHandshakeKeyForResolution::new(value_bytes.clone())
+                        ),
+                        PartitionId::ContextualMessageBySender => SenderResolutionLikeKey::ContextualMessageKey(
+                            LikeContextualMessageKeyForResolution::new(value_bytes.clone())
+                        ),
+                        PartitionId::PaymentBySender => SenderResolutionLikeKey::PaymentKey(
+                            LikePaymentKeyForResolution::new(value_bytes.clone())
+                        ),
+                        _ => return None, // Invalid partition type
+                    };
+                    
+                    // Access the attempt_count and decrement it
+                    let new_attempt_count = match &current_like_key {
+                        SenderResolutionLikeKey::HandshakeKey(key) => key.attempt_count.saturating_sub(1),
+                        SenderResolutionLikeKey::ContextualMessageKey(key) => key.attempt_count.saturating_sub(1),
+                        SenderResolutionLikeKey::PaymentKey(key) => key.attempt_count.saturating_sub(1),
+                    };
+                    
+                    if new_attempt_count == 0 {
+                        // Remove the entry by returning None
+                        removed_entry = Some((partition_type, current_like_key));
+                        None
+                    } else {
+                        // Update the attempt count and return the updated value
+                        let mut updated_bytes = value_bytes.to_vec();
+                        // Find the attempt_count field offset and update it
+                        match partition_type {
+                            PartitionId::HandshakeBySender => {
+                                // attempt_count is at offset: 8 + 32 + 34 + 1 + 32 = 107
+                                if updated_bytes.len() >= 108 {
+                                    updated_bytes[107] = new_attempt_count;
+                                }
+                            },
+                            PartitionId::ContextualMessageBySender => {
+                                // attempt_count is at offset: 16 + 8 + 32 + 1 + 32 = 89
+                                if updated_bytes.len() >= 90 {
+                                    updated_bytes[89] = new_attempt_count;
+                                }
+                            },
+                            PartitionId::PaymentBySender => {
+                                // attempt_count is at offset: 8 + 32 + 34 + 1 + 32 = 107
+                                if updated_bytes.len() >= 108 {
+                                    updated_bytes[107] = new_attempt_count;
+                                }
+                            },
+                            _ => return None, // Invalid partition type
+                        }
+                        Some(updated_bytes.into())
+                    }
+                } else {
+                    // Entry doesn't exist, nothing to decrement
+                    None
+                }
+            })?;
+            
+            if let Some(removed) = removed_entry {
+                removed_entries.push(removed);
+            }
+        }
+        
+        Ok(removed_entries)
+    }
 }
 
 #[cfg(test)]
@@ -348,6 +456,7 @@ mod tests {
             receiver: AddressPayload::default(),
             version: 1,
             tx_id: [2u8; 32],
+            attempt_count: 3,
         };
 
         let bytes = bytemuck::bytes_of(&handshake_key);

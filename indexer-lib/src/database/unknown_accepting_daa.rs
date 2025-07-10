@@ -11,7 +11,7 @@ use crate::database::resolution_keys::{
 
 /// FIFO partition for storing accepting block hashes with unknown DAA scores
 /// Key: accepting_block_hash + partition_type (block hash FIRST for efficient querying)
-/// Value: serialized key data for the partition that needs updating
+/// Value: attempt_count (u8, 1 byte) + serialized key data for the partition that needs updating
 /// Note: These are accepting blocks (selected blocks in GHOSTDAG), not regular blocks
 ///
 /// Uses FIFO compaction strategy because:
@@ -243,6 +243,103 @@ impl UnknownAcceptingDaaPartition {
             self.mark_payment_unknown_daa(wtx, accepting_block_hash, payment_key)?;
         }
         Ok(())
+    }
+
+    /// Decrement attempt count for all entries with the given accepting block hash, removing entries that reach 0 attempts
+    /// Returns a vector of like_keys that were removed due to reaching 0 attempts
+    pub fn decrement_attempt_counts_by_block_hash(
+        &self,
+        wtx: &mut WriteTransaction,
+        accepting_block_hash: RpcHash,
+    ) -> Result<Vec<DaaResolutionLikeKey>> {
+        let prefix = accepting_block_hash.as_bytes();
+        let mut removed_keys = Vec::new();
+        let mut keys_to_process = Vec::new();
+        
+        // First collect all keys for this block hash
+        for item in wtx.prefix(&self.0, prefix) {
+            let (key_bytes, _) = item?;
+            if key_bytes.len() == 33 { // 32 + 1
+                let key: UnknownAcceptingDaaKey = *bytemuck::from_bytes(&key_bytes);
+                keys_to_process.push(key);
+            }
+        }
+        
+        // Process each key individually using fetch_update
+        for key in keys_to_process {
+            let partition_type = match key.partition_type {
+                0 => DaaResolutionPartitionType::HandshakeBySender,
+                1 => DaaResolutionPartitionType::ContextualMessageBySender,
+                2 => DaaResolutionPartitionType::PaymentBySender,
+                _ => continue, // Skip invalid partition types
+            };
+            
+            let mut removed_key = None;
+            
+            wtx.fetch_update(&self.0, bytemuck::bytes_of(&key), |current_value| {
+                if let Some(value_bytes) = current_value {
+                    // Extract the current key data and create DaaResolutionLikeKey
+                    let current_like_key = match partition_type {
+                        DaaResolutionPartitionType::HandshakeBySender => DaaResolutionLikeKey::HandshakeKey(
+                            LikeHandshakeKeyForResolution::new(value_bytes.clone())
+                        ),
+                        DaaResolutionPartitionType::ContextualMessageBySender => DaaResolutionLikeKey::ContextualMessageKey(
+                            LikeContextualMessageKeyForResolution::new(value_bytes.clone())
+                        ),
+                        DaaResolutionPartitionType::PaymentBySender => DaaResolutionLikeKey::PaymentKey(
+                            LikePaymentKeyForResolution::new(value_bytes.clone())
+                        ),
+                    };
+                    
+                    // Access the attempt_count and decrement it
+                    let new_attempt_count = match &current_like_key {
+                        DaaResolutionLikeKey::HandshakeKey(key) => key.attempt_count.saturating_sub(1),
+                        DaaResolutionLikeKey::ContextualMessageKey(key) => key.attempt_count.saturating_sub(1),
+                        DaaResolutionLikeKey::PaymentKey(key) => key.attempt_count.saturating_sub(1),
+                    };
+                    
+                    if new_attempt_count == 0 {
+                        // Remove the entry by returning None
+                        removed_key = Some(current_like_key);
+                        None
+                    } else {
+                        // Update the attempt count and return the updated value
+                        let mut updated_bytes = value_bytes.to_vec();
+                        // Find the attempt_count field offset and update it
+                        match partition_type {
+                            DaaResolutionPartitionType::HandshakeBySender => {
+                                // attempt_count is at offset: 8 + 32 + 34 + 1 + 32 = 107
+                                if updated_bytes.len() >= 108 {
+                                    updated_bytes[107] = new_attempt_count;
+                                }
+                            },
+                            DaaResolutionPartitionType::ContextualMessageBySender => {
+                                // attempt_count is at offset: 16 + 8 + 32 + 1 + 32 = 89
+                                if updated_bytes.len() >= 90 {
+                                    updated_bytes[89] = new_attempt_count;
+                                }
+                            },
+                            DaaResolutionPartitionType::PaymentBySender => {
+                                // attempt_count is at offset: 8 + 32 + 34 + 1 + 32 = 107
+                                if updated_bytes.len() >= 108 {
+                                    updated_bytes[107] = new_attempt_count;
+                                }
+                            },
+                        }
+                        Some(updated_bytes.into())
+                    }
+                } else {
+                    // Entry doesn't exist, nothing to decrement
+                    None
+                }
+            })?;
+            
+            if let Some(removed) = removed_key {
+                removed_keys.push(removed);
+            }
+        }
+        
+        Ok(removed_keys)
     }
 }
 

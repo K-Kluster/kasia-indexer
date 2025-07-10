@@ -14,6 +14,7 @@ pub struct HandshakeKeyForResolution {
     pub receiver: AddressPayload,
     pub version: u8,
     pub tx_id: [u8; 32],
+    pub attempt_count: u8,          // attempts remaining for resolution
 }
 
 #[repr(transparent)]
@@ -55,6 +56,7 @@ pub struct ContextualMessageKeyForResolution {
     pub block_hash: [u8; 32],       // block hash for uniqueness
     pub version: u8,                // message version
     pub tx_id: [u8; 32],            // transaction id
+    pub attempt_count: u8,          // attempts remaining for resolution
 }
 
 #[repr(transparent)]
@@ -96,6 +98,7 @@ pub struct PaymentKeyForResolution {
     pub receiver: AddressPayload,
     pub version: u8,
     pub tx_id: [u8; 32],
+    pub attempt_count: u8,          // attempts remaining for resolution
 }
 
 #[repr(transparent)]
@@ -156,11 +159,12 @@ mod tests {
             receiver: AddressPayload::default(),
             version: 1,
             tx_id: [2u8; 32],
+            attempt_count: 3,
         };
         
         let bytes = bytemuck::bytes_of(&key);
-        // 8 + 32 + 34 + 1 + 32 = 107 bytes (no sender field)
-        assert_eq!(bytes.len(), 107);
+        // 8 + 32 + 34 + 1 + 32 + 1 = 108 bytes (no sender field, +1 for attempt_count)
+        assert_eq!(bytes.len(), 108);
         
         let deserialized: HandshakeKeyForResolution = *bytemuck::from_bytes(bytes);
         assert_eq!(deserialized, key);
@@ -174,11 +178,12 @@ mod tests {
             block_hash: [2u8; 32],
             version: 1,
             tx_id: [3u8; 32],
+            attempt_count: 3,
         };
         
         let bytes = bytemuck::bytes_of(&key);
-        // 16 + 8 + 32 + 1 + 32 = 89 bytes (no sender field)
-        assert_eq!(bytes.len(), 89);
+        // 16 + 8 + 32 + 1 + 32 + 1 = 90 bytes (no sender field, +1 for attempt_count)
+        assert_eq!(bytes.len(), 90);
         
         let deserialized: ContextualMessageKeyForResolution = *bytemuck::from_bytes(bytes);
         assert_eq!(deserialized, key);
@@ -192,11 +197,12 @@ mod tests {
             receiver: AddressPayload::default(),
             version: 1,
             tx_id: [2u8; 32],
+            attempt_count: 3,
         };
         
         let bytes = bytemuck::bytes_of(&key);
-        // 8 + 32 + 34 + 1 + 32 = 107 bytes (no sender field)
-        assert_eq!(bytes.len(), 107);
+        // 8 + 32 + 34 + 1 + 32 + 1 = 108 bytes (no sender field, +1 for attempt_count)
+        assert_eq!(bytes.len(), 108);
         
         let deserialized: PaymentKeyForResolution = *bytemuck::from_bytes(bytes);
         assert_eq!(deserialized, key);
@@ -210,6 +216,7 @@ mod tests {
             receiver: AddressPayload::default(),
             version: 1,
             tx_id: [2u8; 32],
+            attempt_count: 3,
         };
         
         let bytes = bytemuck::bytes_of(&key).to_vec();
@@ -219,6 +226,7 @@ mod tests {
         assert_eq!(like_key.version, 1);
         assert_eq!(like_key.tx_id, [2u8; 32]);
         assert_eq!(like_key.block_time, 12345u64.to_be_bytes());
+        assert_eq!(like_key.attempt_count, 3);
         
         // Test Clone
         let cloned = like_key.clone();
