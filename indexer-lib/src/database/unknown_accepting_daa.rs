@@ -1,9 +1,13 @@
 use anyhow::Result;
 use bytemuck::{AnyBitPattern, NoUninit};
-use fjall::{PartitionCreateOptions, ReadTransaction, WriteTransaction, UserKey};
+use fjall::{PartitionCreateOptions, ReadTransaction, WriteTransaction};
 use kaspa_rpc_core::RpcHash;
-use crate::database::handshake::{HandshakeKeyBySender, LikeHandshakeKeyBySender};
-use crate::database::contextual_message_by_sender::{ContextualMessageBySenderKey, LikeContextualMessageBySenderKey};
+use crate::database::resolution_keys::{
+    HandshakeKeyForResolution, LikeHandshakeKeyForResolution,
+    ContextualMessageKeyForResolution, LikeContextualMessageKeyForResolution,
+    PaymentKeyForResolution, LikePaymentKeyForResolution,
+    DaaResolutionLikeKey
+};
 
 /// FIFO partition for storing accepting block hashes with unknown DAA scores
 /// Key: accepting_block_hash + partition_type (block hash FIRST for efficient querying)
@@ -23,6 +27,7 @@ pub struct UnknownAcceptingDaaPartition(fjall::TxPartition);
 pub enum DaaResolutionPartitionType {
     HandshakeBySender = 0,
     ContextualMessageBySender = 1,
+    PaymentBySender = 2,
 }
 
 #[repr(C)]
@@ -32,12 +37,7 @@ pub struct UnknownAcceptingDaaKey {
     pub partition_type: u8,
 }
 
-/// Return type for DAA resolution - contains the appropriate Like key type
-#[derive(Debug, Clone)]
-pub enum DaaResolutionLikeKey {
-    HandshakeKey(LikeHandshakeKeyBySender<UserKey>),
-    ContextualMessageKey(LikeContextualMessageBySenderKey<UserKey>),
-}
+// DaaResolutionLikeKey is now imported from resolution_keys module
 
 impl UnknownAcceptingDaaPartition {
     pub fn new(keyspace: &fjall::TxKeyspace) -> Result<Self> {
@@ -62,7 +62,7 @@ impl UnknownAcceptingDaaPartition {
         &self,
         wtx: &mut WriteTransaction,
         accepting_block_hash: RpcHash,
-        handshake_key: &HandshakeKeyBySender,
+        handshake_key: &HandshakeKeyForResolution,
     ) -> Result<()> {
         let key = UnknownAcceptingDaaKey {
             accepting_block_hash: *accepting_block_hash.as_ref(),
@@ -77,13 +77,28 @@ impl UnknownAcceptingDaaPartition {
         &self,
         wtx: &mut WriteTransaction,
         accepting_block_hash: RpcHash,
-        contextual_message_key: &ContextualMessageBySenderKey,
+        contextual_message_key: &ContextualMessageKeyForResolution,
     ) -> Result<()> {
         let key = UnknownAcceptingDaaKey {
             accepting_block_hash: *accepting_block_hash.as_ref(),
             partition_type: DaaResolutionPartitionType::ContextualMessageBySender as u8,
         };
         wtx.insert(&self.0, bytemuck::bytes_of(&key), bytemuck::bytes_of(contextual_message_key));
+        Ok(())
+    }
+
+    /// Mark a payment as needing DAA score resolution
+    pub fn mark_payment_unknown_daa(
+        &self,
+        wtx: &mut WriteTransaction,
+        accepting_block_hash: RpcHash,
+        payment_key: &PaymentKeyForResolution,
+    ) -> Result<()> {
+        let key = UnknownAcceptingDaaKey {
+            accepting_block_hash: *accepting_block_hash.as_ref(),
+            partition_type: DaaResolutionPartitionType::PaymentBySender as u8,
+        };
+        wtx.insert(&self.0, bytemuck::bytes_of(&key), bytemuck::bytes_of(payment_key));
         Ok(())
     }
 
@@ -101,10 +116,13 @@ impl UnknownAcceptingDaaPartition {
                 let key: UnknownAcceptingDaaKey = *bytemuck::from_bytes(&key_bytes);
                 match key.partition_type {
                     0 => Ok(DaaResolutionLikeKey::HandshakeKey(
-                        LikeHandshakeKeyBySender::new(value_bytes)
+                        LikeHandshakeKeyForResolution::new(value_bytes)
                     )),
                     1 => Ok(DaaResolutionLikeKey::ContextualMessageKey(
-                        LikeContextualMessageBySenderKey::new(value_bytes)
+                        LikeContextualMessageKeyForResolution::new(value_bytes)
+                    )),
+                    2 => Ok(DaaResolutionLikeKey::PaymentKey(
+                        LikePaymentKeyForResolution::new(value_bytes)
                     )),
                     _ => Err(anyhow::anyhow!("Invalid partition type: {}", key.partition_type)),
                 }
@@ -134,10 +152,13 @@ impl UnknownAcceptingDaaPartition {
                 
                 match key.partition_type {
                     0 => results.push(DaaResolutionLikeKey::HandshakeKey(
-                        LikeHandshakeKeyBySender::new(value_bytes)
+                        LikeHandshakeKeyForResolution::new(value_bytes)
                     )),
                     1 => results.push(DaaResolutionLikeKey::ContextualMessageKey(
-                        LikeContextualMessageBySenderKey::new(value_bytes)
+                        LikeContextualMessageKeyForResolution::new(value_bytes)
+                    )),
+                    2 => results.push(DaaResolutionLikeKey::PaymentKey(
+                        LikePaymentKeyForResolution::new(value_bytes)
                     )),
                     _ => return Err(anyhow::anyhow!("Invalid partition type: {}", key.partition_type)),
                 }
@@ -186,7 +207,7 @@ impl UnknownAcceptingDaaPartition {
         entries: I,
     ) -> Result<()>
     where
-        I: Iterator<Item = (RpcHash, &'a HandshakeKeyBySender)>,
+        I: Iterator<Item = (RpcHash, &'a HandshakeKeyForResolution)>,
     {
         for (accepting_block_hash, handshake_key) in entries {
             self.mark_handshake_unknown_daa(wtx, accepting_block_hash, handshake_key)?;
@@ -201,10 +222,25 @@ impl UnknownAcceptingDaaPartition {
         entries: I,
     ) -> Result<()>
     where
-        I: Iterator<Item = (RpcHash, &'a ContextualMessageBySenderKey)>,
+        I: Iterator<Item = (RpcHash, &'a ContextualMessageKeyForResolution)>,
     {
         for (accepting_block_hash, contextual_message_key) in entries {
             self.mark_contextual_message_unknown_daa(wtx, accepting_block_hash, contextual_message_key)?;
+        }
+        Ok(())
+    }
+
+    /// Mark multiple payments as needing DAA score resolution
+    pub fn mark_payments_unknown_daa_batch<'a, I>(
+        &self,
+        wtx: &mut WriteTransaction,
+        entries: I,
+    ) -> Result<()>
+    where
+        I: Iterator<Item = (RpcHash, &'a PaymentKeyForResolution)>,
+    {
+        for (accepting_block_hash, payment_key) in entries {
+            self.mark_payment_unknown_daa(wtx, accepting_block_hash, payment_key)?;
         }
         Ok(())
     }
@@ -212,8 +248,9 @@ impl UnknownAcceptingDaaPartition {
 
 #[cfg(test)]
 mod tests {
+    use crate::database::contextual_message_by_sender::{ContextualMessageBySenderKey, LikeContextualMessageBySenderKey};
     use super::*;
-    use crate::database::handshake::AddressPayload;
+    use crate::database::handshake::{AddressPayload, HandshakeKeyBySender, LikeHandshakeKeyBySender};
 
     #[test]
     fn test_unknown_accepting_daa_key_serialization() {

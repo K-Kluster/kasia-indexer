@@ -3,8 +3,12 @@ use bytemuck::{AnyBitPattern, NoUninit};
 use fjall::{PartitionCreateOptions, ReadTransaction, WriteTransaction, UserKey};
 use kaspa_rpc_core::RpcTransactionId;
 use crate::database::PartitionId;
-use crate::database::handshake::{HandshakeKeyBySender, LikeHandshakeKeyBySender};
-use crate::database::contextual_message_by_sender::{ContextualMessageBySenderKey, LikeContextualMessageBySenderKey};
+use crate::database::resolution_keys::{
+    HandshakeKeyForResolution, LikeHandshakeKeyForResolution,
+    ContextualMessageKeyForResolution, LikeContextualMessageKeyForResolution,
+    PaymentKeyForResolution, LikePaymentKeyForResolution,
+    SenderResolutionLikeKey
+};
 
 /// FIFO partition for tracking transactions that need sender address/payload resolution
 /// Key: accepting_daa_score + tx_id + partition_type
@@ -25,12 +29,7 @@ pub struct PendingResolutionKey {
     pub partition_type: u8,           // PartitionId as u8 - at the end
 }
 
-/// Return type for sender resolution - contains the appropriate Like key type
-#[derive(Debug, Clone)]
-pub enum SenderResolutionLikeKey<T:AsRef<[u8]> + Clone = UserKey> {
-    HandshakeKey(LikeHandshakeKeyBySender<T>),
-    ContextualMessageKey(LikeContextualMessageBySenderKey<T>),
-}
+// SenderResolutionLikeKey is now imported from resolution_keys module
 
 #[derive(Debug, Clone)]
 pub struct PendingSenderResolution<T: AsRef<[u8]> + Clone = UserKey> {
@@ -64,7 +63,7 @@ impl PendingSenderResolutionPartition {
         wtx: &mut WriteTransaction,
         accepting_daa_score: u64,
         tx_id: RpcTransactionId,
-        handshake_key: &HandshakeKeyBySender,
+        handshake_key: &HandshakeKeyForResolution,
     ) -> Result<()> {
         let key = PendingResolutionKey {
             accepting_daa_score: accepting_daa_score.to_be_bytes(),
@@ -81,7 +80,7 @@ impl PendingSenderResolutionPartition {
         wtx: &mut WriteTransaction,
         accepting_daa_score: u64,
         tx_id: RpcTransactionId,
-        contextual_message_key: &ContextualMessageBySenderKey,
+        contextual_message_key: &ContextualMessageKeyForResolution,
     ) -> Result<()> {
         let key = PendingResolutionKey {
             accepting_daa_score: accepting_daa_score.to_be_bytes(),
@@ -89,6 +88,23 @@ impl PendingSenderResolutionPartition {
             partition_type: PartitionId::ContextualMessageBySender as u8,
         };
         wtx.insert(&self.0, bytemuck::bytes_of(&key), bytemuck::bytes_of(contextual_message_key));
+        Ok(())
+    }
+
+    /// Mark a payment transaction as needing sender resolution
+    pub fn mark_payment_pending(
+        &self,
+        wtx: &mut WriteTransaction,
+        accepting_daa_score: u64,
+        tx_id: RpcTransactionId,
+        payment_key: &PaymentKeyForResolution,
+    ) -> Result<()> {
+        let key = PendingResolutionKey {
+            accepting_daa_score: accepting_daa_score.to_be_bytes(),
+            tx_id: *tx_id.as_ref(),
+            partition_type: PartitionId::PaymentBySender as u8,
+        };
+        wtx.insert(&self.0, bytemuck::bytes_of(&key), bytemuck::bytes_of(payment_key));
         Ok(())
     }
 
@@ -122,15 +138,19 @@ impl PendingSenderResolutionPartition {
                 let partition_type = match key.partition_type {
                     x if x == PartitionId::HandshakeBySender as u8 => PartitionId::HandshakeBySender,
                     x if x == PartitionId::ContextualMessageBySender as u8 => PartitionId::ContextualMessageBySender,
+                    x if x == PartitionId::PaymentBySender as u8 => PartitionId::PaymentBySender,
                     _ => return Err(anyhow::anyhow!("Invalid partition type: {}", key.partition_type)),
                 };
                 
                 let like_key = match partition_type {
                     PartitionId::HandshakeBySender => SenderResolutionLikeKey::HandshakeKey(
-                        LikeHandshakeKeyBySender::new(value_bytes)
+                        LikeHandshakeKeyForResolution::new(value_bytes)
                     ),
                     PartitionId::ContextualMessageBySender => SenderResolutionLikeKey::ContextualMessageKey(
-                        LikeContextualMessageBySenderKey::new(value_bytes)
+                        LikeContextualMessageKeyForResolution::new(value_bytes)
+                    ),
+                    PartitionId::PaymentBySender => SenderResolutionLikeKey::PaymentKey(
+                        LikePaymentKeyForResolution::new(value_bytes)
                     ),
                     _ => return Err(anyhow::anyhow!("Invalid partition type for sender resolution: {:?}", partition_type)),
                 };
@@ -164,15 +184,19 @@ impl PendingSenderResolutionPartition {
                 let partition_type = match key.partition_type {
                     x if x == PartitionId::HandshakeBySender as u8 => PartitionId::HandshakeBySender,
                     x if x == PartitionId::ContextualMessageBySender as u8 => PartitionId::ContextualMessageBySender,
+                    x if x == PartitionId::PaymentBySender as u8 => PartitionId::PaymentBySender,
                     _ => return Err(anyhow::anyhow!("Invalid partition type: {}", key.partition_type)),
                 };
                 
                 let like_key = match partition_type {
                     PartitionId::HandshakeBySender => SenderResolutionLikeKey::HandshakeKey(
-                        LikeHandshakeKeyBySender::new(value_bytes)
+                        LikeHandshakeKeyForResolution::new(value_bytes)
                     ),
                     PartitionId::ContextualMessageBySender => SenderResolutionLikeKey::ContextualMessageKey(
-                        LikeContextualMessageBySenderKey::new(value_bytes)
+                        LikeContextualMessageKeyForResolution::new(value_bytes)
+                    ),
+                    PartitionId::PaymentBySender => SenderResolutionLikeKey::PaymentKey(
+                        LikePaymentKeyForResolution::new(value_bytes)
                     ),
                     _ => return Err(anyhow::anyhow!("Invalid partition type for sender resolution: {:?}", partition_type)),
                 };
@@ -216,7 +240,7 @@ impl PendingSenderResolutionPartition {
         entries: I,
     ) -> Result<()>
     where
-        I: Iterator<Item = (RpcTransactionId, &'a HandshakeKeyBySender)>,
+        I: Iterator<Item = (RpcTransactionId, &'a HandshakeKeyForResolution)>,
     {
         for (tx_id, handshake_key) in entries {
             self.mark_handshake_pending(wtx, accepting_daa_score, tx_id, handshake_key)?;
@@ -232,10 +256,26 @@ impl PendingSenderResolutionPartition {
         entries: I,
     ) -> Result<()>
     where
-        I: Iterator<Item = (RpcTransactionId, &'a ContextualMessageBySenderKey)>,
+        I: Iterator<Item = (RpcTransactionId, &'a ContextualMessageKeyForResolution)>,
     {
         for (tx_id, contextual_message_key) in entries {
             self.mark_contextual_message_pending(wtx, accepting_daa_score, tx_id, contextual_message_key)?;
+        }
+        Ok(())
+    }
+
+    /// Mark multiple payment transactions as needing sender resolution
+    pub fn mark_payments_pending_batch<'a, I>(
+        &self,
+        wtx: &mut WriteTransaction,
+        accepting_daa_score: u64,
+        entries: I,
+    ) -> Result<()>
+    where
+        I: Iterator<Item = (RpcTransactionId, &'a PaymentKeyForResolution)>,
+    {
+        for (tx_id, payment_key) in entries {
+            self.mark_payment_pending(wtx, accepting_daa_score, tx_id, payment_key)?;
         }
         Ok(())
     }
@@ -302,8 +342,7 @@ mod tests {
 
     #[test]
     fn test_pending_sender_resolution_struct() {
-        let handshake_key = HandshakeKeyBySender {
-            sender: AddressPayload::default(),
+        let handshake_key = HandshakeKeyForResolution {
             block_time: [0u8; 8],
             block_hash: [1u8; 32],
             receiver: AddressPayload::default(),
@@ -312,7 +351,7 @@ mod tests {
         };
 
         let bytes = bytemuck::bytes_of(&handshake_key);
-        let like_key = LikeHandshakeKeyBySender::new(bytes.to_vec());
+        let like_key = LikeHandshakeKeyForResolution::new(bytes.to_vec());
 
         let resolution = PendingSenderResolution {
             accepting_daa_score: 12345,

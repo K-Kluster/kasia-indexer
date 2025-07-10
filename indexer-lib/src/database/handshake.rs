@@ -102,6 +102,7 @@ impl<T: AsRef<[u8]>> Debug for LikeHandshakeKeyBySender<T> {
     }
 }
 impl<T: AsRef<[u8]>> LikeHandshakeKeyBySender<T> {
+    #[allow(dead_code)]
     pub(crate) fn new(bts: T) -> Self {
         Self {
             bts,

@@ -16,6 +16,8 @@ pub mod block_gaps;
 pub mod metadata;
 pub mod pending_sender_resolution;
 pub mod contextual_message_by_sender;
+pub mod payment;
+pub mod resolution_keys;
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -37,6 +39,10 @@ pub enum PartitionId {
     BlockGaps,
     AcceptingBlockGaps,
     ContextualMessageBySender,
+    
+    PaymentBySender,
+    PaymentByReceiver,
+    TxIdToPayment,
 }
 
 mod util;
