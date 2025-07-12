@@ -1,14 +1,14 @@
+use crate::database::PartitionId;
+use crate::database::resolution_keys::{
+    ContextualMessageKeyForResolution, HandshakeKeyForResolution,
+    LikeContextualMessageKeyForResolution, LikeHandshakeKeyForResolution,
+    LikePaymentKeyForResolution, PaymentKeyForResolution,
+};
+use anyhow::Result;
 use bytemuck::{AnyBitPattern, NoUninit};
 use fjall::{PartitionCreateOptions, ReadTransaction, UserKey, WriteTransaction};
 use std::marker::PhantomData;
 use std::ops::Deref;
-use crate::database::PartitionId;
-use crate::database::resolution_keys::{
-    HandshakeKeyForResolution, LikeHandshakeKeyForResolution,
-    ContextualMessageKeyForResolution, LikeContextualMessageKeyForResolution,
-    PaymentKeyForResolution, LikePaymentKeyForResolution,
-};
-use anyhow::Result;
 
 /// Enum for accepting block resolution data types
 #[derive(Debug, Clone)]
@@ -76,11 +76,7 @@ impl AcceptanceToTxIDPartition {
         Ok(self.0.insert(bytemuck::bytes_of(&key), [])?)
     }
 
-    pub fn insert_wtx(
-        &self,
-        wtx: &mut WriteTransaction,
-        tx_id: [u8; 32],
-    ) {
+    pub fn insert_wtx(&self, wtx: &mut WriteTransaction, tx_id: [u8; 32]) {
         let key = TxAcceptanceKey {
             tx_id,
             accepted_at_daa: Default::default(),
@@ -108,7 +104,7 @@ pub struct AcceptanceTxKey {
     pub tx_id: [u8; 32],
     pub accepted_at_daa: [u8; 8], // be
     pub accepted_by_block_hash: [u8; 32],
-    pub partition_id: u8,         // PartitionId as u8 (added to end as requested)
+    pub partition_id: u8, // PartitionId as u8 (added to end as requested)
 }
 
 #[repr(transparent)]
@@ -158,7 +154,11 @@ impl TxIDToAcceptancePartition {
             accepted_by_block_hash: Default::default(),
             partition_id: PartitionId::HandshakeBySender as u8,
         };
-        wtx.insert(&self.0, bytemuck::bytes_of(&key), bytemuck::bytes_of(handshake_key));
+        wtx.insert(
+            &self.0,
+            bytemuck::bytes_of(&key),
+            bytemuck::bytes_of(handshake_key),
+        );
     }
 
     /// Insert a contextual message ForResolution key
@@ -167,15 +167,18 @@ impl TxIDToAcceptancePartition {
         wtx: &mut WriteTransaction,
         tx_id: [u8; 32],
         contextual_message_key: &ContextualMessageKeyForResolution,
-    ) -> Result<()> {
+    ) {
         let key = AcceptanceTxKey {
             tx_id,
-            accepted_at_daa:  Default::default(),
-            accepted_by_block_hash:  Default::default(),
+            accepted_at_daa: Default::default(),
+            accepted_by_block_hash: Default::default(),
             partition_id: PartitionId::ContextualMessageBySender as u8,
         };
-        wtx.insert(&self.0, bytemuck::bytes_of(&key), bytemuck::bytes_of(contextual_message_key));
-        Ok(())
+        wtx.insert(
+            &self.0,
+            bytemuck::bytes_of(&key),
+            bytemuck::bytes_of(contextual_message_key),
+        );
     }
 
     /// Insert a payment ForResolution key
@@ -188,10 +191,14 @@ impl TxIDToAcceptancePartition {
         let key = AcceptanceTxKey {
             tx_id,
             accepted_at_daa: Default::default(),
-            accepted_by_block_hash:  Default::default(),
+            accepted_by_block_hash: Default::default(),
             partition_id: PartitionId::PaymentBySender as u8,
         };
-        wtx.insert(&self.0, bytemuck::bytes_of(&key), bytemuck::bytes_of(payment_key));
+        wtx.insert(
+            &self.0,
+            bytemuck::bytes_of(&key),
+            bytemuck::bytes_of(payment_key),
+        );
         Ok(())
     }
 
@@ -201,41 +208,61 @@ impl TxIDToAcceptancePartition {
         &self,
         rtx: &ReadTransaction,
         tx_id: [u8; 32],
-    ) -> impl DoubleEndedIterator<Item = Result<(PartitionId, AcceptingBlockResolutionData)>> + '_ {
+    ) -> impl DoubleEndedIterator<Item = Result<(PartitionId, AcceptingBlockResolutionData)>> + '_
+    {
         rtx.prefix(&self.0, tx_id).map(|r| {
             let (key_bytes, value_bytes) = r?;
-            if key_bytes.len() == 73 { // 32 + 8 + 32 + 1
+            if key_bytes.len() == 73 {
+                // 32 + 8 + 32 + 1
                 let key: AcceptanceTxKey = *bytemuck::from_bytes(&key_bytes);
-                
+
                 let partition_id = match key.partition_id {
-                    x if x == PartitionId::HandshakeBySender as u8 => PartitionId::HandshakeBySender,
-                    x if x == PartitionId::ContextualMessageBySender as u8 => PartitionId::ContextualMessageBySender,
+                    x if x == PartitionId::HandshakeBySender as u8 => {
+                        PartitionId::HandshakeBySender
+                    }
+                    x if x == PartitionId::ContextualMessageBySender as u8 => {
+                        PartitionId::ContextualMessageBySender
+                    }
                     x if x == PartitionId::PaymentBySender as u8 => PartitionId::PaymentBySender,
-                    _ => return Err(anyhow::anyhow!("Invalid partition ID: {}", key.partition_id)),
+                    _ => {
+                        return Err(anyhow::anyhow!(
+                            "Invalid partition ID: {}",
+                            key.partition_id
+                        ));
+                    }
                 };
-                
+
                 let resolution_data = match partition_id {
                     PartitionId::HandshakeBySender => AcceptingBlockResolutionData::HandshakeKey(
-                        LikeHandshakeKeyForResolution::new(value_bytes)
+                        LikeHandshakeKeyForResolution::new(value_bytes),
                     ),
-                    PartitionId::ContextualMessageBySender => AcceptingBlockResolutionData::ContextualMessageKey(
-                        LikeContextualMessageKeyForResolution::new(value_bytes)
-                    ),
+                    PartitionId::ContextualMessageBySender => {
+                        AcceptingBlockResolutionData::ContextualMessageKey(
+                            LikeContextualMessageKeyForResolution::new(value_bytes),
+                        )
+                    }
                     PartitionId::PaymentBySender => AcceptingBlockResolutionData::PaymentKey(
-                        LikePaymentKeyForResolution::new(value_bytes)
+                        LikePaymentKeyForResolution::new(value_bytes),
                     ),
-                    _ => return Err(anyhow::anyhow!("Invalid partition ID for accepting block resolution: {:?}", partition_id)),
+                    _ => {
+                        return Err(anyhow::anyhow!(
+                            "Invalid partition ID for accepting block resolution: {:?}",
+                            partition_id
+                        ));
+                    }
                 };
-                
+
                 Ok((partition_id, resolution_data))
             } else {
-                Err(anyhow::anyhow!("Invalid key length in tx_id_to_acceptance partition"))
+                Err(anyhow::anyhow!(
+                    "Invalid key length in tx_id_to_acceptance partition"
+                ))
             }
         })
     }
 
     // todo resolution
-    
+
     // /// Remove all accepting block resolution data for a specific transaction ID
     // /// Returns all the resolution data that was removed
     // pub fn remove_by_tx_id(
@@ -246,14 +273,14 @@ impl TxIDToAcceptancePartition {
     //     let prefix = tx_id.as_slice();
     //     let mut results = Vec::new();
     //     let mut keys_to_remove = Vec::new();
-    //     
+    //
     //     // First collect all entries
     //     for item in wtx.prefix(&self.0, prefix) {
     //         let (key_bytes, value_bytes) = item?;
     //         if key_bytes.len() == 73 { // 32 + 8 + 32 + 1
     //             let key: AcceptanceTxKey = *bytemuck::from_bytes(&key_bytes);
     //             keys_to_remove.push(key);
-    //             
+    //
     //             let partition_id = match key.partition_id {
     //                 x if x == PartitionId::HandshakeBySender as u8 => PartitionId::HandshakeBySender,
     //                 x if x == PartitionId::ContextualMessageBySender as u8 => PartitionId::ContextualMessageBySender,
@@ -261,7 +288,7 @@ impl TxIDToAcceptancePartition {
     //                 x if x == PartitionId::None as u8 => PartitionId::None,
     //                 _ => return Err(anyhow::anyhow!("Invalid partition ID: {}", key.partition_id)),
     //             };
-    //             
+    //
     //             let resolution_data = match partition_id {
     //                 PartitionId::HandshakeBySender => AcceptingBlockResolutionData::HandshakeKey(
     //                     LikeHandshakeKeyForResolution::new(value_bytes)
@@ -275,16 +302,16 @@ impl TxIDToAcceptancePartition {
     //                 PartitionId::None => AcceptingBlockResolutionData::None,
     //                 _ => return Err(anyhow::anyhow!("Invalid partition ID for accepting block resolution: {:?}", partition_id)),
     //             };
-    //             
+    //
     //             results.push((partition_id, resolution_data));
     //         }
     //     }
-    //     
+    //
     //     // Then remove all collected keys
     //     for key in keys_to_remove {
     //         wtx.remove(&self.0, bytemuck::bytes_of(&key));
     //     }
-    //     
+    //
     //     Ok(results)
     // }
 }

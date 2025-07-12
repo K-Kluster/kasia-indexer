@@ -1,7 +1,7 @@
-use std::fmt::Debug;
+use crate::database::handshake::AddressPayload;
 use bytemuck::{AnyBitPattern, NoUninit};
 use fjall::UserKey;
-use crate::database::handshake::AddressPayload;
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::Deref;
 
@@ -9,12 +9,12 @@ use std::ops::Deref;
 #[derive(Clone, Copy, Debug, AnyBitPattern, NoUninit, PartialEq, Eq)]
 #[repr(C)]
 pub struct HandshakeKeyForResolution {
-    pub block_time: [u8; 8],       // u64_be
+    pub block_time: [u8; 8], // u64_be
     pub block_hash: [u8; 32],
     pub receiver: AddressPayload,
     pub version: u8,
     pub tx_id: [u8; 32],
-    pub attempt_count: u8,          // attempts remaining for resolution
+    pub attempt_count: u8, // attempts remaining for resolution
 }
 
 #[repr(transparent)]
@@ -51,12 +51,12 @@ impl<T: AsRef<[u8]>> Debug for LikeHandshakeKeyForResolution<T> {
 #[derive(Clone, Copy, Debug, AnyBitPattern, NoUninit, PartialEq, Eq)]
 #[repr(C)]
 pub struct ContextualMessageKeyForResolution {
-    pub alias: [u8; 16],            // alias for prefix search, zero-padded
-    pub block_time: [u8; 8],        // u64 BE for chronological ordering
-    pub block_hash: [u8; 32],       // block hash for uniqueness
-    pub version: u8,                // message version
-    pub tx_id: [u8; 32],            // transaction id
-    pub attempt_count: u8,          // attempts remaining for resolution
+    pub alias: [u8; 16],      // alias for prefix search, zero-padded
+    pub block_time: [u8; 8],  // u64 BE for chronological ordering
+    pub block_hash: [u8; 32], // block hash for uniqueness
+    pub version: u8,          // message version
+    pub tx_id: [u8; 32],      // transaction id
+    pub attempt_count: u8,    // attempts remaining for resolution
 }
 
 #[repr(transparent)]
@@ -93,12 +93,12 @@ impl<T: AsRef<[u8]>> Debug for LikeContextualMessageKeyForResolution<T> {
 #[derive(Clone, Copy, Debug, AnyBitPattern, NoUninit, PartialEq, Eq)]
 #[repr(C)]
 pub struct PaymentKeyForResolution {
-    pub block_time: [u8; 8],       // u64_be
+    pub block_time: [u8; 8], // u64_be
     pub block_hash: [u8; 32],
     pub receiver: AddressPayload,
     pub version: u8,
     pub tx_id: [u8; 32],
-    pub attempt_count: u8,          // attempts remaining for resolution
+    pub attempt_count: u8, // attempts remaining for resolution
 }
 
 #[repr(transparent)]
@@ -161,11 +161,11 @@ mod tests {
             tx_id: [2u8; 32],
             attempt_count: 3,
         };
-        
+
         let bytes = bytemuck::bytes_of(&key);
         // 8 + 32 + 34 + 1 + 32 + 1 = 108 bytes (no sender field, +1 for attempt_count)
         assert_eq!(bytes.len(), 108);
-        
+
         let deserialized: HandshakeKeyForResolution = *bytemuck::from_bytes(bytes);
         assert_eq!(deserialized, key);
     }
@@ -180,11 +180,11 @@ mod tests {
             tx_id: [3u8; 32],
             attempt_count: 3,
         };
-        
+
         let bytes = bytemuck::bytes_of(&key);
         // 16 + 8 + 32 + 1 + 32 + 1 = 90 bytes (no sender field, +1 for attempt_count)
         assert_eq!(bytes.len(), 90);
-        
+
         let deserialized: ContextualMessageKeyForResolution = *bytemuck::from_bytes(bytes);
         assert_eq!(deserialized, key);
     }
@@ -199,11 +199,11 @@ mod tests {
             tx_id: [2u8; 32],
             attempt_count: 3,
         };
-        
+
         let bytes = bytemuck::bytes_of(&key);
         // 8 + 32 + 34 + 1 + 32 + 1 = 108 bytes (no sender field, +1 for attempt_count)
         assert_eq!(bytes.len(), 108);
-        
+
         let deserialized: PaymentKeyForResolution = *bytemuck::from_bytes(bytes);
         assert_eq!(deserialized, key);
     }
@@ -218,16 +218,16 @@ mod tests {
             tx_id: [2u8; 32],
             attempt_count: 3,
         };
-        
+
         let bytes = bytemuck::bytes_of(&key).to_vec();
         let like_key = LikeHandshakeKeyForResolution::new(bytes);
-        
+
         // Test zero-copy access via Deref
         assert_eq!(like_key.version, 1);
         assert_eq!(like_key.tx_id, [2u8; 32]);
         assert_eq!(like_key.block_time, 12345u64.to_be_bytes());
         assert_eq!(like_key.attempt_count, 3);
-        
+
         // Test Clone
         let cloned = like_key.clone();
         assert_eq!(cloned.version, 1);

@@ -1,14 +1,13 @@
-use anyhow::Result;
-use bytemuck::{AnyBitPattern, NoUninit};
-use fjall::{PartitionCreateOptions, ReadTransaction, WriteTransaction, UserKey};
-use kaspa_rpc_core::RpcTransactionId;
 use crate::database::PartitionId;
 use crate::database::resolution_keys::{
-    HandshakeKeyForResolution, LikeHandshakeKeyForResolution,
-    ContextualMessageKeyForResolution, LikeContextualMessageKeyForResolution,
-    PaymentKeyForResolution, LikePaymentKeyForResolution,
-    SenderResolutionLikeKey
+    ContextualMessageKeyForResolution, HandshakeKeyForResolution,
+    LikeContextualMessageKeyForResolution, LikeHandshakeKeyForResolution,
+    LikePaymentKeyForResolution, PaymentKeyForResolution, SenderResolutionLikeKey,
 };
+use anyhow::Result;
+use bytemuck::{AnyBitPattern, NoUninit};
+use fjall::{PartitionCreateOptions, ReadTransaction, UserKey, WriteTransaction};
+use kaspa_rpc_core::RpcTransactionId;
 
 /// FIFO partition for tracking transactions that need sender address/payload resolution
 /// Key: accepting_daa_score + tx_id + partition_type
@@ -26,7 +25,7 @@ pub struct PendingSenderResolutionPartition(fjall::TxPartition);
 pub struct PendingResolutionKey {
     pub accepting_daa_score: [u8; 8], // BE - for processing order (lowest first)
     pub tx_id: [u8; 32],
-    pub partition_type: u8,           // PartitionId as u8 - at the end
+    pub partition_type: u8, // PartitionId as u8 - at the end
 }
 
 // SenderResolutionLikeKey is now imported from resolution_keys module
@@ -69,7 +68,11 @@ impl PendingSenderResolutionPartition {
             tx_id: *tx_id.as_ref(),
             partition_type: PartitionId::HandshakeBySender as u8,
         };
-        wtx.insert(&self.0, bytemuck::bytes_of(&key), bytemuck::bytes_of(handshake_key));
+        wtx.insert(
+            &self.0,
+            bytemuck::bytes_of(&key),
+            bytemuck::bytes_of(handshake_key),
+        );
         Ok(())
     }
 
@@ -86,7 +89,11 @@ impl PendingSenderResolutionPartition {
             tx_id: *tx_id.as_ref(),
             partition_type: PartitionId::ContextualMessageBySender as u8,
         };
-        wtx.insert(&self.0, bytemuck::bytes_of(&key), bytemuck::bytes_of(contextual_message_key));
+        wtx.insert(
+            &self.0,
+            bytemuck::bytes_of(&key),
+            bytemuck::bytes_of(contextual_message_key),
+        );
         Ok(())
     }
 
@@ -103,7 +110,11 @@ impl PendingSenderResolutionPartition {
             tx_id: *tx_id.as_ref(),
             partition_type: PartitionId::PaymentBySender as u8,
         };
-        wtx.insert(&self.0, bytemuck::bytes_of(&key), bytemuck::bytes_of(payment_key));
+        wtx.insert(
+            &self.0,
+            bytemuck::bytes_of(&key),
+            bytemuck::bytes_of(payment_key),
+        );
         Ok(())
     }
 
@@ -120,52 +131,68 @@ impl PendingSenderResolutionPartition {
             tx_id: *tx_id.as_ref(),
             partition_type: 0,
         };
-        
+
         // Use prefix up to tx_id (8 + 32 = 40 bytes)
         let prefix = &bytemuck::bytes_of(&prefix_key)[..40];
-        
+
         let mut results = Vec::new();
         let mut keys_to_remove = Vec::new();
-        
+
         // First collect all entries
         for item in wtx.prefix(&self.0, prefix) {
             let (key_bytes, value_bytes) = item?;
-            if key_bytes.len() == 41 { // 8 + 32 + 1
+            if key_bytes.len() == 41 {
+                // 8 + 32 + 1
                 let key: PendingResolutionKey = *bytemuck::from_bytes(&key_bytes);
                 keys_to_remove.push(key);
-                
+
                 let partition_type = match key.partition_type {
-                    x if x == PartitionId::HandshakeBySender as u8 => PartitionId::HandshakeBySender,
-                    x if x == PartitionId::ContextualMessageBySender as u8 => PartitionId::ContextualMessageBySender,
+                    x if x == PartitionId::HandshakeBySender as u8 => {
+                        PartitionId::HandshakeBySender
+                    }
+                    x if x == PartitionId::ContextualMessageBySender as u8 => {
+                        PartitionId::ContextualMessageBySender
+                    }
                     x if x == PartitionId::PaymentBySender as u8 => PartitionId::PaymentBySender,
-                    _ => return Err(anyhow::anyhow!("Invalid partition type: {}", key.partition_type)),
+                    _ => {
+                        return Err(anyhow::anyhow!(
+                            "Invalid partition type: {}",
+                            key.partition_type
+                        ));
+                    }
                 };
-                
+
                 let like_key = match partition_type {
                     PartitionId::HandshakeBySender => SenderResolutionLikeKey::HandshakeKey(
-                        LikeHandshakeKeyForResolution::new(value_bytes)
+                        LikeHandshakeKeyForResolution::new(value_bytes),
                     ),
-                    PartitionId::ContextualMessageBySender => SenderResolutionLikeKey::ContextualMessageKey(
-                        LikeContextualMessageKeyForResolution::new(value_bytes)
-                    ),
+                    PartitionId::ContextualMessageBySender => {
+                        SenderResolutionLikeKey::ContextualMessageKey(
+                            LikeContextualMessageKeyForResolution::new(value_bytes),
+                        )
+                    }
                     PartitionId::PaymentBySender => SenderResolutionLikeKey::PaymentKey(
-                        LikePaymentKeyForResolution::new(value_bytes)
+                        LikePaymentKeyForResolution::new(value_bytes),
                     ),
-                    _ => return Err(anyhow::anyhow!("Invalid partition type for sender resolution: {:?}", partition_type)),
+                    _ => {
+                        return Err(anyhow::anyhow!(
+                            "Invalid partition type for sender resolution: {:?}",
+                            partition_type
+                        ));
+                    }
                 };
-                
+
                 results.push((partition_type, like_key));
             }
         }
-        
+
         // Then remove all collected keys
         for key in keys_to_remove {
             wtx.remove(&self.0, bytemuck::bytes_of(&key));
         }
-        
+
         Ok(results)
     }
-    
 
     /// Get all pending resolutions (for processing in DAA score order)
     pub fn get_all_pending(
@@ -174,32 +201,49 @@ impl PendingSenderResolutionPartition {
     ) -> impl DoubleEndedIterator<Item = Result<PendingSenderResolution>> + '_ {
         rtx.iter(&self.0).map(|item| {
             let (key_bytes, value_bytes) = item?;
-            if key_bytes.len() == 41 { // 8 + 32 + 1
+            if key_bytes.len() == 41 {
+                // 8 + 32 + 1
                 let key: PendingResolutionKey = *bytemuck::from_bytes(&key_bytes);
-                
+
                 let accepting_daa_score = u64::from_be_bytes(key.accepting_daa_score);
                 let tx_id = RpcTransactionId::from_slice(&key.tx_id);
-                
+
                 let partition_type = match key.partition_type {
-                    x if x == PartitionId::HandshakeBySender as u8 => PartitionId::HandshakeBySender,
-                    x if x == PartitionId::ContextualMessageBySender as u8 => PartitionId::ContextualMessageBySender,
+                    x if x == PartitionId::HandshakeBySender as u8 => {
+                        PartitionId::HandshakeBySender
+                    }
+                    x if x == PartitionId::ContextualMessageBySender as u8 => {
+                        PartitionId::ContextualMessageBySender
+                    }
                     x if x == PartitionId::PaymentBySender as u8 => PartitionId::PaymentBySender,
-                    _ => return Err(anyhow::anyhow!("Invalid partition type: {}", key.partition_type)),
+                    _ => {
+                        return Err(anyhow::anyhow!(
+                            "Invalid partition type: {}",
+                            key.partition_type
+                        ));
+                    }
                 };
-                
+
                 let like_key = match partition_type {
                     PartitionId::HandshakeBySender => SenderResolutionLikeKey::HandshakeKey(
-                        LikeHandshakeKeyForResolution::new(value_bytes)
+                        LikeHandshakeKeyForResolution::new(value_bytes),
                     ),
-                    PartitionId::ContextualMessageBySender => SenderResolutionLikeKey::ContextualMessageKey(
-                        LikeContextualMessageKeyForResolution::new(value_bytes)
-                    ),
+                    PartitionId::ContextualMessageBySender => {
+                        SenderResolutionLikeKey::ContextualMessageKey(
+                            LikeContextualMessageKeyForResolution::new(value_bytes),
+                        )
+                    }
                     PartitionId::PaymentBySender => SenderResolutionLikeKey::PaymentKey(
-                        LikePaymentKeyForResolution::new(value_bytes)
+                        LikePaymentKeyForResolution::new(value_bytes),
                     ),
-                    _ => return Err(anyhow::anyhow!("Invalid partition type for sender resolution: {:?}", partition_type)),
+                    _ => {
+                        return Err(anyhow::anyhow!(
+                            "Invalid partition type for sender resolution: {:?}",
+                            partition_type
+                        ));
+                    }
                 };
-                
+
                 Ok(PendingSenderResolution {
                     accepting_daa_score,
                     tx_id,
@@ -207,7 +251,9 @@ impl PendingSenderResolutionPartition {
                     like_key,
                 })
             } else {
-                Err(anyhow::anyhow!("Invalid key length in pending_sender_resolution partition"))
+                Err(anyhow::anyhow!(
+                    "Invalid key length in pending_sender_resolution partition"
+                ))
             }
         })
     }
@@ -224,10 +270,10 @@ impl PendingSenderResolutionPartition {
             tx_id: *tx_id.as_ref(),
             partition_type: 0,
         };
-        
+
         // Use prefix up to tx_id (8 + 32 = 40 bytes)
         let prefix = &bytemuck::bytes_of(&prefix_key)[..40];
-        
+
         Ok(rtx.prefix(&self.0, prefix).next().is_some())
     }
 
@@ -258,7 +304,12 @@ impl PendingSenderResolutionPartition {
         I: Iterator<Item = (RpcTransactionId, &'a ContextualMessageKeyForResolution)>,
     {
         for (tx_id, contextual_message_key) in entries {
-            self.mark_contextual_message_pending(wtx, accepting_daa_score, tx_id, contextual_message_key)?;
+            self.mark_contextual_message_pending(
+                wtx,
+                accepting_daa_score,
+                tx_id,
+                contextual_message_key,
+            )?;
         }
         Ok(())
     }
@@ -292,56 +343,67 @@ impl PendingSenderResolutionPartition {
             tx_id: *tx_id.as_ref(),
             partition_type: 0,
         };
-        
+
         // Use prefix up to tx_id (8 + 32 = 40 bytes)
         let prefix = &bytemuck::bytes_of(&prefix_key)[..40];
-        
+
         let mut removed_entries = Vec::new();
         let mut keys_to_process = Vec::new();
-        
+
         // First collect all keys for this transaction
         for item in wtx.prefix(&self.0, prefix) {
             let (key_bytes, _) = item?;
-            if key_bytes.len() == 41 { // 8 + 32 + 1
+            if key_bytes.len() == 41 {
+                // 8 + 32 + 1
                 let key: PendingResolutionKey = *bytemuck::from_bytes(&key_bytes);
                 keys_to_process.push(key);
             }
         }
-        
+
         // Process each key individually using fetch_update
         for key in keys_to_process {
             let partition_type = match key.partition_type {
                 x if x == PartitionId::HandshakeBySender as u8 => PartitionId::HandshakeBySender,
-                x if x == PartitionId::ContextualMessageBySender as u8 => PartitionId::ContextualMessageBySender,
+                x if x == PartitionId::ContextualMessageBySender as u8 => {
+                    PartitionId::ContextualMessageBySender
+                }
                 x if x == PartitionId::PaymentBySender as u8 => PartitionId::PaymentBySender,
                 _ => continue, // Skip invalid partition types
             };
-            
+
             let mut removed_entry = None;
-            
+
             wtx.fetch_update(&self.0, bytemuck::bytes_of(&key), |current_value| {
                 if let Some(value_bytes) = current_value {
                     // Extract the current key data and create SenderResolutionLikeKey
                     let current_like_key = match partition_type {
                         PartitionId::HandshakeBySender => SenderResolutionLikeKey::HandshakeKey(
-                            LikeHandshakeKeyForResolution::new(value_bytes.clone())
+                            LikeHandshakeKeyForResolution::new(value_bytes.clone()),
                         ),
-                        PartitionId::ContextualMessageBySender => SenderResolutionLikeKey::ContextualMessageKey(
-                            LikeContextualMessageKeyForResolution::new(value_bytes.clone())
-                        ),
+                        PartitionId::ContextualMessageBySender => {
+                            SenderResolutionLikeKey::ContextualMessageKey(
+                                LikeContextualMessageKeyForResolution::new(value_bytes.clone()),
+                            )
+                        }
                         PartitionId::PaymentBySender => SenderResolutionLikeKey::PaymentKey(
-                            LikePaymentKeyForResolution::new(value_bytes.clone())
+                            LikePaymentKeyForResolution::new(value_bytes.clone()),
                         ),
                         _ => return None, // Invalid partition type
                     };
-                    
+
                     // Access the attempt_count and decrement it
                     let new_attempt_count = match &current_like_key {
-                        SenderResolutionLikeKey::HandshakeKey(key) => key.attempt_count.saturating_sub(1),
-                        SenderResolutionLikeKey::ContextualMessageKey(key) => key.attempt_count.saturating_sub(1),
-                        SenderResolutionLikeKey::PaymentKey(key) => key.attempt_count.saturating_sub(1),
+                        SenderResolutionLikeKey::HandshakeKey(key) => {
+                            key.attempt_count.saturating_sub(1)
+                        }
+                        SenderResolutionLikeKey::ContextualMessageKey(key) => {
+                            key.attempt_count.saturating_sub(1)
+                        }
+                        SenderResolutionLikeKey::PaymentKey(key) => {
+                            key.attempt_count.saturating_sub(1)
+                        }
                     };
-                    
+
                     if new_attempt_count == 0 {
                         // Remove the entry by returning None
                         removed_entry = Some((partition_type, current_like_key));
@@ -356,19 +418,19 @@ impl PendingSenderResolutionPartition {
                                 if updated_bytes.len() >= 108 {
                                     updated_bytes[107] = new_attempt_count;
                                 }
-                            },
+                            }
                             PartitionId::ContextualMessageBySender => {
                                 // attempt_count is at offset: 16 + 8 + 32 + 1 + 32 = 89
                                 if updated_bytes.len() >= 90 {
                                     updated_bytes[89] = new_attempt_count;
                                 }
-                            },
+                            }
                             PartitionId::PaymentBySender => {
                                 // attempt_count is at offset: 8 + 32 + 34 + 1 + 32 = 107
                                 if updated_bytes.len() >= 108 {
                                     updated_bytes[107] = new_attempt_count;
                                 }
-                            },
+                            }
                             _ => return None, // Invalid partition type
                         }
                         Some(updated_bytes.into())
@@ -378,12 +440,12 @@ impl PendingSenderResolutionPartition {
                     None
                 }
             })?;
-            
+
             if let Some(removed) = removed_entry {
                 removed_entries.push(removed);
             }
         }
-        
+
         Ok(removed_entries)
     }
 }

@@ -1,8 +1,8 @@
-use std::fmt::{Debug, Formatter};
+use crate::database::handshake::AddressPayload;
 use anyhow::{Result, bail};
 use bytemuck::{AnyBitPattern, NoUninit};
-use fjall::{PartitionCreateOptions, ReadTransaction, WriteTransaction, UserKey};
-use crate::database::handshake::AddressPayload;
+use fjall::{PartitionCreateOptions, ReadTransaction, UserKey, WriteTransaction};
+use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 
@@ -17,12 +17,12 @@ pub struct ContextualMessageBySenderPartition(fjall::TxPartition);
 #[derive(Clone, Copy, Debug, AnyBitPattern, NoUninit, PartialEq, Eq)]
 #[repr(C)]
 pub struct ContextualMessageBySenderKey {
-    pub sender: AddressPayload,      // zeros when not resolved yet
-    pub alias: [u8; 16],            // alias for prefix search, zero-padded
-    pub block_time: [u8; 8],        // u64 BE for chronological ordering
-    pub block_hash: [u8; 32],       // block hash for uniqueness
-    pub version: u8,                // message version
-    pub tx_id: [u8; 32],            // transaction id
+    pub sender: AddressPayload, // zeros when not resolved yet
+    pub alias: [u8; 16],        // alias for prefix search, zero-padded
+    pub block_time: [u8; 8],    // u64 BE for chronological ordering
+    pub block_hash: [u8; 32],   // block hash for uniqueness
+    pub version: u8,            // message version
+    pub tx_id: [u8; 32],        // transaction id
 }
 
 #[repr(transparent)]
@@ -122,7 +122,9 @@ impl ContextualMessageBySenderPartition {
             tx_id,
         };
 
-        Ok(rtx.get(&self.0, bytemuck::bytes_of(&key))?.map(|bytes| bytes.to_vec()))
+        Ok(rtx
+            .get(&self.0, bytemuck::bytes_of(&key))?
+            .map(|bytes| bytes.to_vec()))
     }
 
     /// Get all contextual messages for a sender (prefix search)
@@ -130,16 +132,16 @@ impl ContextualMessageBySenderPartition {
         &self,
         rtx: &ReadTransaction,
         sender: &AddressPayload,
-    ) -> impl DoubleEndedIterator<Item = Result<(LikeContextualMessageBySenderKey<UserKey>, Vec<u8>)>> + '_ {
+    ) -> impl DoubleEndedIterator<Item = Result<(LikeContextualMessageBySenderKey<UserKey>, Vec<u8>)>> + '_
+    {
         let prefix = bytemuck::bytes_of(sender);
-        rtx.prefix(&self.0, prefix)
-            .map(|item| {
-                let (key_bytes, value_bytes) = item?;
-                Ok((
-                    LikeContextualMessageBySenderKey::new(key_bytes),
-                    value_bytes.to_vec(),
-                ))
-            })
+        rtx.prefix(&self.0, prefix).map(|item| {
+            let (key_bytes, value_bytes) = item?;
+            Ok((
+                LikeContextualMessageBySenderKey::new(key_bytes),
+                value_bytes.to_vec(),
+            ))
+        })
     }
     // todo fix me
     // /// Get all contextual messages for a sender and alias prefix (REST API support)
@@ -183,15 +185,15 @@ impl ContextualMessageBySenderPartition {
     pub fn get_all(
         &self,
         rtx: &ReadTransaction,
-    ) -> impl DoubleEndedIterator<Item = Result<(LikeContextualMessageBySenderKey<UserKey>, Vec<u8>)>> + '_ {
-        rtx.iter(&self.0)
-            .map(|item| {
-                let (key_bytes, value_bytes) = item?;
-                Ok((
-                    LikeContextualMessageBySenderKey::new(key_bytes),
-                    value_bytes.to_vec(),
-                ))
-            })
+    ) -> impl DoubleEndedIterator<Item = Result<(LikeContextualMessageBySenderKey<UserKey>, Vec<u8>)>> + '_
+    {
+        rtx.iter(&self.0).map(|item| {
+            let (key_bytes, value_bytes) = item?;
+            Ok((
+                LikeContextualMessageBySenderKey::new(key_bytes),
+                value_bytes.to_vec(),
+            ))
+        })
     }
 
     /// Update sender address (when resolved from zeros)
@@ -225,7 +227,7 @@ impl ContextualMessageBySenderPartition {
         if let Some(sealed_hex) = wtx.get(&self.0, bytemuck::bytes_of(&old_key))? {
             // Remove old entry
             wtx.remove(&self.0, bytemuck::bytes_of(&old_key));
-            
+
             // Insert with new sender
             let new_key = ContextualMessageBySenderKey {
                 sender: new_sender,
@@ -235,10 +237,10 @@ impl ContextualMessageBySenderPartition {
                 version,
                 tx_id,
             };
-            
+
             wtx.insert(&self.0, bytemuck::bytes_of(&new_key), sealed_hex);
         }
-        
+
         Ok(())
     }
 }
@@ -257,10 +259,10 @@ mod tests {
             version: 1,
             tx_id: [3u8; 32],
         };
-        
+
         let bytes = bytemuck::bytes_of(&key);
         assert_eq!(bytes.len(), 123); // 34 + 16 + 8 + 32 + 1 + 32
-        
+
         let deserialized: ContextualMessageBySenderKey = *bytemuck::from_bytes(bytes);
         assert_eq!(deserialized, key);
     }
@@ -275,10 +277,10 @@ mod tests {
             version: 1,
             tx_id: [3u8; 32],
         };
-        
+
         let bytes = bytemuck::bytes_of(&key).to_vec();
         let like_key = LikeContextualMessageBySenderKey::new(bytes);
-        
+
         // Test zero-copy access via Deref
         assert_eq!(like_key.sender, key.sender);
         assert_eq!(like_key.alias, key.alias);
@@ -286,7 +288,7 @@ mod tests {
         assert_eq!(like_key.block_hash, key.block_hash);
         assert_eq!(like_key.version, key.version);
         assert_eq!(like_key.tx_id, key.tx_id);
-        
+
         // Test Clone
         let cloned = like_key.clone();
         assert_eq!(cloned.sender, key.sender);
@@ -297,17 +299,17 @@ mod tests {
         // Valid alias (16 bytes)
         let valid_alias = [1u8; 16];
         assert!(valid_alias.len() <= 16);
-        
+
         // Invalid alias (17 bytes) - this would cause an error
         let invalid_alias = [1u8; 17];
         assert!(invalid_alias.len() > 16);
-        
+
         // Test padding works correctly
         let test_alias = b"test_alias";
         assert!(test_alias.len() <= 16); // This should be fine
         let mut alias_bytes = [0u8; 16];
         alias_bytes[..test_alias.len()].copy_from_slice(test_alias);
-        
+
         // Verify padding
         assert_eq!(alias_bytes[0..10], *test_alias);
         assert_eq!(alias_bytes[10], 0); // should be padded with zeros

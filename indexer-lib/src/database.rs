@@ -13,10 +13,10 @@ pub mod unknown_accepting_daa;
 
 pub mod accepting_block_gaps;
 pub mod block_gaps;
-pub mod metadata;
-pub mod pending_sender_resolution;
 pub mod contextual_message_by_sender;
+pub mod metadata;
 pub mod payment;
+pub mod pending_sender_resolution;
 pub mod resolution_keys;
 
 #[repr(u8)]
@@ -39,12 +39,12 @@ pub enum PartitionId {
     BlockGaps,
     AcceptingBlockGaps,
     ContextualMessageBySender,
-    
+
     PaymentBySender,
     PaymentByReceiver,
     TxIdToPayment,
 
-    None = 255,                    // Special variant for resolved entries with empty value
+    None = 255, // Special variant for resolved entries with empty value
 }
 
 mod util;

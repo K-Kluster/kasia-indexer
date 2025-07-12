@@ -1,5 +1,6 @@
 use crate::operation::{
-    SealedContextualMessageV1, SealedMessageOrSealedHandshakeVNone, SealedOperation, SealedPaymentV1,
+    SealedContextualMessageV1, SealedMessageOrSealedHandshakeVNone, SealedOperation,
+    SealedPaymentV1,
 };
 use tracing::warn;
 

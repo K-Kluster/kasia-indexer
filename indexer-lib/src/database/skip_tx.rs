@@ -30,7 +30,7 @@ impl SkipTxPartition {
     }
 
     /// Mark a transaction as one to skip
-    pub fn mark_skip(&self, wtx: &mut WriteTransaction, tx_id: [u8; 32]){
+    pub fn mark_skip(&self, wtx: &mut WriteTransaction, tx_id: [u8; 32]) {
         wtx.insert(&self.0, tx_id, []);
     }
 
@@ -46,7 +46,7 @@ impl SkipTxPartition {
 
     /// Remove skip marking for a transaction (if needed for cleanup)
     pub fn remove_skip(&self, wtx: &mut WriteTransaction, tx_id: [u8; 32]) {
-        wtx.remove(&self.0, tx_id); 
+        wtx.remove(&self.0, tx_id);
     }
 
     /// Mark multiple transactions as skipped
