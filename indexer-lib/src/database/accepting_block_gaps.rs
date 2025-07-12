@@ -40,11 +40,10 @@ impl AcceptingBlockGapsPartition {
             keyspace.open_partition(
                 "accepting_block_gaps",
                 PartitionCreateOptions::default()
-                    .max_memtable_size(64 * 1024 * 1024)
                     .block_size(64 * 1024)
                     .compaction_strategy(fjall::compaction::Strategy::Fifo(
                         fjall::compaction::Fifo {
-                            limit: 64 * 1024 * 1024,
+                            limit: 128 * 1024 * 1024,
                             ttl_seconds: None,
                         },
                     )),

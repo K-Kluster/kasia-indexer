@@ -25,7 +25,6 @@ impl UnknownTxPartition {
             keyspace.open_partition(
                 "unknown_tx",
                 PartitionCreateOptions::default()
-                    .max_memtable_size(64 * 1024 * 1024)
                     .block_size(64 * 1024)
                     .compaction_strategy(fjall::compaction::Strategy::Fifo(
                         fjall::compaction::Fifo {

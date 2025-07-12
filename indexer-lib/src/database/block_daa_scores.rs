@@ -18,7 +18,6 @@ impl BlockDaaScoresPartition {
             keyspace.open_partition(
                 "block_daa_scores",
                 PartitionCreateOptions::default()
-                    .max_memtable_size(64 * 1024 * 1024)
                     .block_size(64 * 1024)
                     .compaction_strategy(fjall::compaction::Strategy::Fifo(
                         fjall::compaction::Fifo {
