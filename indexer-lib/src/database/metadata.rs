@@ -1,7 +1,7 @@
 use crate::historical_syncer::Cursor;
 use anyhow::Result;
 use bytemuck::{AnyBitPattern, NoUninit};
-use fjall::{PartitionCreateOptions, ReadTransaction, UserValue, WriteTransaction};
+use fjall::{PartitionCreateOptions, ReadTransaction, WriteTransaction};
 use std::cmp::Ordering;
 
 /// Metadata partition for storing latest known cursors
