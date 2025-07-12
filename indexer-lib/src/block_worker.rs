@@ -24,7 +24,7 @@ use kaspa_consensus_core::tx::{Transaction, TransactionId};
 use kaspa_rpc_core::{RpcBlock, RpcHash, RpcTransaction};
 use protocol::operation::{SealedContextualMessageV1, SealedMessageOrSealedHandshakeVNone, SealedOperation, SealedPaymentV1};
 use protocol::operation::deserializer::parse_sealed_operation;
-use tracing::info;
+use tracing::{debug, info, trace, warn};
 
 pub struct BlockWorker {
     processed_blocks: FifoSet<RpcHash>,
@@ -51,6 +51,7 @@ pub struct BlockWorker {
 
 impl BlockWorker {
     pub fn process(&mut self) -> anyhow::Result<()> {
+        info!("Block worker started");
         loop {
             match self.select_input()? {
                 BlocksOrShutdown::Shutdown(_) => {
@@ -65,6 +66,7 @@ impl BlockWorker {
     }
 
     fn select_input(&self) -> anyhow::Result<BlocksOrShutdown> {
+        trace!("Waiting for new blocks or shutdown signal");
         Ok(flume::Selector::new()
             .recv(&self.intake, |r| r.map(BlocksOrShutdown::from))
             .recv(&self.shutdown, |r| r.map(BlocksOrShutdown::from))
@@ -72,12 +74,16 @@ impl BlockWorker {
     }
 
     fn handle_blocks(&mut self, blocks: &[RpcBlock]) -> anyhow::Result<()> {
+        info!("Received {} blocks for processing", blocks.len());
         for block in blocks {
-            if self.processed_blocks.contains(&block.header.hash) {
+            let hash = &block.header.hash;
+            if self.processed_blocks.contains(hash) {
+                debug!(%hash, "Skipping already processed block");
                 continue;
             }
 
             let mut wtx = self.tx_keyspace.write_tx()?;
+            debug!(%hash, "Processing block with {} transactions", block.transactions.len());
             for tx in &block.transactions {
                 self.handle_transaction(&mut wtx, block, tx)?;
             }
@@ -103,8 +109,10 @@ impl BlockWorker {
     ) -> anyhow::Result<()> {
         let tx = Transaction::try_from(tx.clone())?;
         let tx_id = tx.id();
-
-        match parse_sealed_operation(&tx.payload) {
+        trace!(%tx_id, "Processing transaction");
+        match parse_sealed_operation(&tx.payload).inspect(|op| {
+            trace!(%tx_id, kind = op.op_type_name(), "Parsed sealed operation");
+        }) {
             Some(SealedOperation::SealedMessageOrSealedHandshakeVNone(op)) => {
                 self.handle_handshake(wtx, block, &tx, &tx_id, op)?;
             }
@@ -115,6 +123,7 @@ impl BlockWorker {
                 self.handle_payment(wtx, block, &tx, &tx_id, op)?;
             }
             None => {
+                trace!(%tx_id, "No valid sealed operation found, skipping");
                 self.skip_tx_partition.mark_skip(wtx, tx_id.as_bytes());
             }
         }
@@ -129,12 +138,14 @@ impl BlockWorker {
         tx_id: &TransactionId,
         op: SealedMessageOrSealedHandshakeVNone,
     ) -> anyhow::Result<()> {
+        debug!(%tx_id, "Handling HandshakeVNone");
         self.tx_id_to_handshake_partition.insert_wtx(wtx, tx_id.as_ref(), op.sealed_hex);
 
         let receiver = tx.outputs.first()
             .map(|o| AddressPayload::try_from(&o.script_public_key))
             .transpose()?
             .unwrap_or_default();
+        debug!(receiver=?receiver, "Inserting handshake by receiver");
 
         self.handshake_by_receiver_partition.insert_wtx(
             wtx,
@@ -173,6 +184,8 @@ impl BlockWorker {
         tx_id: &TransactionId,
         op: SealedContextualMessageV1,
     ) -> anyhow::Result<()> {
+        debug!(%tx_id, "Handling ContextualMessageV1");
+        debug!(alias=?op.alias, "Inserting contextual message");
         self.contextual_message_partition.insert(
             wtx,
             Default::default(),
@@ -213,11 +226,13 @@ impl BlockWorker {
         tx_id: &TransactionId,
         op: SealedPaymentV1,
     ) -> anyhow::Result<()> {
+        debug!(%tx_id, "Handling PaymentV1");
         let (amount, receiver) = tx.outputs.first()
             .map(|o| AddressPayload::try_from(&o.script_public_key).map(|addr| (o.value, addr)))
             .transpose()?
             .unwrap_or_default();
 
+        debug!(receiver=?receiver, amount, "Inserting payment by receiver");
         self.tx_id_to_payment_partition.insert_wtx(wtx, tx_id.as_ref(), amount, op.sealed_hex)?;
 
         self.payment_by_receiver_partition.insert_wtx(

@@ -96,7 +96,17 @@ impl<'a> SealedOperation<'a> {
     pub fn from_payload(payload: &'a [u8]) -> Option<SealedOperation<'a>> {
         parse_sealed_operation(payload)
     }
+
+    pub fn op_type_name(&self) -> &'static str {
+        match self {
+            SealedOperation::SealedMessageOrSealedHandshakeVNone(_) => "HandshakeVNone",
+            SealedOperation::ContextualMessageV1(_) => "ContextualMessageV1",
+            SealedOperation::PaymentV1(_) => "PaymentV1",
+        }
+    }
 }
+
+
 
 #[cfg(test)]
 mod tests {
