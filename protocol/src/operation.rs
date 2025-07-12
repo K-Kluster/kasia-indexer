@@ -106,8 +106,6 @@ impl<'a> SealedOperation<'a> {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,10 +1,3 @@
-use crate::database::payment::{
-    PaymentByReceiverPartition, PaymentKeyByReceiver, TxIdToPaymentPartition,
-};
-use crate::database::resolution_keys::{
-    ContextualMessageKeyForResolution, HandshakeKeyForResolution, PaymentKeyForResolution,
-};
-use crate::database::skip_tx::SkipTxPartition;
 use crate::{
     BlockOrMany,
     database::{
@@ -15,6 +8,11 @@ use crate::{
             TxIdToHandshakePartition,
         },
         metadata::MetadataPartition,
+        payment::{PaymentByReceiverPartition, PaymentKeyByReceiver, TxIdToPaymentPartition},
+        resolution_keys::{
+            ContextualMessageKeyForResolution, HandshakeKeyForResolution, PaymentKeyForResolution,
+        },
+        skip_tx::SkipTxPartition,
     },
     fifo_set::FifoSet,
     historical_syncer::Cursor,
@@ -22,8 +20,10 @@ use crate::{
 use fjall::{TxKeyspace, WriteTransaction};
 use kaspa_consensus_core::tx::{Transaction, TransactionId};
 use kaspa_rpc_core::{RpcBlock, RpcHash, RpcTransaction};
-use protocol::operation::{SealedContextualMessageV1, SealedMessageOrSealedHandshakeVNone, SealedOperation, SealedPaymentV1};
-use protocol::operation::deserializer::parse_sealed_operation;
+use protocol::operation::{
+    SealedContextualMessageV1, SealedMessageOrSealedHandshakeVNone, SealedOperation,
+    SealedPaymentV1, deserializer::parse_sealed_operation,
+};
 use tracing::{debug, info, trace, warn};
 
 pub struct BlockWorker {
@@ -139,9 +139,12 @@ impl BlockWorker {
         op: SealedMessageOrSealedHandshakeVNone,
     ) -> anyhow::Result<()> {
         debug!(%tx_id, "Handling HandshakeVNone");
-        self.tx_id_to_handshake_partition.insert_wtx(wtx, tx_id.as_ref(), op.sealed_hex);
+        self.tx_id_to_handshake_partition
+            .insert_wtx(wtx, tx_id.as_ref(), op.sealed_hex);
 
-        let receiver = tx.outputs.first()
+        let receiver = tx
+            .outputs
+            .first()
             .map(|o| AddressPayload::try_from(&o.script_public_key))
             .transpose()?
             .unwrap_or_default();
@@ -172,7 +175,8 @@ impl BlockWorker {
             },
         );
 
-        self.acceptance_to_tx_id_partition.insert_wtx(wtx, tx_id.as_bytes());
+        self.acceptance_to_tx_id_partition
+            .insert_wtx(wtx, tx_id.as_bytes());
 
         Ok(())
     }
@@ -200,20 +204,22 @@ impl BlockWorker {
         let mut alias = [0u8; 16];
         alias[..op.alias.len().min(16)].copy_from_slice(op.alias);
 
-        self.tx_id_to_acceptance_partition.insert_contextual_message_wtx(
-            wtx,
-            tx_id.as_bytes(),
-            &ContextualMessageKeyForResolution {
-                alias,
-                block_time: block.header.timestamp.to_be_bytes(),
-                block_hash: block.header.hash.as_bytes(),
-                version: 1,
-                tx_id: tx_id.as_bytes(),
-                attempt_count: 0,
-            },
-        );
+        self.tx_id_to_acceptance_partition
+            .insert_contextual_message_wtx(
+                wtx,
+                tx_id.as_bytes(),
+                &ContextualMessageKeyForResolution {
+                    alias,
+                    block_time: block.header.timestamp.to_be_bytes(),
+                    block_hash: block.header.hash.as_bytes(),
+                    version: 1,
+                    tx_id: tx_id.as_bytes(),
+                    attempt_count: 0,
+                },
+            );
 
-        self.acceptance_to_tx_id_partition.insert_wtx(wtx, tx_id.as_bytes());
+        self.acceptance_to_tx_id_partition
+            .insert_wtx(wtx, tx_id.as_bytes());
 
         Ok(())
     }
@@ -227,13 +233,16 @@ impl BlockWorker {
         op: SealedPaymentV1,
     ) -> anyhow::Result<()> {
         debug!(%tx_id, "Handling PaymentV1");
-        let (amount, receiver) = tx.outputs.first()
+        let (amount, receiver) = tx
+            .outputs
+            .first()
             .map(|o| AddressPayload::try_from(&o.script_public_key).map(|addr| (o.value, addr)))
             .transpose()?
             .unwrap_or_default();
 
         debug!(receiver=?receiver, amount, "Inserting payment by receiver");
-        self.tx_id_to_payment_partition.insert_wtx(wtx, tx_id.as_ref(), amount, op.sealed_hex)?;
+        self.tx_id_to_payment_partition
+            .insert_wtx(wtx, tx_id.as_ref(), amount, op.sealed_hex)?;
 
         self.payment_by_receiver_partition.insert_wtx(
             wtx,
@@ -260,11 +269,11 @@ impl BlockWorker {
             },
         );
 
-        self.acceptance_to_tx_id_partition.insert_wtx(wtx, tx_id.as_bytes());
+        self.acceptance_to_tx_id_partition
+            .insert_wtx(wtx, tx_id.as_bytes());
 
         Ok(())
     }
-
 }
 
 enum BlocksOrShutdown {
