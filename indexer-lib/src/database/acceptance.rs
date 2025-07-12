@@ -187,7 +187,7 @@ impl TxIDToAcceptancePartition {
         wtx: &mut WriteTransaction,
         tx_id: [u8; 32],
         payment_key: &PaymentKeyForResolution,
-    ) -> Result<()> {
+    ) {
         let key = AcceptanceTxKey {
             tx_id,
             accepted_at_daa: Default::default(),
@@ -199,7 +199,6 @@ impl TxIDToAcceptancePartition {
             bytemuck::bytes_of(&key),
             bytemuck::bytes_of(payment_key),
         );
-        Ok(())
     }
 
     /// Get all accepting block resolution data for a specific transaction ID

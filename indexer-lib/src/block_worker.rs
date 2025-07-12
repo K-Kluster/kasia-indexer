@@ -1,5 +1,8 @@
+use crate::database::payment::{
+    PaymentByReceiverPartition, PaymentKeyByReceiver, TxIdToPaymentPartition,
+};
 use crate::database::resolution_keys::{
-    ContextualMessageKeyForResolution, HandshakeKeyForResolution,
+    ContextualMessageKeyForResolution, HandshakeKeyForResolution, PaymentKeyForResolution,
 };
 use crate::database::skip_tx::SkipTxPartition;
 use crate::{
@@ -36,6 +39,9 @@ pub struct BlockWorker {
     tx_id_to_handshake_partition: TxIdToHandshakePartition,
 
     contextual_message_partition: ContextualMessageBySenderPartition,
+
+    payment_by_receiver_partition: PaymentByReceiverPartition,
+    tx_id_to_payment_partition: TxIdToPaymentPartition,
 
     acceptance_to_tx_id_partition: AcceptanceToTxIDPartition,
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
@@ -149,8 +155,49 @@ impl BlockWorker {
                                         self.acceptance_to_tx_id_partition
                                             .insert_wtx(&mut wtx, tx_id.as_bytes());
                                     }
-                                    SealedOperation::PaymentV1(_) => {
-                                        todo!()
+                                    SealedOperation::PaymentV1(op) => {
+                                        let (amount, receiver) = tx
+                                            .outputs
+                                            .first()
+                                            .map(|output| {
+                                                AddressPayload::try_from(&output.script_public_key)
+                                                    .map(|address| (output.value, address))
+                                            })
+                                            .transpose()?
+                                            .unwrap_or_default();
+
+                                        self.tx_id_to_payment_partition.insert_wtx(
+                                            &mut wtx,
+                                            tx_id.as_ref(),
+                                            amount,
+                                            op.sealed_hex,
+                                        )?;
+                                        self.payment_by_receiver_partition.insert_wtx(
+                                            &mut wtx,
+                                            &PaymentKeyByReceiver {
+                                                receiver,
+                                                block_time: b.header.timestamp.to_be_bytes(),
+                                                block_hash: b.header.hash.as_bytes(),
+                                                version: 1,
+                                                tx_id: tx_id.as_bytes(),
+                                            },
+                                            None,
+                                        );
+
+                                        self.tx_id_to_acceptance_partition.insert_payment_wtx(
+                                            &mut wtx,
+                                            tx_id.as_bytes(),
+                                            &PaymentKeyForResolution {
+                                                block_time: b.header.timestamp.to_be_bytes(),
+                                                block_hash: b.header.hash.as_bytes(),
+                                                receiver,
+                                                version: 1,
+                                                tx_id: tx_id.as_bytes(),
+                                                attempt_count: 0,
+                                            },
+                                        );
+                                        self.acceptance_to_tx_id_partition
+                                            .insert_wtx(&mut wtx, tx_id.as_bytes());
                                     }
                                 }
                                 Ok(())

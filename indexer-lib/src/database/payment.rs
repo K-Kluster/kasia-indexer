@@ -128,14 +128,13 @@ impl PaymentByReceiverPartition {
         wtx: &mut WriteTransaction,
         key: &PaymentKeyByReceiver,
         sender: Option<AddressPayload>,
-    ) -> anyhow::Result<()> {
+    ) {
         let sender = sender.unwrap_or_default();
         wtx.insert(
             &self.0,
             bytemuck::bytes_of(key),
             bytemuck::bytes_of(&sender),
         );
-        Ok(())
     }
 }
 
