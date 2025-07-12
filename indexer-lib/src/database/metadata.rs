@@ -1,7 +1,8 @@
 use crate::historical_syncer::Cursor;
 use anyhow::Result;
 use bytemuck::{AnyBitPattern, NoUninit};
-use fjall::{PartitionCreateOptions, ReadTransaction, WriteTransaction};
+use fjall::{PartitionCreateOptions, ReadTransaction, UserValue, WriteTransaction};
+use std::cmp::Ordering;
 
 /// Metadata partition for storing latest known cursors
 /// Key: enum of metadata types
@@ -17,7 +18,7 @@ pub enum MetadataKey {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, AnyBitPattern, NoUninit, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, AnyBitPattern, NoUninit, PartialEq, Eq, Ord, PartialOrd)]
 pub struct CursorValue {
     pub blue_work: [u8; 24], // Uint192 serialized as 24 bytes
     pub block_hash: [u8; 32],
@@ -42,7 +43,16 @@ impl MetadataPartition {
             blue_work: cursor.blue_work.to_be_bytes(),
             block_hash: *cursor.hash.as_ref(),
         };
-        wtx.insert(&self.0, key, bytemuck::bytes_of(&value));
+        wtx.fetch_update(&self.0, key, |old_value| match old_value {
+            None => Some(bytemuck::bytes_of(&value).into()),
+            Some(old_value) => {
+                let old = bytemuck::from_bytes::<CursorValue>(old_value.as_ref());
+                match value.cmp(old) {
+                    Ordering::Greater => Some(bytemuck::bytes_of(&value).into()),
+                    _ => Some(old_value.clone()),
+                }
+            }
+        })?;
         Ok(())
     }
 

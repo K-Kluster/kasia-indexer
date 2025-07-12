@@ -1,10 +1,10 @@
-use std::fmt::{Debug, Formatter};
 use anyhow::bail;
 use bytemuck::{AnyBitPattern, NoUninit};
 use fjall::{PartitionCreateOptions, WriteTransaction};
 use kaspa_addresses::Version;
 use kaspa_rpc_core::RpcScriptPublicKey;
 use kaspa_txscript::script_class::ScriptClass;
+use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 
@@ -159,6 +159,20 @@ impl HandshakeByReceiverPartition {
             .insert(bytemuck::bytes_of(key), bytemuck::bytes_of(&sender))?;
         Ok(())
     }
+
+    pub fn insert_wtx(
+        &self,
+        wtx: &mut WriteTransaction,
+        key: &HandshakeKeyByReceiver,
+        sender: Option<AddressPayload>,
+    ) {
+        let sender = sender.unwrap_or_default();
+        wtx.insert(
+            &self.0,
+            bytemuck::bytes_of(key),
+            bytemuck::bytes_of(&sender),
+        );
+    }
 }
 
 #[derive(Clone)]
@@ -176,5 +190,10 @@ impl TxIdToHandshakePartition {
         assert_eq!(tx_id.len(), 32);
         self.0.insert(tx_id, sealed_hex)?;
         Ok(())
+    }
+
+    pub fn insert_wtx(&self, wtx: &mut WriteTransaction, tx_id: &[u8; 32], sealed_hex: &[u8]) {
+        assert_eq!(tx_id.len(), 32);
+        wtx.insert(&self.0, tx_id, sealed_hex);
     }
 }

@@ -15,7 +15,7 @@ flume = "0.11.1"
 futures-util = "0.3.31"
 itertools = "0.14.0"
 kaspa-addresses = "1.*"
-kaspa-core = "1.*"
+kaspa-consensus-core = "1.*"
 kaspa-math = "1.*"
 kaspa-rpc-core = "1.*"
 kaspa-txscript = "1.*"
@@ -31,7 +31,7 @@ protocol = { path = "protocol" }
 
 [patch.crates-io]
 kaspa-addresses = { git = "https://github.com/kaspanet/rusty-kaspa.git", tag = "v1.0.1" }
-kaspa-core = { git = "https://github.com/kaspanet/rusty-kaspa.git", tag = "v1.0.1" }
+kaspa-consensus-core = { git = "https://github.com/kaspanet/rusty-kaspa.git", tag = "v1.0.1" }
 kaspa-math = { git = "https://github.com/kaspanet/rusty-kaspa.git", tag = "v1.0.1" }
 kaspa-rpc-core = { git = "https://github.com/kaspanet/rusty-kaspa.git", tag = "v1.0.1" }
 kaspa-txscript = { git = "https://github.com/kaspanet/rusty-kaspa.git", tag = "v1.0.1" }

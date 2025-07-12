@@ -7,7 +7,7 @@ use kaspa_rpc_core::{GetBlocksResponse, RpcHash, RpcHeader};
 use kaspa_wrpc_client::KaspaRpcClient;
 use tracing::{debug, error, info, trace, warn};
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub struct Cursor {
     pub blue_work: Uint192,
     pub hash: RpcHash,

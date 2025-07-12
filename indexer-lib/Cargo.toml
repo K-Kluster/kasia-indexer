@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-#kaspa-core.workspace = true
+kaspa-consensus-core.workspace = true
 anyhow.workspace = true
 bytemuck = { workspace = true, features = ["latest_stable_rust"]}
 fjall.workspace = true

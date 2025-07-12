@@ -11,6 +11,8 @@ pub mod subscriber;
 
 pub mod database;
 
+pub mod block_worker;
+
 pub enum BlockOrMany {
     Many(Vec<RpcBlock>),
     Block(Arc<RpcBlock>),

@@ -30,9 +30,8 @@ impl SkipTxPartition {
     }
 
     /// Mark a transaction as one to skip
-    pub fn mark_skip(&self, wtx: &mut WriteTransaction, tx_id: [u8; 32]) -> Result<()> {
+    pub fn mark_skip(&self, wtx: &mut WriteTransaction, tx_id: [u8; 32]){
         wtx.insert(&self.0, tx_id, []);
-        Ok(())
     }
 
     /// Check if a transaction should be skipped
@@ -46,20 +45,18 @@ impl SkipTxPartition {
     }
 
     /// Remove skip marking for a transaction (if needed for cleanup)
-    pub fn remove_skip(&self, wtx: &mut WriteTransaction, tx_id: [u8; 32]) -> Result<()> {
-        wtx.remove(&self.0, tx_id);
-        Ok(())
+    pub fn remove_skip(&self, wtx: &mut WriteTransaction, tx_id: [u8; 32]) {
+        wtx.remove(&self.0, tx_id); 
     }
 
     /// Mark multiple transactions as skipped
-    pub fn mark_skip_batch<'a, I>(&self, wtx: &mut WriteTransaction, tx_ids: I) -> Result<()>
+    pub fn mark_skip_batch<'a, I>(&self, wtx: &mut WriteTransaction, tx_ids: I)
     where
         I: Iterator<Item = &'a RpcTransactionId>,
     {
         for tx_id in tx_ids {
-            self.mark_skip(wtx, tx_id.as_bytes())?;
+            self.mark_skip(wtx, tx_id.as_bytes());
         }
-        Ok(())
     }
 
     /// Check multiple transactions for skip status
