@@ -1,4 +1,6 @@
+use fjall::{Config, TxKeyspace};
 use indexer_lib::BlockOrMany;
+use indexer_lib::database::block_gaps::BlockGapsPartition;
 use indexer_lib::historical_syncer::{Cursor, HistoricalDataSyncer};
 use kaspa_rpc_core::{GetBlockDagInfoResponse, GetServerInfoResponse, api::rpc::RpcApi};
 use kaspa_wrpc_client::{
@@ -64,6 +66,8 @@ async fn run_syncer() -> anyhow::Result<()> {
     // Clone client for syncer task
     let syncer_client = client.clone();
 
+    let tx_keyspace = TxKeyspace::open(Config::default().temporary(true))?;
+    let block_gaps = BlockGapsPartition::new(&tx_keyspace)?;
     info!("Starting syncer and block processor tasks");
 
     // Task 1: Historical data syncer
@@ -74,6 +78,7 @@ async fn run_syncer() -> anyhow::Result<()> {
             target_cursor,
             block_tx,
             shutdown_rx,
+            block_gaps,
         );
 
         if let Err(e) = syncer.sync().await {

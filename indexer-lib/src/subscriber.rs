@@ -1,4 +1,5 @@
 use crate::BlockOrMany;
+use crate::database::block_gaps::{BlockGap, BlockGapsPartition};
 use crate::historical_syncer::{Cursor, HistoricalDataSyncer};
 use futures_util::future::FutureExt;
 use kaspa_rpc_core::api::ctl::RpcState;
@@ -9,6 +10,7 @@ use kaspa_wrpc_client::KaspaRpcClient;
 use kaspa_wrpc_client::client::ConnectOptions;
 use kaspa_wrpc_client::prelude::{BlockAddedScope, ListenerId, Scope};
 use std::time::Duration;
+use tokio::task;
 use tracing::{error, info, warn};
 use workflow_core::channel::Channel;
 
@@ -30,6 +32,8 @@ pub struct Subscriber {
     last_block_cursor: Option<Cursor>,
 
     historical_data_syncer_shutdown_tx: Vec<tokio::sync::oneshot::Sender<()>>,
+
+    block_gaps_partition: BlockGapsPartition,
 }
 
 impl Subscriber {
@@ -108,14 +112,23 @@ impl Subscriber {
             .header
             .blue_work;
 
-        // todo insert hole to db to be handled by the syncer in future run, here we know target block
-
         if let Some(last) = self.last_block_cursor.take() {
+            let gaps_partition = self.block_gaps_partition.clone();
+            task::spawn_blocking(move || {
+                gaps_partition.add_gap(BlockGap {
+                    from_blue_work: last.blue_work,
+                    from_block_hash: last.hash,
+                    to_blue_work: Some(blue_work),
+                    to_block_hash: Some(sink),
+                })
+            })
+            .await??;
             let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
             self.historical_data_syncer_shutdown_tx.push(shutdown_tx);
             tokio::spawn({
                 let rpc_client = self.rpc_client.clone();
                 let block_handler = self.block_handler.clone();
+                let gaps_partition = self.block_gaps_partition.clone();
                 async move {
                     HistoricalDataSyncer::new(
                         rpc_client,
@@ -123,6 +136,7 @@ impl Subscriber {
                         Cursor::new(blue_work, sink),
                         block_handler,
                         shutdown_rx,
+                        gaps_partition,
                     );
                 }
             });

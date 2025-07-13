@@ -51,7 +51,7 @@ impl BlockGapsPartition {
     }
 
     /// Add a block gap that needs to be filled
-    pub fn add_gap(&self, wtx: &mut WriteTransaction, gap: BlockGap) -> Result<()> {
+    pub fn add_gap_wtx(&self, wtx: &mut WriteTransaction, gap: BlockGap) {
         let key = BlockGapKey {
             from_blue_work: gap.from_blue_work.to_be_bytes(),
             from_block_hash: *gap.from_block_hash.as_ref(),
@@ -62,11 +62,25 @@ impl BlockGapsPartition {
             to_block_hash: gap.to_block_hash.map(|h| *h.as_ref()).unwrap_or([0u8; 32]),
         };
         wtx.insert(&self.0, bytemuck::bytes_of(&key), []);
+    }
+
+    /// Add a block gap that needs to be filled
+    pub fn add_gap(&self, gap: BlockGap) -> Result<()> {
+        let key = BlockGapKey {
+            from_blue_work: gap.from_blue_work.to_be_bytes(),
+            from_block_hash: *gap.from_block_hash.as_ref(),
+            to_blue_work: gap
+                .to_blue_work
+                .map(|bw| bw.to_be_bytes())
+                .unwrap_or([0u8; 24]),
+            to_block_hash: gap.to_block_hash.map(|h| *h.as_ref()).unwrap_or([0u8; 32]),
+        };
+        self.0.insert(bytemuck::bytes_of(&key), [])?;
         Ok(())
     }
 
     /// Remove a gap (when it's been filled)
-    pub fn remove_gap(&self, wtx: &mut WriteTransaction, gap: BlockGap) -> Result<()> {
+    pub fn remove_gap_wtx(&self, wtx: &mut WriteTransaction, gap: BlockGap) {
         let key = BlockGapKey {
             from_blue_work: gap.from_blue_work.to_be_bytes(),
             from_block_hash: *gap.from_block_hash.as_ref(),
@@ -77,7 +91,20 @@ impl BlockGapsPartition {
             to_block_hash: gap.to_block_hash.map(|h| *h.as_ref()).unwrap_or([0u8; 32]),
         };
         wtx.remove(&self.0, bytemuck::bytes_of(&key));
-        Ok(())
+    }
+
+    /// Remove a gap (when it's been filled)
+    pub fn remove_gap(&self, gap: BlockGap) -> Result<()> {
+        let key = BlockGapKey {
+            from_blue_work: gap.from_blue_work.to_be_bytes(),
+            from_block_hash: *gap.from_block_hash.as_ref(),
+            to_blue_work: gap
+                .to_blue_work
+                .map(|bw| bw.to_be_bytes())
+                .unwrap_or([0u8; 24]),
+            to_block_hash: gap.to_block_hash.map(|h| *h.as_ref()).unwrap_or([0u8; 32]),
+        };
+        Ok(self.0.remove(bytemuck::bytes_of(&key))?)
     }
 
     /// Get all block gaps that need to be filled
@@ -119,14 +146,13 @@ impl BlockGapsPartition {
     }
 
     /// Add multiple gaps in batch
-    pub fn add_gaps_batch<'a, I>(&self, wtx: &mut WriteTransaction, gaps: I) -> Result<()>
+    pub fn add_gaps_batch<'a, I>(&self, wtx: &mut WriteTransaction, gaps: I)
     where
         I: Iterator<Item = &'a BlockGap>,
     {
         for gap in gaps {
-            self.add_gap(wtx, gap.clone())?;
+            self.add_gap_wtx(wtx, gap.clone());
         }
-        Ok(())
     }
 }
 

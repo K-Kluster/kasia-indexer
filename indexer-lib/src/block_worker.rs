@@ -24,7 +24,7 @@ use protocol::operation::{
     SealedContextualMessageV1, SealedMessageOrSealedHandshakeVNone, SealedOperation,
     SealedPaymentV1, deserializer::parse_sealed_operation,
 };
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info, trace};
 
 pub struct BlockWorker {
     processed_blocks: FifoSet<RpcHash>,

@@ -1,10 +1,12 @@
 use crate::BlockOrMany;
+use crate::database::block_gaps::{BlockGap, BlockGapsPartition};
 use itertools::FoldWhile::{Continue, Done};
 use itertools::Itertools;
 use kaspa_math::Uint192;
 use kaspa_rpc_core::api::rpc::RpcApi;
 use kaspa_rpc_core::{GetBlocksResponse, RpcHash, RpcHeader};
 use kaspa_wrpc_client::KaspaRpcClient;
+use tokio::task;
 use tracing::{debug, error, info, trace, warn};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Ord, PartialOrd)]
@@ -50,6 +52,8 @@ pub struct SyncConfig {
 
 /// Manages historical data synchronization from Kaspa node
 pub struct HistoricalDataSyncer {
+    // todo not needed if db is updated per each iteration
+    from_cursor: Cursor,
     /// Current sync position
     current_cursor: Cursor,
     /// Target sync position
@@ -67,6 +71,8 @@ pub struct HistoricalDataSyncer {
     /// Statistics for monitoring
     total_blocks_processed: u64,
     batches_processed: u64,
+
+    block_gaps_partition: BlockGapsPartition,
 }
 
 impl HistoricalDataSyncer {
@@ -77,6 +83,7 @@ impl HistoricalDataSyncer {
         target_cursor: Cursor,
         block_handler: flume::Sender<BlockOrMany>,
         shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+        block_gaps_partition: BlockGapsPartition,
     ) -> Self {
         info!(
             "Initializing historical data syncer: start_blue_work={}, target_blue_work={}, start_hash={:?}, target_hash={:?}",
@@ -84,6 +91,7 @@ impl HistoricalDataSyncer {
         );
 
         Self {
+            from_cursor: start_cursor,
             current_cursor: start_cursor,
             target_cursor,
             anticone_candidates: Vec::new(),
@@ -92,6 +100,7 @@ impl HistoricalDataSyncer {
             shutdown_rx,
             total_blocks_processed: 0,
             batches_processed: 0,
+            block_gaps_partition,
         }
     }
 
@@ -165,6 +174,15 @@ impl HistoricalDataSyncer {
                     "Synchronization completed successfully. Status: {:?}, Total blocks: {}, Total batches: {}",
                     target_status, self.total_blocks_processed, self.batches_processed
                 );
+                let gaps_partition = self.block_gaps_partition.clone();
+                let gap = BlockGap {
+                    from_blue_work: self.from_cursor.blue_work,
+                    from_block_hash: self.from_cursor.hash,
+                    to_blue_work: Some(self.target_cursor.blue_work),
+                    to_block_hash: Some(self.target_cursor.hash),
+                };
+                // todo it could update gap at every iteration
+                task::spawn_blocking(move || gaps_partition.remove_gap(gap)).await??;
                 return Ok(());
             }
         }
