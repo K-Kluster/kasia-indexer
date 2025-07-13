@@ -107,20 +107,22 @@ impl BlockWorker {
         block: &RpcBlock,
         tx: &RpcTransaction,
     ) -> anyhow::Result<()> {
-        let tx = Transaction::try_from(tx.clone())?;
-        let tx_id = tx.id();
+        let tx_id = match &tx.verbose_data {
+            Some(data) => data.transaction_id,
+            None => Transaction::try_from(tx.clone())?.id(),
+        };
         trace!(%tx_id, "Processing transaction");
         match parse_sealed_operation(&tx.payload).inspect(|op| {
             trace!(%tx_id, kind = op.op_type_name(), "Parsed sealed operation");
         }) {
             Some(SealedOperation::SealedMessageOrSealedHandshakeVNone(op)) => {
-                self.handle_handshake(wtx, block, &tx, &tx_id, op)?;
+                self.handle_handshake(wtx, block, tx, &tx_id, op)?;
             }
             Some(SealedOperation::ContextualMessageV1(op)) => {
                 self.handle_contextual_message(wtx, block, &tx_id, op)?;
             }
             Some(SealedOperation::PaymentV1(op)) => {
-                self.handle_payment(wtx, block, &tx, &tx_id, op)?;
+                self.handle_payment(wtx, block, tx, &tx_id, op)?;
             }
             None => {
                 trace!(%tx_id, "No valid sealed operation found, skipping");
@@ -134,7 +136,7 @@ impl BlockWorker {
         &mut self,
         wtx: &mut WriteTransaction,
         block: &RpcBlock,
-        tx: &Transaction,
+        tx: &RpcTransaction,
         tx_id: &TransactionId,
         op: SealedMessageOrSealedHandshakeVNone,
     ) -> anyhow::Result<()> {
@@ -228,7 +230,7 @@ impl BlockWorker {
         &mut self,
         wtx: &mut WriteTransaction,
         block: &RpcBlock,
-        tx: &Transaction,
+        tx: &RpcTransaction,
         tx_id: &TransactionId,
         op: SealedPaymentV1,
     ) -> anyhow::Result<()> {
