@@ -1,3 +1,4 @@
+use std::fmt;
 use crate::BlockOrMany;
 use crate::database::block_gaps::{BlockGap, BlockGapsPartition};
 use itertools::FoldWhile::{Continue, Done};
@@ -9,10 +10,19 @@ use kaspa_wrpc_client::KaspaRpcClient;
 use tokio::task;
 use tracing::{debug, error, info, trace, warn};
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Ord, PartialOrd)]
+#[derive(Copy, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub struct Cursor {
     pub blue_work: Uint192,
     pub hash: RpcHash,
+}
+
+impl fmt::Debug for Cursor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Cursor")
+            .field("blue_work", &self.blue_work.to_string())
+            .field("hash", &self.hash.to_string())
+            .finish()
+    }
 }
 
 impl From<&RpcHeader> for Cursor {

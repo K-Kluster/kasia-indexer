@@ -12,14 +12,24 @@ use kaspa_wrpc_client::{
 use std::process::ExitCode;
 use std::time::Duration;
 use tokio::signal;
-use tracing::{Level, debug, error, info, warn};
+use tracing::{error, info, warn};
 use tracing_subscriber::FmtSubscriber;
+use indexer_lib::block_worker::BlockWorker;
+use indexer_lib::database::{
+    acceptance::{AcceptanceToTxIDPartition, TxIDToAcceptancePartition},
+    contextual_message_by_sender::ContextualMessageBySenderPartition,
+    handshake::{HandshakeByReceiverPartition, TxIdToHandshakePartition},
+    metadata::MetadataPartition,
+    payment::{PaymentByReceiverPartition, TxIdToPaymentPartition},
+    skip_tx::SkipTxPartition,
+};
+use indexer_lib::fifo_set::FifoSet;
 
 #[tokio::main]
 async fn main() -> ExitCode {
     // Initialize tracing
     let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .finish();
     tracing::subscriber::set_global_default(subscriber).expect("Failed to set tracing subscriber");
 
@@ -60,7 +70,7 @@ async fn run_syncer() -> anyhow::Result<()> {
     );
 
     // Create communication channels
-    let (block_tx, block_rx) = flume::unbounded::<BlockOrMany>();
+    let (block_tx, block_rx) = flume::bounded::<BlockOrMany>(256);
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
     // Clone client for syncer task
@@ -68,6 +78,24 @@ async fn run_syncer() -> anyhow::Result<()> {
 
     let tx_keyspace = TxKeyspace::open(Config::default().temporary(true))?;
     let block_gaps = BlockGapsPartition::new(&tx_keyspace)?;
+    
+    let (worker_shutdown_tx, worker_shutdown_rx) = flume::unbounded();
+    let mut worker = BlockWorker::builder()
+        .processed_blocks(FifoSet::new(256))
+        .intake(block_rx)
+        .shutdown(worker_shutdown_rx)
+        .tx_keyspace(tx_keyspace.clone())
+        .metadata_partition(MetadataPartition::new(&tx_keyspace)?)
+        .handshake_by_receiver_partition(HandshakeByReceiverPartition::new(&tx_keyspace)?)
+        .tx_id_to_handshake_partition(TxIdToHandshakePartition::new(&tx_keyspace)?)
+        .contextual_message_partition(ContextualMessageBySenderPartition::new(&tx_keyspace)?)
+        .payment_by_receiver_partition(PaymentByReceiverPartition::new(&tx_keyspace)?)
+        .tx_id_to_payment_partition(TxIdToPaymentPartition::new(&tx_keyspace)?)
+        .acceptance_to_tx_id_partition(AcceptanceToTxIDPartition::new(&tx_keyspace)?)
+        .tx_id_to_acceptance_partition(TxIDToAcceptancePartition::new(&tx_keyspace)?)
+        .skip_tx_partition(SkipTxPartition::new(&tx_keyspace)?)
+        .build();
+    
     info!("Starting syncer and block processor tasks");
 
     // Task 1: Historical data syncer
@@ -89,57 +117,12 @@ async fn run_syncer() -> anyhow::Result<()> {
     });
 
     // Task 2: Block processor (reads from flume channel)
-    let processor_handle = tokio::spawn(async move {
-        let mut total_blocks_processed = 0u64;
-        let mut batch_count = 0u64;
-
-        info!("Block processor started, waiting for blocks...");
-
-        while let Ok(blocks) = block_rx.recv_async().await {
-            batch_count += 1;
-            let batch_size = blocks.len();
-            total_blocks_processed += batch_size as u64;
-
-            debug!(
-                "Processing batch {} with {} blocks",
-                batch_count, batch_size
-            );
-
-            // Process each block in the batch
-            for (idx, block) in blocks.iter().enumerate() {
-                let block_hash = &block.header.hash;
-                let blue_work = block.header.blue_work;
-
-                // Log block information
-                if idx == 0 || idx == batch_size - 1 {
-                    info!("Block: hash={:?}, blue_work={}", block_hash, blue_work);
-                }
-
-                // Here you could add additional block processing logic:
-                // - Store blocks in database
-                // - Extract transactions
-                // - Build indexes
-                // - etc.
-            }
-
-            // Log batch completion
-            if batch_count % 10 == 0 {
-                info!(
-                    "Processed {} batches, {} total blocks. Latest blue work: {}",
-                    batch_count,
-                    total_blocks_processed,
-                    blocks
-                        .last()
-                        .map(|b| b.header.blue_work)
-                        .unwrap_or(0.into())
-                );
-            }
+    let processor_handle = std::thread::spawn(move || {
+        if let Err(e) = worker.process() {
+            error!("Block worker failed: {}", e);
+        } else {
+            info!("Block worker completed successfully");
         }
-
-        info!(
-            "Block processor finished. Total: {} blocks in {} batches",
-            total_blocks_processed, batch_count
-        );
     });
 
     // Wait for Ctrl+C or task completion
@@ -147,6 +130,7 @@ async fn run_syncer() -> anyhow::Result<()> {
         _ = signal::ctrl_c() => {
             warn!("Shutdown signal received");
             let _ = shutdown_tx.send(());
+            let _ = worker_shutdown_tx.send(());
         }
         result = syncer_handle => {
             match result {
@@ -154,14 +138,10 @@ async fn run_syncer() -> anyhow::Result<()> {
                 Err(e) => error!("Syncer task panicked: {}", e),
             }
         }
-        result = processor_handle => {
-            match result {
-                Ok(_) => info!("Processor task completed"),
-                Err(e) => error!("Processor task panicked: {}", e),
-            }
-        }
     }
-
+    _ = processor_handle.join().inspect_err(|_err| {
+        error!("Block worker thread panicked");
+    });
     // Cleanup
     client.disconnect().await?;
     info!("Disconnected from Kaspa node");

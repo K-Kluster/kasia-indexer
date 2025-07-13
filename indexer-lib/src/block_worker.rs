@@ -26,6 +26,7 @@ use protocol::operation::{
 };
 use tracing::{debug, info, trace};
 
+#[derive(bon::Builder)]
 pub struct BlockWorker {
     processed_blocks: FifoSet<RpcHash>,
     intake: flume::Receiver<BlockOrMany>,
@@ -97,6 +98,7 @@ impl BlockWorker {
             )?;
 
             wtx.commit()??;
+            self.processed_blocks.insert(*hash);
         }
         Ok(())
     }

@@ -72,7 +72,7 @@ pub struct HandshakeBySenderPartition(fjall::TxPartition);
 impl HandshakeBySenderPartition {
     pub fn new(keyspace: &fjall::TxKeyspace) -> anyhow::Result<Self> {
         Ok(Self(keyspace.open_partition(
-            "handshake_by_receiver",
+            "handshake_by_sender",
             PartitionCreateOptions::default(),
         )?))
     }
@@ -149,6 +149,12 @@ pub struct HandshakeKeyByReceiver {
 pub struct HandshakeByReceiverPartition(fjall::TxPartition);
 
 impl HandshakeByReceiverPartition {
+    pub fn new(keyspace: &fjall::TxKeyspace) -> anyhow::Result<Self> {
+        Ok(Self(keyspace.open_partition(
+            "handshake_by_receiver",
+            PartitionCreateOptions::default(),
+        )?))
+    }
     pub fn insert(
         &self,
         key: &HandshakeKeyByReceiver,

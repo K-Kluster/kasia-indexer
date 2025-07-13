@@ -8,6 +8,7 @@ resolver = "3"
 
 [workspace.dependencies]
 anyhow = "1.0.98"
+bon = "3.*"
 bytemuck = "1.23.1"
 faster-hex = "0.10.0"
 fjall = { version = "2.11.1", default-features = false, features = ["lz4", "miniz", "ssi_tx"] }

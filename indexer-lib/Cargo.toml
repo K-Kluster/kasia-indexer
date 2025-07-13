@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 kaspa-consensus-core.workspace = true
 anyhow.workspace = true
+bon.workspace = true
 bytemuck = { workspace = true, features = ["latest_stable_rust"]}
 fjall.workspace = true
 flume.workspace = true
