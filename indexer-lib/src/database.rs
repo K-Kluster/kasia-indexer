@@ -7,7 +7,7 @@ pub mod skip_tx;
 
 pub mod unknown_tx;
 
-pub mod block_daa_scores;
+pub mod block_compact_header;
 
 pub mod unknown_accepting_daa;
 
@@ -31,7 +31,7 @@ pub enum PartitionId {
 
     SkipTx,
     UnknownTx,
-    BlockDaaScores,
+    BlockCompactHeader,
     UnknownAcceptingDaa,
     PendingSenderResolution,
 

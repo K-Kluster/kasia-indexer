@@ -25,6 +25,7 @@ use protocol::operation::{
     SealedPaymentV1, deserializer::parse_sealed_operation,
 };
 use tracing::{debug, info, trace};
+use crate::database::block_compact_header::BlockCompactHeaderPartition;
 
 #[derive(bon::Builder)]
 pub struct BlockWorker {
@@ -48,6 +49,8 @@ pub struct BlockWorker {
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
 
     skip_tx_partition: SkipTxPartition,
+    
+    block_compact_header_partition: BlockCompactHeaderPartition,
 }
 
 impl BlockWorker {
@@ -82,7 +85,7 @@ impl BlockWorker {
                 debug!(%hash, "Skipping already processed block");
                 continue;
             }
-
+            self.block_compact_header_partition.insert_compact_header(hash, block.header.blue_work, block.header.daa_score)?;
             let mut wtx = self.tx_keyspace.write_tx()?;
             debug!(%hash, "Processing block with {} transactions", block.transactions.len());
             for tx in &block.transactions {

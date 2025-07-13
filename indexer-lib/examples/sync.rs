@@ -1,7 +1,4 @@
 use fjall::{Config, TxKeyspace};
-use indexer_lib::BlockOrMany;
-use indexer_lib::database::block_gaps::BlockGapsPartition;
-use indexer_lib::historical_syncer::{Cursor, HistoricalDataSyncer};
 use kaspa_rpc_core::{GetBlockDagInfoResponse, GetServerInfoResponse, api::rpc::RpcApi};
 use kaspa_wrpc_client::{
     KaspaRpcClient, Resolver, WrpcEncoding,
@@ -14,16 +11,22 @@ use std::time::Duration;
 use tokio::signal;
 use tracing::{error, info, warn};
 use tracing_subscriber::FmtSubscriber;
-use indexer_lib::block_worker::BlockWorker;
-use indexer_lib::database::{
-    acceptance::{AcceptanceToTxIDPartition, TxIDToAcceptancePartition},
-    contextual_message_by_sender::ContextualMessageBySenderPartition,
-    handshake::{HandshakeByReceiverPartition, TxIdToHandshakePartition},
-    metadata::MetadataPartition,
-    payment::{PaymentByReceiverPartition, TxIdToPaymentPartition},
-    skip_tx::SkipTxPartition,
+use indexer_lib::{
+    database::{
+        acceptance::{AcceptanceToTxIDPartition, TxIDToAcceptancePartition},
+        contextual_message_by_sender::ContextualMessageBySenderPartition,
+        handshake::{HandshakeByReceiverPartition, TxIdToHandshakePartition},
+        metadata::MetadataPartition,
+        payment::{PaymentByReceiverPartition, TxIdToPaymentPartition},
+        skip_tx::SkipTxPartition,
+        block_gaps::BlockGapsPartition,
+        block_compact_header::BlockCompactHeaderPartition
+    },
+    block_worker::BlockWorker,
+    historical_syncer::{Cursor, HistoricalDataSyncer},
+    BlockOrMany,
+    fifo_set::FifoSet
 };
-use indexer_lib::fifo_set::FifoSet;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -94,6 +97,7 @@ async fn run_syncer() -> anyhow::Result<()> {
         .acceptance_to_tx_id_partition(AcceptanceToTxIDPartition::new(&tx_keyspace)?)
         .tx_id_to_acceptance_partition(TxIDToAcceptancePartition::new(&tx_keyspace)?)
         .skip_tx_partition(SkipTxPartition::new(&tx_keyspace)?)
+        .block_compact_header_partition(BlockCompactHeaderPartition::new(&tx_keyspace)?)
         .build();
     
     info!("Starting syncer and block processor tasks");

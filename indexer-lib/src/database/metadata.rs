@@ -1,7 +1,7 @@
 use crate::historical_syncer::Cursor;
 use anyhow::Result;
 use bytemuck::{AnyBitPattern, NoUninit};
-use fjall::{PartitionCreateOptions, ReadTransaction, WriteTransaction};
+use fjall::{CompressionType, PartitionCreateOptions, ReadTransaction, WriteTransaction};
 use std::cmp::Ordering;
 
 /// Metadata partition for storing latest known cursors
@@ -26,10 +26,21 @@ pub struct CursorValue {
 
 impl MetadataPartition {
     pub fn new(keyspace: &fjall::TxKeyspace) -> Result<Self> {
-        Ok(Self(keyspace.open_partition(
-            "metadata",
-            PartitionCreateOptions::default(),
-        )?))
+        Ok(Self(
+            keyspace.open_partition(
+                "metadata",
+                PartitionCreateOptions::default()
+                    .block_size(1024)
+                    .max_memtable_size(128)
+                    .compression(CompressionType::None)
+                    .compaction_strategy(fjall::compaction::Strategy::Fifo(
+                        fjall::compaction::Fifo {
+                            limit: 1024,
+                            ttl_seconds: None,
+                        },
+                    )),
+            )?,
+        ))
     }
 
     /// Store latest block cursor
