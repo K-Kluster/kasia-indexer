@@ -1,5 +1,5 @@
 use crate::historical_syncer::Cursor;
-use anyhow::Result;
+use anyhow::{Result, bail};
 use bytemuck::{AnyBitPattern, NoUninit};
 use fjall::{CompressionType, PartitionCreateOptions, ReadTransaction, WriteTransaction};
 use std::cmp::Ordering;
@@ -79,7 +79,7 @@ impl MetadataPartition {
                     hash: kaspa_rpc_core::RpcHash::from_slice(&value.block_hash),
                 }))
             } else {
-                Ok(None)
+                bail!("Invalid cursor value size")
             }
         } else {
             Ok(None)
@@ -102,7 +102,7 @@ impl MetadataPartition {
     }
 
     /// Get latest accepting block cursor
-    pub fn get_latest_accepting_block_cursor(
+    pub fn get_latest_accepting_block_cursor_rtx(
         &self,
         rtx: &ReadTransaction,
     ) -> Result<Option<Cursor>> {
@@ -116,7 +116,25 @@ impl MetadataPartition {
                     hash: kaspa_rpc_core::RpcHash::from_slice(&value.block_hash),
                 }))
             } else {
-                Ok(None)
+                bail!("Invalid cursor value size")
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn get_latest_accepting_block_cursor(&self) -> Result<Option<Cursor>> {
+        let key = [MetadataKey::LatestAcceptingBlockCursor as u8];
+        if let Some(bytes) = self.0.get(key)? {
+            if bytes.len() == 56 {
+                // 24 + 32
+                let value: CursorValue = *bytemuck::from_bytes(&bytes);
+                Ok(Some(Cursor {
+                    blue_work: kaspa_math::Uint192::from_be_bytes(value.blue_work),
+                    hash: kaspa_rpc_core::RpcHash::from_slice(&value.block_hash),
+                }))
+            } else {
+                bail!("Invalid cursor value size")
             }
         } else {
             Ok(None)
@@ -138,7 +156,7 @@ impl MetadataPartition {
                     hash: kaspa_rpc_core::RpcHash::from_slice(&value.block_hash),
                 }))
             } else {
-                Ok(None)
+                bail!("Invalid cursor value size")
             }
         } else {
             Ok(None)
@@ -160,7 +178,7 @@ impl MetadataPartition {
                     hash: kaspa_rpc_core::RpcHash::from_slice(&value.block_hash),
                 }))
             } else {
-                Ok(None)
+                bail!("Invalid cursor value size")
             }
         } else {
             Ok(None)

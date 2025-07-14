@@ -1,4 +1,3 @@
-use std::fmt;
 use crate::BlockOrMany;
 use crate::database::block_gaps::{BlockGap, BlockGapsPartition};
 use itertools::FoldWhile::{Continue, Done};
@@ -7,6 +6,7 @@ use kaspa_math::Uint192;
 use kaspa_rpc_core::api::rpc::RpcApi;
 use kaspa_rpc_core::{GetBlocksResponse, RpcHash, RpcHeader};
 use kaspa_wrpc_client::KaspaRpcClient;
+use std::fmt;
 use tokio::task;
 use tracing::{debug, error, info, trace, warn};
 

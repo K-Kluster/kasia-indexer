@@ -13,6 +13,8 @@ pub mod database;
 
 pub mod block_worker;
 
+pub mod selected_chain_syncer;
+
 pub enum BlockOrMany {
     Many(Vec<RpcBlock>),
     Block(Arc<RpcBlock>),

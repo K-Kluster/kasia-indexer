@@ -1,4 +1,20 @@
 use fjall::{Config, TxKeyspace};
+use indexer_lib::{
+    BlockOrMany,
+    block_worker::BlockWorker,
+    database::{
+        acceptance::{AcceptanceToTxIDPartition, TxIDToAcceptancePartition},
+        block_compact_header::BlockCompactHeaderPartition,
+        block_gaps::BlockGapsPartition,
+        contextual_message_by_sender::ContextualMessageBySenderPartition,
+        handshake::{HandshakeByReceiverPartition, TxIdToHandshakePartition},
+        metadata::MetadataPartition,
+        payment::{PaymentByReceiverPartition, TxIdToPaymentPartition},
+        skip_tx::SkipTxPartition,
+    },
+    fifo_set::FifoSet,
+    historical_syncer::{Cursor, HistoricalDataSyncer},
+};
 use kaspa_rpc_core::{GetBlockDagInfoResponse, GetServerInfoResponse, api::rpc::RpcApi};
 use kaspa_wrpc_client::{
     KaspaRpcClient, Resolver, WrpcEncoding,
@@ -11,22 +27,6 @@ use std::time::Duration;
 use tokio::signal;
 use tracing::{error, info, warn};
 use tracing_subscriber::FmtSubscriber;
-use indexer_lib::{
-    database::{
-        acceptance::{AcceptanceToTxIDPartition, TxIDToAcceptancePartition},
-        contextual_message_by_sender::ContextualMessageBySenderPartition,
-        handshake::{HandshakeByReceiverPartition, TxIdToHandshakePartition},
-        metadata::MetadataPartition,
-        payment::{PaymentByReceiverPartition, TxIdToPaymentPartition},
-        skip_tx::SkipTxPartition,
-        block_gaps::BlockGapsPartition,
-        block_compact_header::BlockCompactHeaderPartition
-    },
-    block_worker::BlockWorker,
-    historical_syncer::{Cursor, HistoricalDataSyncer},
-    BlockOrMany,
-    fifo_set::FifoSet
-};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -81,7 +81,7 @@ async fn run_syncer() -> anyhow::Result<()> {
 
     let tx_keyspace = TxKeyspace::open(Config::default().temporary(true))?;
     let block_gaps = BlockGapsPartition::new(&tx_keyspace)?;
-    
+
     let (worker_shutdown_tx, worker_shutdown_rx) = flume::unbounded();
     let mut worker = BlockWorker::builder()
         .processed_blocks(FifoSet::new(256))
@@ -99,7 +99,7 @@ async fn run_syncer() -> anyhow::Result<()> {
         .skip_tx_partition(SkipTxPartition::new(&tx_keyspace)?)
         .block_compact_header_partition(BlockCompactHeaderPartition::new(&tx_keyspace)?)
         .build();
-    
+
     info!("Starting syncer and block processor tasks");
 
     // Task 1: Historical data syncer
