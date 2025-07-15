@@ -106,7 +106,10 @@ impl SelectedChainSyncer {
         let dag_info = self.rpc_client.get_block_dag_info().await?;
 
         if let Some(cursor) = last_cursor {
-            info!("Found last accepting block cursor: blue_work={}, hash={:?}", cursor.blue_work, cursor.hash);
+            info!(
+                "Found last accepting block cursor: blue_work={}, hash={:?}",
+                cursor.blue_work, cursor.hash
+            );
 
             if cursor.hash == dag_info.sink {
                 info!("Already synced to current sink: {:?}", cursor.hash);
@@ -115,11 +118,13 @@ impl SelectedChainSyncer {
             }
 
             info!("Need to sync from last cursor to current sink");
-            self.start_historical_sync(state, cursor, dag_info.sink).await?;
+            self.start_historical_sync(state, cursor, dag_info.sink)
+                .await?;
         } else {
             info!("Starting sync from pruning point");
             let from = self.get_pruning_point_cursor(&dag_info).await?;
-            self.start_historical_sync(state, from, dag_info.sink).await?;
+            self.start_historical_sync(state, from, dag_info.sink)
+                .await?;
         }
 
         Ok(())
@@ -136,19 +141,35 @@ impl SelectedChainSyncer {
         Ok(())
     }
 
-    async fn handle_sync_result(&self, state: &mut SyncState, sync_result: Option<HistoricalSyncResult>) -> anyhow::Result<()> {
+    async fn handle_sync_result(
+        &self,
+        state: &mut SyncState,
+        sync_result: Option<HistoricalSyncResult>,
+    ) -> anyhow::Result<()> {
         match sync_result {
-            Some(HistoricalSyncResult::TargetReached { target, reached_via }) => {
-                info!("Historical sync completed: target={:?}, reached_via={:?}", target, reached_via);
+            Some(HistoricalSyncResult::TargetReached {
+                target,
+                reached_via,
+            }) => {
+                info!(
+                    "Historical sync completed: target={:?}, reached_via={:?}",
+                    target, reached_via
+                );
                 state.is_synced = true;
                 state.clear_historical_task();
                 self.process_queued_notifications(state).await?;
             }
-            Some(HistoricalSyncResult::Interrupted { last_processed_block }) => {
-                info!("Historical sync interrupted at block: {:?}", last_processed_block);
+            Some(HistoricalSyncResult::Interrupted {
+                last_processed_block,
+            }) => {
+                info!(
+                    "Historical sync interrupted at block: {:?}",
+                    last_processed_block
+                );
                 state.is_synced = false;
                 state.clear_historical_task();
-                self.handle_interruption(state, last_processed_block).await?;
+                self.handle_interruption(state, last_processed_block)
+                    .await?;
             }
             None => {
                 error!("Historical sync channel closed");
@@ -188,26 +209,36 @@ impl SelectedChainSyncer {
         if !state.is_synced && !state.has_active_task() {
             let dag_info = self.rpc_client.get_block_dag_info().await?;
 
-            let from_cursor = if let Some(interrupted_cursor) = state.pending_interrupted_block.take() {
-                info!("Resuming from pending interrupted block: {:?}", interrupted_cursor);
-                Some(interrupted_cursor)
-            } else {
-                self.get_last_cursor().await?
-            };
+            let from_cursor =
+                if let Some(interrupted_cursor) = state.pending_interrupted_block.take() {
+                    info!(
+                        "Resuming from pending interrupted block: {:?}",
+                        interrupted_cursor
+                    );
+                    Some(interrupted_cursor)
+                } else {
+                    self.get_last_cursor().await?
+                };
 
             if let Some(cursor) = from_cursor {
-                self.sync_or_mark_complete(state, cursor, dag_info.sink).await?;
+                self.sync_or_mark_complete(state, cursor, dag_info.sink)
+                    .await?;
             } else {
                 info!("No cursor after reconnection, starting from pruning point");
                 let from = self.get_pruning_point_cursor(&dag_info).await?;
-                self.start_historical_sync(state, from, dag_info.sink).await?;
+                self.start_historical_sync(state, from, dag_info.sink)
+                    .await?;
             }
         }
 
         Ok(())
     }
 
-    async fn handle_vcc_notification(&self, state: &mut SyncState, vcc: VirtualChainChangedNotification) -> anyhow::Result<()> {
+    async fn handle_vcc_notification(
+        &self,
+        state: &mut SyncState,
+        vcc: VirtualChainChangedNotification,
+    ) -> anyhow::Result<()> {
         if state.is_synced {
             debug!("Forwarding VCC notification (synced)");
             self.worker_sender.send_async(vcc).await?;
@@ -218,17 +249,27 @@ impl SelectedChainSyncer {
         Ok(())
     }
 
-    async fn handle_interruption(&self, state: &mut SyncState, last_processed_block: Cursor) -> anyhow::Result<()> {
+    async fn handle_interruption(
+        &self,
+        state: &mut SyncState,
+        last_processed_block: Cursor,
+    ) -> anyhow::Result<()> {
         if state.is_connected {
             let dag_info = self.rpc_client.get_block_dag_info().await?;
-            self.sync_or_mark_complete(state, last_processed_block, dag_info.sink).await?;
+            self.sync_or_mark_complete(state, last_processed_block, dag_info.sink)
+                .await?;
         } else {
             state.pending_interrupted_block = Some(last_processed_block);
         }
         Ok(())
     }
 
-    async fn sync_or_mark_complete(&self, state: &mut SyncState, cursor: Cursor, sink: kaspa_rpc_core::RpcHash) -> anyhow::Result<()> {
+    async fn sync_or_mark_complete(
+        &self,
+        state: &mut SyncState,
+        cursor: Cursor,
+        sink: kaspa_rpc_core::RpcHash,
+    ) -> anyhow::Result<()> {
         if cursor.hash == sink {
             info!("Already synced after reconnection/interruption");
             state.is_synced = true;
@@ -239,7 +280,12 @@ impl SelectedChainSyncer {
         Ok(())
     }
 
-    async fn start_historical_sync(&self, state: &mut SyncState, from: Cursor, sink: kaspa_rpc_core::RpcHash) -> anyhow::Result<()> {
+    async fn start_historical_sync(
+        &self,
+        state: &mut SyncState,
+        from: Cursor,
+        sink: kaspa_rpc_core::RpcHash,
+    ) -> anyhow::Result<()> {
         let (task, interrupt_tx) = self.spawn_historical_syncer(from, sink).await?;
         state.current_historical_task = Some(task);
         state.historical_interrupt_tx = Some(interrupt_tx);
@@ -264,8 +310,14 @@ impl SelectedChainSyncer {
         task::spawn_blocking(move || metadata_partition.get_latest_accepting_block_cursor()).await?
     }
 
-    async fn get_pruning_point_cursor(&self, dag_info: &kaspa_rpc_core::GetBlockDagInfoResponse) -> anyhow::Result<Cursor> {
-        let pp_block = self.rpc_client.get_block(dag_info.pruning_point_hash, false).await?;
+    async fn get_pruning_point_cursor(
+        &self,
+        dag_info: &kaspa_rpc_core::GetBlockDagInfoResponse,
+    ) -> anyhow::Result<Cursor> {
+        let pp_block = self
+            .rpc_client
+            .get_block(dag_info.pruning_point_hash, false)
+            .await?;
         Ok(Cursor {
             blue_work: pp_block.header.blue_work,
             hash: dag_info.pruning_point_hash,
@@ -276,14 +328,20 @@ impl SelectedChainSyncer {
         &self,
         from: Cursor,
         sink_hash: kaspa_rpc_core::RpcHash,
-    ) -> anyhow::Result<(tokio::task::JoinHandle<()>, tokio::sync::oneshot::Sender<()>)> {
+    ) -> anyhow::Result<(
+        tokio::task::JoinHandle<()>,
+        tokio::sync::oneshot::Sender<()>,
+    )> {
         let sink_blue_work = self.get_block_blue_work(sink_hash).await?;
         let target = Cursor {
             blue_work: sink_blue_work,
             hash: sink_hash,
         };
 
-        info!("Spawning historical syncer: from={:?} to={:?}", from, target);
+        info!(
+            "Spawning historical syncer: from={:?} to={:?}",
+            from, target
+        );
 
         let (interrupt_tx, interrupt_rx) = tokio::sync::oneshot::channel();
         let mut syncer = HistoricalSyncer::new(
@@ -305,9 +363,13 @@ impl SelectedChainSyncer {
         Ok((task, interrupt_tx))
     }
 
-    async fn get_block_blue_work(&self, block_hash: kaspa_rpc_core::RpcHash) -> anyhow::Result<kaspa_math::Uint192> {
+    async fn get_block_blue_work(
+        &self,
+        block_hash: kaspa_rpc_core::RpcHash,
+    ) -> anyhow::Result<kaspa_math::Uint192> {
         let partition = self.block_compact_header_partition.clone();
-        let local_blue_work = task::spawn_blocking(move || partition.get_blue_work(block_hash)).await??;
+        let local_blue_work =
+            task::spawn_blocking(move || partition.get_blue_work(block_hash)).await??;
 
         if let Some(blue_work) = local_blue_work {
             Ok(blue_work)
@@ -376,7 +438,7 @@ impl HistoricalSyncer {
     async fn handle_interruption(&self, current: Cursor) -> anyhow::Result<()> {
         info!("Historical sync interrupted at block: {:?}", current);
         let result = HistoricalSyncResult::Interrupted {
-            last_processed_block: current
+            last_processed_block: current,
         };
         let _ = self.historical_sync_done_tx.send(result).await;
         Ok(())
@@ -384,8 +446,11 @@ impl HistoricalSyncer {
 
     async fn process_vcc_result(
         &self,
-        vcc_result: Result<kaspa_rpc_core::GetVirtualChainFromBlockResponse, kaspa_rpc_core::RpcError>,
-        current: &mut Cursor
+        vcc_result: Result<
+            kaspa_rpc_core::GetVirtualChainFromBlockResponse,
+            kaspa_rpc_core::RpcError,
+        >,
+        current: &mut Cursor,
     ) -> anyhow::Result<Option<HistoricalSyncResult>> {
         let vcc_response = match vcc_result {
             Ok(vcc) => vcc,
@@ -431,31 +496,35 @@ impl HistoricalSyncer {
     }
 
     fn target_reached_exactly(&self, vcc: &VirtualChainChangedNotification) -> bool {
-        vcc.added_chain_block_hashes.iter().any(|hash| hash == &self.to.hash) ||
-            vcc.removed_chain_block_hashes.contains(&self.to.hash)
+        vcc.added_chain_block_hashes
+            .iter()
+            .any(|hash| hash == &self.to.hash)
+            || vcc.removed_chain_block_hashes.contains(&self.to.hash)
     }
 
-    async fn get_block_blue_work(&self, block_hash: kaspa_rpc_core::RpcHash) -> anyhow::Result<kaspa_math::Uint192> {
+    async fn get_block_blue_work(
+        &self,
+        block_hash: kaspa_rpc_core::RpcHash,
+    ) -> anyhow::Result<kaspa_math::Uint192> {
         let compact_header_partition = self.block_compact_header_partition.clone();
         let local_blue_work = task::spawn_blocking(move || -> anyhow::Result<_> {
             Ok(compact_header_partition
                 .get_compact_header(block_hash)?
                 .map(|header| BlueWorkType::from_le_bytes(header.blue_work)))
-        }).await??;
+        })
+        .await??;
 
         match local_blue_work {
             Some(blue_work) => Ok(blue_work),
-            None => {
-                loop {
-                    match self.rpc_client.get_block(block_hash, false).await {
-                        Ok(block) => return Ok(block.header.blue_work),
-                        Err(_) => {
-                            tokio::time::sleep(Duration::from_secs(1)).await;
-                            continue;
-                        }
+            None => loop {
+                match self.rpc_client.get_block(block_hash, false).await {
+                    Ok(block) => return Ok(block.header.blue_work),
+                    Err(_) => {
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                        continue;
                     }
                 }
-            }
+            },
         }
     }
 }
