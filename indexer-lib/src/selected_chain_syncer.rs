@@ -77,10 +77,7 @@ impl SelectedChainSyncer {
         info!("Starting selected chain syncer");
 
         let mut state = SyncState::default();
-        state.is_connected = true;
-
-        // Initialize sync state
-        self.initialize_sync(&mut state).await?;
+        // Don't assume we're connected - wait for Connected notification
 
         loop {
             tokio::select! {
@@ -101,30 +98,59 @@ impl SelectedChainSyncer {
         }
     }
 
-    async fn initialize_sync(&self, state: &mut SyncState) -> anyhow::Result<()> {
-        let last_cursor = self.get_last_cursor().await?;
-        let dag_info = self.rpc_client.get_block_dag_info().await?;
+    // async fn initialize_sync(&self, state: &mut SyncState) -> anyhow::Result<()> {
+    //     let last_cursor = self.get_last_cursor().await?;
+    //     let dag_info = self.rpc_client.get_block_dag_info().await?;
+    //
+    //     if let Some(cursor) = last_cursor {
+    //         info!(
+    //             "Found last accepting block cursor: blue_work={}, hash={:?}",
+    //             cursor.blue_work, cursor.hash
+    //         );
+    //
+    //         if cursor.hash == dag_info.sink {
+    //             info!("Already synced to current sink: {:?}", cursor.hash);
+    //             state.is_synced = true;
+    //             return Ok(());
+    //         }
+    //
+    //         info!("Need to sync from last cursor to current sink");
+    //         self.start_historical_sync(state, cursor, dag_info.sink)
+    //             .await?;
+    //     } else {
+    //         info!("Starting sync from pruning point");
+    //         let from = self.get_pruning_point_cursor(&dag_info).await?;
+    //         self.start_historical_sync(state, from, dag_info.sink)
+    //             .await?;
+    //     }
+    //
+    //     Ok(())
+    // }
 
-        if let Some(cursor) = last_cursor {
-            info!(
-                "Found last accepting block cursor: blue_work={}, hash={:?}",
-                cursor.blue_work, cursor.hash
-            );
+    async fn try_initialize_sync(&self, state: &mut SyncState) -> anyhow::Result<()> {
+        if !state.is_synced && !state.has_active_task() {
+            let dag_info = self.rpc_client.get_block_dag_info().await?;
 
-            if cursor.hash == dag_info.sink {
-                info!("Already synced to current sink: {:?}", cursor.hash);
-                state.is_synced = true;
-                return Ok(());
+            let from_cursor =
+                if let Some(interrupted_cursor) = state.pending_interrupted_block.take() {
+                    info!(
+                        "Resuming from pending interrupted block: {:?}",
+                        interrupted_cursor
+                    );
+                    Some(interrupted_cursor)
+                } else {
+                    self.get_last_cursor().await?
+                };
+
+            if let Some(cursor) = from_cursor {
+                self.sync_or_mark_complete(state, cursor, dag_info.sink)
+                    .await?;
+            } else {
+                info!("No cursor after reconnection, starting from pruning point");
+                let from = self.get_pruning_point_cursor(&dag_info).await?;
+                self.start_historical_sync(state, from, dag_info.sink)
+                    .await?;
             }
-
-            info!("Need to sync from last cursor to current sink");
-            self.start_historical_sync(state, cursor, dag_info.sink)
-                .await?;
-        } else {
-            info!("Starting sync from pruning point");
-            let from = self.get_pruning_point_cursor(&dag_info).await?;
-            self.start_historical_sync(state, from, dag_info.sink)
-                .await?;
         }
 
         Ok(())
@@ -206,29 +232,14 @@ impl SelectedChainSyncer {
         info!("Connected notification received");
         state.is_connected = true;
 
-        if !state.is_synced && !state.has_active_task() {
-            let dag_info = self.rpc_client.get_block_dag_info().await?;
-
-            let from_cursor =
-                if let Some(interrupted_cursor) = state.pending_interrupted_block.take() {
-                    info!(
-                        "Resuming from pending interrupted block: {:?}",
-                        interrupted_cursor
-                    );
-                    Some(interrupted_cursor)
-                } else {
-                    self.get_last_cursor().await?
-                };
-
-            if let Some(cursor) = from_cursor {
-                self.sync_or_mark_complete(state, cursor, dag_info.sink)
-                    .await?;
-            } else {
-                info!("No cursor after reconnection, starting from pruning point");
-                let from = self.get_pruning_point_cursor(&dag_info).await?;
-                self.start_historical_sync(state, from, dag_info.sink)
-                    .await?;
+        // Keep trying to initialize sync until it succeeds
+        loop {
+            if let Err(e) = self.try_initialize_sync(state).await {
+                error!("Failed to initialize sync on connection: {}, retrying in 5 seconds", e);
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                continue;
             }
+            break;
         }
 
         Ok(())
@@ -245,6 +256,11 @@ impl SelectedChainSyncer {
         } else {
             debug!("Queuing VCC notification (not synced or disconnected)");
             state.vcc_queue.push(vcc);
+            
+            // Warn about queue growth but don't limit it - we need all notifications for sync correctness
+            if state.vcc_queue.len() > 1000 {
+                warn!("VCC queue size is large: {} notifications queued", state.vcc_queue.len());
+            }
         }
         Ok(())
     }
@@ -517,6 +533,8 @@ impl HistoricalSyncer {
         match local_blue_work {
             Some(blue_work) => Ok(blue_work),
             None => loop {
+                // TODO: Add proper error handling with HistoricalSyncResult::Failed variant
+                // to avoid infinite retry loops and allow graceful failure handling
                 match self.rpc_client.get_block(block_hash, false).await {
                     Ok(block) => return Ok(block.header.blue_work),
                     Err(_) => {
