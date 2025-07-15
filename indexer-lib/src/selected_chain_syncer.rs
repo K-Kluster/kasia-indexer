@@ -235,7 +235,10 @@ impl SelectedChainSyncer {
         // Keep trying to initialize sync until it succeeds
         loop {
             if let Err(e) = self.try_initialize_sync(state).await {
-                error!("Failed to initialize sync on connection: {}, retrying in 5 seconds", e);
+                error!(
+                    "Failed to initialize sync on connection: {}, retrying in 5 seconds",
+                    e
+                );
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 continue;
             }
@@ -256,10 +259,13 @@ impl SelectedChainSyncer {
         } else {
             debug!("Queuing VCC notification (not synced or disconnected)");
             state.vcc_queue.push(vcc);
-            
+
             // Warn about queue growth but don't limit it - we need all notifications for sync correctness
             if state.vcc_queue.len() > 1000 {
-                warn!("VCC queue size is large: {} notifications queued", state.vcc_queue.len());
+                warn!(
+                    "VCC queue size is large: {} notifications queued",
+                    state.vcc_queue.len()
+                );
             }
         }
         Ok(())
