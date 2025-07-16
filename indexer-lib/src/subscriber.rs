@@ -1,6 +1,7 @@
 use crate::BlockOrMany;
 use crate::database::block_gaps::{BlockGap, BlockGapsPartition};
 use crate::historical_syncer::{Cursor, HistoricalDataSyncer};
+use crate::selected_chain_syncer::Intake;
 use futures_util::future::FutureExt;
 use kaspa_rpc_core::api::ctl::RpcState;
 use kaspa_rpc_core::api::rpc::RpcApi;
@@ -8,7 +9,7 @@ use kaspa_rpc_core::notify::connection::{ChannelConnection, ChannelType};
 use kaspa_rpc_core::{BlockAddedNotification, Notification};
 use kaspa_wrpc_client::KaspaRpcClient;
 use kaspa_wrpc_client::client::ConnectOptions;
-use kaspa_wrpc_client::prelude::{BlockAddedScope, ListenerId, Scope};
+use kaspa_wrpc_client::prelude::{BlockAddedScope, ListenerId, Scope, VirtualChainChangedScope};
 use std::time::Duration;
 use tokio::task;
 use tracing::{error, info, warn};
@@ -34,9 +35,33 @@ pub struct Subscriber {
     historical_data_syncer_shutdown_tx: Vec<tokio::sync::oneshot::Sender<()>>,
 
     block_gaps_partition: BlockGapsPartition,
+
+    selected_chain_syncer: tokio::sync::mpsc::Sender<Intake>,
 }
 
 impl Subscriber {
+    pub fn new(
+        rpc_client: KaspaRpcClient,
+        block_handler: flume::Sender<BlockOrMany>,
+        shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+        block_gaps_partition: BlockGapsPartition,
+        selected_chain_syncer: tokio::sync::mpsc::Sender<Intake>,
+    ) -> Self {
+        let notification_channel = Channel::bounded(256);
+
+        Self {
+            rpc_client,
+            block_handler,
+            shutdown_rx,
+            notification_channel,
+            listener_id: None,
+            last_block_cursor: None,
+            historical_data_syncer_shutdown_tx: Vec::new(),
+            block_gaps_partition,
+            selected_chain_syncer,
+        }
+    }
+
     pub async fn task(&mut self) -> anyhow::Result<()> {
         let rpc_ctl_channel = self.rpc_client.rpc_ctl().multiplexer().channel();
         loop {
@@ -101,6 +126,7 @@ impl Subscriber {
 
     async fn handle_connect_impl(&mut self) -> anyhow::Result<()> {
         info!("Connected to {:?}", self.rpc_client.url());
+        self.selected_chain_syncer.send(Intake::Connected).await?;
         // now that we have successfully connected we
         // can register for notifications
         self.register_notification_listeners().await?;
@@ -140,7 +166,6 @@ impl Subscriber {
                     );
                 }
             });
-            // todo remove processed hole
         }
 
         Ok(())
@@ -184,6 +209,15 @@ impl Subscriber {
             .start_notify(listener_id, Scope::BlockAdded(BlockAddedScope {}))
             .await?;
 
+        self.rpc_client
+            .start_notify(
+                listener_id,
+                Scope::VirtualChainChanged(VirtualChainChangedScope {
+                    include_accepted_transaction_ids: true,
+                }),
+            )
+            .await?;
+
         Ok(())
     }
 
@@ -191,8 +225,7 @@ impl Subscriber {
         info!("Disconnected from {:?}", self.rpc_client.url());
         // Unregister notifications
         self.unregister_notification_listener().await?;
-
-        // todo insert hole to db to be handled by the syncer in future run, here we dont know target block
+        self.selected_chain_syncer.send(Intake::Disconnect).await?;
 
         Ok(())
     }
@@ -212,6 +245,11 @@ impl Subscriber {
                     .send_async(BlockOrMany::Block(block))
                     .await?;
                 self.last_block_cursor = Some(cursor);
+            }
+            Notification::VirtualChainChanged(vcc) => {
+                self.selected_chain_syncer
+                    .send(Intake::VirtualChainChangedNotification(vcc))
+                    .await?;
             }
             _ => {
                 warn!("unknown notification: {:?}", notification)

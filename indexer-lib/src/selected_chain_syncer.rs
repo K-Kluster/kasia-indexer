@@ -9,7 +9,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::task;
 use tracing::{debug, error, info, warn};
-use workflow_core::channel::Channel;
 
 pub enum Intake {
     VirtualChainChangedNotification(VirtualChainChangedNotification),
@@ -65,7 +64,7 @@ pub struct SelectedChainSyncer {
     rpc_client: KaspaRpcClient,
     metadata_partition: MetadataPartition,
     block_compact_header_partition: BlockCompactHeaderPartition,
-    intake_rx: Channel<Intake>,
+    intake_rx: tokio::sync::mpsc::Receiver<Intake>,
     historical_sync_done_rx: tokio::sync::mpsc::Receiver<HistoricalSyncResult>,
     historical_sync_done_tx: tokio::sync::mpsc::Sender<HistoricalSyncResult>,
     worker_sender: flume::Sender<VirtualChainChangedNotification>,
@@ -73,6 +72,28 @@ pub struct SelectedChainSyncer {
 }
 
 impl SelectedChainSyncer {
+    pub fn new(
+        rpc_client: KaspaRpcClient,
+        metadata_partition: MetadataPartition,
+        block_compact_header_partition: BlockCompactHeaderPartition,
+        intake_rx: tokio::sync::mpsc::Receiver<Intake>,
+        historical_sync_done_rx: tokio::sync::mpsc::Receiver<HistoricalSyncResult>,
+        historical_sync_done_tx: tokio::sync::mpsc::Sender<HistoricalSyncResult>,
+        worker_sender: flume::Sender<VirtualChainChangedNotification>,
+        shutdown: tokio::sync::oneshot::Receiver<()>,
+    ) -> Self {
+        Self {
+            rpc_client,
+            metadata_partition,
+            block_compact_header_partition,
+            intake_rx,
+            historical_sync_done_rx,
+            historical_sync_done_tx,
+            worker_sender,
+            shutdown,
+        }
+    }
+
     pub async fn process(&mut self) -> anyhow::Result<()> {
         info!("Starting selected chain syncer");
 
@@ -92,7 +113,11 @@ impl SelectedChainSyncer {
                 }
 
                 intake = self.intake_rx.recv() => {
-                    self.handle_intake(&mut state, intake?).await?;
+                    let Some(intake) = intake else {
+                        warn!("Selected chain syncer intake channel closed");
+                        return self.handle_shutdown(&mut state).await
+                    };
+                    self.handle_intake(&mut state, intake).await?;
                 }
             }
         }
