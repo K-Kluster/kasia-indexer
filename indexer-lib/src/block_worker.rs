@@ -63,7 +63,13 @@ impl BlockWorker {
         loop {
             match self.select_input()? {
                 BlocksOrShutdown::Shutdown(_) => {
-                    info!("Block worker shutting down");
+                    info!("Block worker received shutdown signal, draining notifications first");
+                    let rx = std::mem::replace(&mut self.intake, flume::bounded(0).1);
+                    rx.drain().try_for_each(|blocks| -> anyhow::Result<()> {
+                        self.handle_blocks(&blocks)?;
+                        Ok(())
+                    })?;
+                    info!("Draining is done, stopping block worker");
                     return Ok(());
                 }
                 BlocksOrShutdown::Blocks(blocks) => {
@@ -247,7 +253,13 @@ impl BlockWorker {
             attempt_count: 0,
         };
         self.tx_id_to_acceptance_partition
-            .insert_contextual_message_wtx(wtx, tx_id.as_bytes(), &cmk_for_resolution, None, accepting_block);
+            .insert_contextual_message_wtx(
+                wtx,
+                tx_id.as_bytes(),
+                &cmk_for_resolution,
+                None,
+                accepting_block,
+            );
         self.acceptance_to_tx_id_partition
             .insert_wtx(wtx, tx_id.as_bytes(), None, accepting_block);
         if let Some(accepting_block) = accepting_block {

@@ -2,13 +2,13 @@ use fjall::{Config, TxKeyspace};
 use indexer_lib::{
     BlockOrMany,
     database::{
-        block_compact_header::BlockCompactHeaderPartition,
-        block_gaps::BlockGapsPartition,
+        block_compact_header::BlockCompactHeaderPartition, block_gaps::BlockGapsPartition,
         metadata::MetadataPartition,
     },
     selected_chain_syncer::{Intake, SelectedChainSyncer},
     subscriber::Subscriber,
 };
+use kaspa_rpc_core::VirtualChainChangedNotification;
 use kaspa_wrpc_client::{
     KaspaRpcClient, Resolver, WrpcEncoding,
     client::{ConnectOptions, ConnectStrategy},
@@ -17,7 +17,6 @@ use kaspa_wrpc_client::{
 };
 use std::process::ExitCode;
 use std::time::Duration;
-use kaspa_rpc_core::VirtualChainChangedNotification;
 use tokio::signal;
 use tracing::{error, info, warn};
 use tracing_subscriber::FmtSubscriber;
@@ -73,7 +72,7 @@ async fn run_selected_chain_syncer() -> anyhow::Result<()> {
         shutdown_rx,
     );
 
-    let (subscriber_shutdown_tx, subscriber_shutdown_rx)  =  tokio::sync::oneshot::channel();
+    let (subscriber_shutdown_tx, subscriber_shutdown_rx) = tokio::sync::oneshot::channel();
     // Create subscriber for real-time notifications
     let subscriber_client = client.clone();
     let subscriber_handle = tokio::spawn(async move {
@@ -94,12 +93,12 @@ async fn run_selected_chain_syncer() -> anyhow::Result<()> {
     // Create worker task that prints VCC notifications from selected chain syncer
     let worker_handle = std::thread::spawn(move || {
         info!("Starting selected chain VCC worker");
-        
+
         while let Ok(vcc) = worker_rx.recv() {
             if !vcc.added_chain_block_hashes.is_empty() {
                 let first_hash = vcc.added_chain_block_hashes.first().unwrap();
                 let last_hash = vcc.added_chain_block_hashes.last().unwrap();
-                
+
                 info!(
                     "⛓️  SELECTED CHAIN: {} blocks added | First: {:?} | Last: {:?}",
                     vcc.added_chain_block_hashes.len(),
@@ -107,11 +106,11 @@ async fn run_selected_chain_syncer() -> anyhow::Result<()> {
                     last_hash
                 );
             }
-            
+
             if !vcc.removed_chain_block_hashes.is_empty() {
                 let first_hash = vcc.removed_chain_block_hashes.first().unwrap();
                 let last_hash = vcc.removed_chain_block_hashes.last().unwrap();
-                
+
                 info!(
                     "🔄 SELECTED CHAIN: {} blocks removed | First: {:?} | Last: {:?}",
                     vcc.removed_chain_block_hashes.len(),
@@ -120,14 +119,14 @@ async fn run_selected_chain_syncer() -> anyhow::Result<()> {
                 );
             }
         }
-        
+
         info!("Selected chain VCC worker completed");
     });
 
     // Create block processor task (just to consume blocks)
     let block_processor_handle = std::thread::spawn(move || {
         info!("Starting block processor worker");
-        
+
         while let Ok(block) = block_rx.recv() {
             match block {
                 BlockOrMany::Block(block) => {
@@ -138,7 +137,7 @@ async fn run_selected_chain_syncer() -> anyhow::Result<()> {
                 }
             }
         }
-        
+
         info!("Block processor worker completed");
     });
 

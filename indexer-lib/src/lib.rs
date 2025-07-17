@@ -11,6 +11,7 @@ pub mod subscriber;
 
 pub mod database;
 
+pub mod acceptance_worker;
 pub mod block_worker;
 
 pub mod selected_chain_syncer;

@@ -67,6 +67,15 @@ impl Subscriber {
         loop {
             tokio::select! {
             biased;
+                shutdown_result = &mut self.shutdown_rx => {
+                    shutdown_result
+                    .inspect(|_| info!("Shutdown signal received, stopping subscriber task"))
+                    .inspect_err(|e|  warn!("Shutdown receiver error: {}", e))?;
+                    for shutdown in std::mem::take(&mut self.historical_data_syncer_shutdown_tx) {
+                        _ = shutdown.send(()).inspect_err(|_err| error!("Error sending shutdown signal"));
+                    }
+                    return Ok(())
+                }
                 msg = rpc_ctl_channel.receiver.recv().fuse() => {
                     match msg {
                         Ok(msg) => {
@@ -106,20 +115,6 @@ impl Subscriber {
                         }
                     }
                 },
-
-                // we use select_biased to drain rpc_ctl
-                // and notifications before shutting down
-                // as such task_ctl is last in the poll order
-                shutdown_result = &mut self.shutdown_rx => {
-                    shutdown_result
-                    .inspect(|_| info!("Shutdown signal received, stopping sync"))
-                    .inspect_err(|e|  warn!("Shutdown receiver error: {}", e))?;
-                    for shutdown in std::mem::take(&mut self.historical_data_syncer_shutdown_tx) {
-                        _ = shutdown.send(()).inspect_err(|_err| error!("Error sending shutdown signal"));
-                    }
-                    return Ok(())
-                }
-
             }
         }
     }

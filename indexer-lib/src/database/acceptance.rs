@@ -76,7 +76,13 @@ impl AcceptanceToTxIDPartition {
         Ok(self.0.insert(bytemuck::bytes_of(&key), [])?)
     }
 
-    pub fn insert_wtx(&self, wtx: &mut WriteTransaction, tx_id: [u8; 32], accepted_at_daa: Option<u64>, accepted_by_block_hash: Option<[u8; 32]>){
+    pub fn insert_wtx(
+        &self,
+        wtx: &mut WriteTransaction,
+        tx_id: [u8; 32],
+        accepted_at_daa: Option<u64>,
+        accepted_by_block_hash: Option<[u8; 32]>,
+    ) {
         let key = TxAcceptanceKey {
             tx_id,
             accepted_at_daa: accepted_at_daa.unwrap_or_default().to_be_bytes(),
