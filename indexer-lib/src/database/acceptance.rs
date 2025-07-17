@@ -91,29 +91,17 @@ impl AcceptanceToTxIDPartition {
         wtx.insert(&self.0, bytemuck::bytes_of(&key), []);
     }
 
-    pub fn unknown_acceptance(
-        &self,
-        rtx: &ReadTransaction,
-    ) -> impl DoubleEndedIterator<Item = anyhow::Result<LikeTxAcceptanceKey<UserKey>>> {
-        let mut to = [0u8; 40];
-        to[39] = 1;
-        rtx.range(&self.0, ..to).map(|r| {
-            r.map_err(Into::into)
-                .map(|(bts, _)| LikeTxAcceptanceKey::new(bts))
-        })
-    }
-
-    pub fn unknown_accepted_daa(
-        &self,
-        rtx: &ReadTransaction,
-    ) -> impl DoubleEndedIterator<Item = anyhow::Result<LikeTxAcceptanceKey<UserKey>>> {
-        let mut to = [0u8; 32];
-        to[31] = 1;
-        rtx.range(&self.0, ..to).map(|r| {
-            r.map_err(Into::into)
-                .map(|(bts, _)| LikeTxAcceptanceKey::new(bts))
-        })
-    }
+    // pub fn unknown_acceptance(
+    //     &self,
+    //     rtx: &ReadTransaction,
+    // ) -> impl DoubleEndedIterator<Item = anyhow::Result<LikeTxAcceptanceKey<UserKey>>> {
+    //     let mut to = [0u8; 40];
+    //     to[39] = 1;
+    //     rtx.range(&self.0, ..to).map(|r| {
+    //         r.map_err(Into::into)
+    //             .map(|(bts, _)| LikeTxAcceptanceKey::new(bts))
+    //     })
+    // }
 }
 
 #[repr(C)]

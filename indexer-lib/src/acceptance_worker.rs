@@ -1,11 +1,16 @@
+use crate::database::acceptance::{
+    AcceptanceToTxIDPartition, AcceptingBlockResolutionData, TxIDToAcceptancePartition,
+};
 use crate::database::metadata::MetadataPartition;
+use crate::database::skip_tx::SkipTxPartition;
 use crate::historical_syncer::Cursor;
-use fjall::{TxKeyspace, WriteTransaction};
+use fjall::{ReadTransaction, TxKeyspace, WriteTransaction};
 use kaspa_consensus_core::BlueWorkType;
 use kaspa_rpc_core::{
     RpcAcceptedTransactionIds, RpcBlock, RpcHash, RpcTransactionId, VirtualChainChangedNotification,
 };
 use tracing::{info, trace};
+use crate::database::unknown_tx::UnknownTxPartition;
 
 pub struct VirtualChainChangedNotificationAndBlueWork {
     pub vcc: VirtualChainChangedNotification,
@@ -18,6 +23,10 @@ pub struct AcceptanceWorker {
     tx_keyspace: TxKeyspace,
 
     metadata_partition: MetadataPartition,
+    skip_tx_partition: SkipTxPartition,
+    tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
+    acceptance_to_tx_id_partition: AcceptanceToTxIDPartition,
+    unknown_tx_partition: UnknownTxPartition,
 }
 
 impl AcceptanceWorker {
@@ -64,6 +73,7 @@ impl AcceptanceWorker {
             return Ok(());
         }
         let mut wtx = self.tx_keyspace.write_tx()?;
+        let rtx = self.tx_keyspace.read_tx();
         vcc.removed_chain_block_hashes
             .iter()
             .try_for_each(|hash| -> anyhow::Result<()> {
@@ -78,6 +88,7 @@ impl AcceptanceWorker {
              -> anyhow::Result<()> {
                 self.handle_accepted_block(
                     &mut wtx,
+                    &rtx,
                     accepting_block_hash,
                     accepted_transaction_ids,
                 )?;
@@ -85,6 +96,7 @@ impl AcceptanceWorker {
             },
         )?;
         let last_block = vcc.added_chain_block_hashes.last().unwrap();
+        // todo add info log
         self.metadata_partition.set_latest_accepting_block_cursor(
             &mut wtx,
             Cursor {
@@ -108,10 +120,41 @@ impl AcceptanceWorker {
     fn handle_accepted_block(
         &self,
         wtx: &mut WriteTransaction,
+        rtx: &ReadTransaction,
         accepting_block_hash: &RpcHash,
         tx_id_s: &[RpcTransactionId],
     ) -> anyhow::Result<()> {
-        todo!("handle accepted_block")
+        for tx_id in tx_id_s {
+            if self
+                .skip_tx_partition
+                .should_skip_wtx(wtx, tx_id.as_bytes())?
+            {
+                // todo add debug log
+                continue;
+            }
+            let mut is_required = false;
+            for r in self
+                .tx_id_to_acceptance_partition
+                .get_by_tx_id(rtx, tx_id.as_bytes())
+            {
+                let (partition, resolution) = r?;
+                is_required = true;
+                match resolution {
+                    AcceptingBlockResolutionData::HandshakeKey(_) => {todo!()}
+                    AcceptingBlockResolutionData::ContextualMessageKey(_) =>  {todo!()}
+                    AcceptingBlockResolutionData::PaymentKey(_) => {todo!()}
+                    AcceptingBlockResolutionData::None => {
+                        // todo warning
+                        continue;
+                    }
+                }
+            }
+            if !is_required {
+                // todo add debug log
+                self.unknown_tx_partition.mark_unknown(wtx, *tx_id, *accepting_block_hash)?;
+            }
+        }
+        Ok(())
     }
 }
 
