@@ -1,3 +1,4 @@
+use crate::acceptance_worker::VirtualChainChangedNotificationAndBlueWork;
 use crate::database::block_compact_header::BlockCompactHeaderPartition;
 use crate::database::metadata::MetadataPartition;
 use crate::historical_syncer::Cursor;
@@ -37,7 +38,7 @@ pub enum TargetReachedVia {
 struct SyncState {
     is_synced: bool,
     is_connected: bool,
-    vcc_queue: Vec<VirtualChainChangedNotification>,
+    vcc_queue: Vec<VirtualChainChangedNotificationAndBlueWork>,
     current_historical_task: Option<tokio::task::JoinHandle<()>>,
     historical_interrupt_tx: Option<tokio::sync::oneshot::Sender<()>>,
     pending_interrupted_block: Option<Cursor>,
@@ -67,7 +68,7 @@ pub struct SelectedChainSyncer {
     intake_rx: tokio::sync::mpsc::Receiver<Intake>,
     historical_sync_done_rx: tokio::sync::mpsc::Receiver<HistoricalSyncResult>,
     historical_sync_done_tx: tokio::sync::mpsc::Sender<HistoricalSyncResult>,
-    worker_sender: flume::Sender<VirtualChainChangedNotification>,
+    worker_sender: flume::Sender<VirtualChainChangedNotificationAndBlueWork>,
     shutdown: tokio::sync::oneshot::Receiver<()>,
 }
 
@@ -79,7 +80,7 @@ impl SelectedChainSyncer {
         intake_rx: tokio::sync::mpsc::Receiver<Intake>,
         historical_sync_done_rx: tokio::sync::mpsc::Receiver<HistoricalSyncResult>,
         historical_sync_done_tx: tokio::sync::mpsc::Sender<HistoricalSyncResult>,
-        worker_sender: flume::Sender<VirtualChainChangedNotification>,
+        worker_sender: flume::Sender<VirtualChainChangedNotificationAndBlueWork>,
         shutdown: tokio::sync::oneshot::Receiver<()>,
     ) -> Self {
         Self {
@@ -278,12 +279,28 @@ impl SelectedChainSyncer {
         state: &mut SyncState,
         vcc: VirtualChainChangedNotification,
     ) -> anyhow::Result<()> {
+        if vcc.removed_chain_block_hashes.is_empty() && vcc.added_chain_block_hashes.is_empty() {
+            return Ok(());
+        }
+        let last_block = vcc.added_chain_block_hashes.last().unwrap();
+        let blue_work = self.get_block_blue_work(*last_block).await?;
+
         if state.is_synced {
             debug!("Forwarding VCC notification (synced)");
-            self.worker_sender.send_async(vcc).await?;
+            self.worker_sender
+                .send_async(VirtualChainChangedNotificationAndBlueWork {
+                    vcc,
+                    last_block_blue_work: blue_work,
+                })
+                .await?;
         } else {
             debug!("Queuing VCC notification (not synced or disconnected)");
-            state.vcc_queue.push(vcc);
+            state
+                .vcc_queue
+                .push(VirtualChainChangedNotificationAndBlueWork {
+                    vcc,
+                    last_block_blue_work: blue_work,
+                });
 
             // Warn about queue growth but don't limit it - we need all notifications for sync correctness
             if state.vcc_queue.len() > 1000 {
@@ -432,7 +449,7 @@ pub struct HistoricalSyncer {
     block_compact_header_partition: BlockCompactHeaderPartition,
     historical_sync_done_tx: tokio::sync::mpsc::Sender<HistoricalSyncResult>,
     shutdown: tokio::sync::oneshot::Receiver<()>,
-    worker_sender: flume::Sender<VirtualChainChangedNotification>,
+    worker_sender: flume::Sender<VirtualChainChangedNotificationAndBlueWork>,
     from: Cursor,
     to: Cursor,
 }
@@ -443,7 +460,7 @@ impl HistoricalSyncer {
         block_compact_header_partition: BlockCompactHeaderPartition,
         historical_sync_done_tx: tokio::sync::mpsc::Sender<HistoricalSyncResult>,
         shutdown: tokio::sync::oneshot::Receiver<()>,
-        worker_sender: flume::Sender<VirtualChainChangedNotification>,
+        worker_sender: flume::Sender<VirtualChainChangedNotificationAndBlueWork>,
         from: Cursor,
         to: Cursor,
     ) -> Self {
@@ -513,15 +530,6 @@ impl HistoricalSyncer {
             accepted_transaction_ids: Arc::new(vcc_response.accepted_transaction_ids),
         };
 
-        self.worker_sender.send_async(vcc.clone()).await?;
-
-        if self.target_reached_exactly(&vcc) {
-            return Ok(Some(HistoricalSyncResult::TargetReached {
-                target: self.to,
-                reached_via: TargetReachedVia::DirectMatch,
-            }));
-        }
-
         let last_block = *vcc.added_chain_block_hashes.last().unwrap();
         let last_blue_work = self.get_block_blue_work(last_block).await?;
 
@@ -529,6 +537,20 @@ impl HistoricalSyncer {
             hash: last_block,
             blue_work: last_blue_work,
         };
+
+        self.worker_sender
+            .send_async(VirtualChainChangedNotificationAndBlueWork {
+                vcc: vcc.clone(),
+                last_block_blue_work: last_blue_work,
+            })
+            .await?;
+
+        if self.target_reached_exactly(&vcc) {
+            return Ok(Some(HistoricalSyncResult::TargetReached {
+                target: self.to,
+                reached_via: TargetReachedVia::DirectMatch,
+            }));
+        }
 
         if last_blue_work > self.to.blue_work {
             return Ok(Some(HistoricalSyncResult::TargetReached {

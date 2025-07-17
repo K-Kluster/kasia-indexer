@@ -1,4 +1,5 @@
 use fjall::{Config, TxKeyspace};
+use indexer_lib::acceptance_worker::VirtualChainChangedNotificationAndBlueWork;
 use indexer_lib::{
     BlockOrMany,
     database::{
@@ -8,7 +9,6 @@ use indexer_lib::{
     selected_chain_syncer::{Intake, SelectedChainSyncer},
     subscriber::Subscriber,
 };
-use kaspa_rpc_core::VirtualChainChangedNotification;
 use kaspa_wrpc_client::{
     KaspaRpcClient, Resolver, WrpcEncoding,
     client::{ConnectOptions, ConnectStrategy},
@@ -57,7 +57,7 @@ async fn run_selected_chain_syncer() -> anyhow::Result<()> {
     let (block_tx, block_rx) = flume::bounded::<BlockOrMany>(256);
     let (intake_tx, intake_rx) = tokio::sync::mpsc::channel::<Intake>(256);
     let (historical_sync_done_tx, historical_sync_done_rx) = tokio::sync::mpsc::channel(256);
-    let (worker_tx, worker_rx) = flume::bounded::<VirtualChainChangedNotification>(256);
+    let (worker_tx, worker_rx) = flume::bounded(256);
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
     // Create selected chain syncer
@@ -94,16 +94,21 @@ async fn run_selected_chain_syncer() -> anyhow::Result<()> {
     let worker_handle = std::thread::spawn(move || {
         info!("Starting selected chain VCC worker");
 
-        while let Ok(vcc) = worker_rx.recv() {
+        while let Ok(VirtualChainChangedNotificationAndBlueWork {
+            vcc,
+            last_block_blue_work,
+        }) = worker_rx.recv()
+        {
             if !vcc.added_chain_block_hashes.is_empty() {
                 let first_hash = vcc.added_chain_block_hashes.first().unwrap();
                 let last_hash = vcc.added_chain_block_hashes.last().unwrap();
 
                 info!(
-                    "⛓️  SELECTED CHAIN: {} blocks added | First: {:?} | Last: {:?}",
+                    "⛓️  SELECTED CHAIN: {} blocks added | First: {:?} | Last: {:?} | LastBlueWork: {}",
                     vcc.added_chain_block_hashes.len(),
                     first_hash,
-                    last_hash
+                    last_hash,
+                    last_block_blue_work,
                 );
             }
 
