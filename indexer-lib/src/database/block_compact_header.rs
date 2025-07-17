@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 use bytemuck::{AnyBitPattern, NoUninit};
-use fjall::{PartitionCreateOptions, ReadTransaction};
+use fjall::{PartitionCreateOptions, ReadTransaction, WriteTransaction};
 use kaspa_consensus_core::BlueWorkType;
 use kaspa_rpc_core::RpcHash;
 
@@ -68,18 +68,25 @@ impl BlockCompactHeaderPartition {
             if bytes.len() == size_of::<CompactHeader>() {
                 let header: CompactHeader = *bytemuck::from_bytes(&bytes);
                 Ok(Some(header))
-            } else if bytes.len() == size_of::<BlueWorkType>() {
-                // Handle legacy format (blue work only)
-                let blue_work_bytes: [u8; 24] = bytes
-                    .as_ref()
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("Invalid Blue work length"))?;
-                Ok(Some(CompactHeader {
-                    blue_work: blue_work_bytes,
-                    daa_score: 0u64.to_le_bytes(),
-                }))
             } else {
-                Ok(None)
+                bail!("Invalid CompactHeader length")
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn get_compact_header_wtx(
+        &self,
+        wtx: &mut WriteTransaction,
+        block_hash: RpcHash,
+    ) -> Result<Option<CompactHeader>> {
+        if let Some(bytes) = wtx.get(&self.0, block_hash.as_bytes())? {
+            if bytes.len() == size_of::<CompactHeader>() {
+                let header: CompactHeader = *bytemuck::from_bytes(&bytes);
+                Ok(Some(header))
+            } else {
+                bail!("Invalid CompactHeader length")
             }
         } else {
             Ok(None)
@@ -132,6 +139,14 @@ impl BlockCompactHeaderPartition {
     }
 
     pub fn get_daa_score(&self, block_hash: RpcHash) -> Result<Option<u64>> {
+        if let Some(header) = self.get_compact_header(block_hash)? {
+            Ok(Some(u64::from_le_bytes(header.daa_score)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn get_daa_score_wtx(&self, block_hash: RpcHash) -> Result<Option<u64>> {
         if let Some(header) = self.get_compact_header(block_hash)? {
             Ok(Some(u64::from_le_bytes(header.daa_score)))
         } else {
