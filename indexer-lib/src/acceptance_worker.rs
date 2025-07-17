@@ -1,9 +1,13 @@
-use kaspa_rpc_core::VirtualChainChangedNotification;
+use fjall::{TxKeyspace, WriteTransaction};
+use kaspa_rpc_core::{
+    RpcAcceptedTransactionIds, RpcBlock, RpcHash, RpcTransactionId, VirtualChainChangedNotification,
+};
 use tracing::{info, trace};
 
 pub struct AcceptanceWorker {
     vcc_rx: flume::Receiver<VirtualChainChangedNotification>,
     shutdown: flume::Receiver<()>,
+    tx_keyspace: TxKeyspace,
 }
 
 impl AcceptanceWorker {
@@ -39,10 +43,46 @@ impl AcceptanceWorker {
     }
 
     fn handle_vcc(&self, vcc: &VirtualChainChangedNotification) -> anyhow::Result<()> {
-        // vcc.removed_chain_block_hashes.iter().try_for_each(|hash| {
-        //     self.handle_chain_block_removal(hash)?;
-        // })?;
+        let mut wtx = self.tx_keyspace.write_tx()?;
+        vcc.removed_chain_block_hashes
+            .iter()
+            .try_for_each(|hash| -> anyhow::Result<()> {
+                self.handle_chain_block_removal(&mut wtx, hash)?;
+                Ok(())
+            })?;
+        vcc.accepted_transaction_ids.iter().try_for_each(
+            |RpcAcceptedTransactionIds {
+                 accepting_block_hash,
+                 accepted_transaction_ids,
+             }|
+             -> anyhow::Result<()> {
+                self.handle_accepted_block(
+                    &mut wtx,
+                    accepting_block_hash,
+                    accepted_transaction_ids,
+                )?;
+                Ok(())
+            },
+        )?;
+        wtx.commit()??;
 
+        Ok(())
+    }
+
+    fn handle_chain_block_removal(
+        &self,
+        wtx: &mut WriteTransaction,
+        accepting_block_hash: &RpcHash,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn handle_accepted_block(
+        &self,
+        wtx: &mut WriteTransaction,
+        accepting_block_hash: &RpcHash,
+        tx_id_s: &[RpcTransactionId],
+    ) -> anyhow::Result<()> {
         Ok(())
     }
 }
