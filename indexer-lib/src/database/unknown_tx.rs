@@ -50,12 +50,29 @@ impl UnknownTxPartition {
     }
 
     /// Get accepting block hash for an unknown transaction (if it exists)
-    pub fn get_accepting_block_hash(
+    pub fn get_accepting_block_hash_rtx(
         &self,
         rtx: &ReadTransaction,
         tx_id: RpcTransactionId,
     ) -> Result<Option<RpcHash>> {
         rtx.get(&self.0, tx_id.as_bytes())?
+            .map(|bytes| {
+                if bytes.len() == 32 {
+                    Ok(RpcHash::from_slice(&bytes))
+                } else {
+                    bail!("Invalid value length in unknown_tx partition")
+                }
+            })
+            .transpose()
+    }
+
+    /// Get accepting block hash for an unknown transaction (if it exists)
+    pub fn get_accepting_block_hash_wtx(
+        &self,
+        wtx: &mut WriteTransaction,
+        tx_id: RpcTransactionId,
+    ) -> Result<Option<RpcHash>> {
+        wtx.get(&self.0, tx_id.as_bytes())?
             .map(|bytes| {
                 if bytes.len() == 32 {
                     Ok(RpcHash::from_slice(&bytes))
@@ -85,9 +102,11 @@ impl UnknownTxPartition {
         &self,
         wtx: &mut WriteTransaction,
         tx_id: RpcTransactionId,
-    ) -> Result<()> {
-        wtx.remove(&self.0, tx_id.as_bytes());
-        Ok(())
+    ) -> Result<Option<RpcHash>> {
+        Ok(wtx
+            .fetch_update(&self.0, tx_id.as_bytes(), |_old| None)?
+            .map(|b| RpcHash::try_from_slice(&b))
+            .transpose()?)
     }
 
     /// Mark multiple transactions as having unknown status

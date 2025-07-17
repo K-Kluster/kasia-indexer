@@ -76,11 +76,11 @@ impl AcceptanceToTxIDPartition {
         Ok(self.0.insert(bytemuck::bytes_of(&key), [])?)
     }
 
-    pub fn insert_wtx(&self, wtx: &mut WriteTransaction, tx_id: [u8; 32]) {
+    pub fn insert_wtx(&self, wtx: &mut WriteTransaction, tx_id: [u8; 32], accepted_at_daa: Option<u64>, accepted_by_block_hash: Option<[u8; 32]>){
         let key = TxAcceptanceKey {
             tx_id,
-            accepted_at_daa: Default::default(),
-            accepted_by_block_hash: Default::default(),
+            accepted_at_daa: accepted_at_daa.unwrap_or_default().to_be_bytes(),
+            accepted_by_block_hash: accepted_by_block_hash.unwrap_or_default(),
         };
         wtx.insert(&self.0, bytemuck::bytes_of(&key), []);
     }
@@ -91,6 +91,18 @@ impl AcceptanceToTxIDPartition {
     ) -> impl DoubleEndedIterator<Item = anyhow::Result<LikeTxAcceptanceKey<UserKey>>> {
         let mut to = [0u8; 40];
         to[39] = 1;
+        rtx.range(&self.0, ..to).map(|r| {
+            r.map_err(Into::into)
+                .map(|(bts, _)| LikeTxAcceptanceKey::new(bts))
+        })
+    }
+
+    pub fn unknown_accepted_daa(
+        &self,
+        rtx: &ReadTransaction,
+    ) -> impl DoubleEndedIterator<Item = anyhow::Result<LikeTxAcceptanceKey<UserKey>>> {
+        let mut to = [0u8; 32];
+        to[31] = 1;
         rtx.range(&self.0, ..to).map(|r| {
             r.map_err(Into::into)
                 .map(|(bts, _)| LikeTxAcceptanceKey::new(bts))
@@ -147,11 +159,13 @@ impl TxIDToAcceptancePartition {
         wtx: &mut WriteTransaction,
         tx_id: [u8; 32],
         handshake_key: &HandshakeKeyForResolution,
+        accepted_at_daa: Option<u64>,
+        accepted_by_block_hash: Option<[u8; 32]>,
     ) {
         let key = AcceptanceTxKey {
             tx_id,
-            accepted_at_daa: Default::default(),
-            accepted_by_block_hash: Default::default(),
+            accepted_at_daa: accepted_at_daa.unwrap_or_default().to_be_bytes(),
+            accepted_by_block_hash: accepted_by_block_hash.unwrap_or_default(),
             partition_id: PartitionId::HandshakeBySender as u8,
         };
         wtx.insert(
@@ -167,11 +181,13 @@ impl TxIDToAcceptancePartition {
         wtx: &mut WriteTransaction,
         tx_id: [u8; 32],
         contextual_message_key: &ContextualMessageKeyForResolution,
+        accepted_at_daa: Option<u64>,
+        accepted_by_block_hash: Option<[u8; 32]>,
     ) {
         let key = AcceptanceTxKey {
             tx_id,
-            accepted_at_daa: Default::default(),
-            accepted_by_block_hash: Default::default(),
+            accepted_at_daa: accepted_at_daa.unwrap_or_default().to_be_bytes(),
+            accepted_by_block_hash: accepted_by_block_hash.unwrap_or_default(),
             partition_id: PartitionId::ContextualMessageBySender as u8,
         };
         wtx.insert(
@@ -187,11 +203,13 @@ impl TxIDToAcceptancePartition {
         wtx: &mut WriteTransaction,
         tx_id: [u8; 32],
         payment_key: &PaymentKeyForResolution,
+        accepted_at_daa: Option<u64>,
+        accepted_by_block_hash: Option<[u8; 32]>,
     ) {
         let key = AcceptanceTxKey {
             tx_id,
-            accepted_at_daa: Default::default(),
-            accepted_by_block_hash: Default::default(),
+            accepted_at_daa: accepted_at_daa.unwrap_or_default().to_be_bytes(),
+            accepted_by_block_hash: accepted_by_block_hash.unwrap_or_default(),
             partition_id: PartitionId::PaymentBySender as u8,
         };
         wtx.insert(

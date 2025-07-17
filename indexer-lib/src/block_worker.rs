@@ -1,4 +1,6 @@
 use crate::database::block_compact_header::BlockCompactHeaderPartition;
+use crate::database::unknown_accepting_daa::UnknownAcceptingDaaPartition;
+use crate::database::unknown_tx::UnknownTxPartition;
 use crate::{
     BlockOrMany,
     database::{
@@ -49,8 +51,10 @@ pub struct BlockWorker {
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
 
     skip_tx_partition: SkipTxPartition,
+    unknown_tx_partition: UnknownTxPartition,
 
     block_compact_header_partition: BlockCompactHeaderPartition,
+    unknown_accepting_daa_partition: UnknownAcceptingDaaPartition,
 }
 
 impl BlockWorker {
@@ -161,6 +165,10 @@ impl BlockWorker {
             .unwrap_or_default();
         debug!(receiver=?receiver, "Inserting handshake by receiver");
 
+        let accepting_block = self
+            .unknown_tx_partition
+            .remove_unknown(wtx, *tx_id)?
+            .map(|b| b.as_bytes());
         self.handshake_by_receiver_partition.insert_wtx(
             wtx,
             &HandshakeKeyByReceiver {
@@ -173,21 +181,33 @@ impl BlockWorker {
             None,
         );
 
+        let hk_for_resolution = HandshakeKeyForResolution {
+            block_time: block.header.timestamp.to_be_bytes(),
+            block_hash: block.header.hash.as_bytes(),
+            receiver,
+            version: 0,
+            tx_id: tx_id.as_bytes(),
+            attempt_count: 0,
+        };
         self.tx_id_to_acceptance_partition.insert_handshake_wtx(
             wtx,
             tx_id.as_bytes(),
-            &HandshakeKeyForResolution {
-                block_time: block.header.timestamp.to_be_bytes(),
-                block_hash: block.header.hash.as_bytes(),
-                receiver,
-                version: 0,
-                tx_id: tx_id.as_bytes(),
-                attempt_count: 0,
-            },
+            &hk_for_resolution,
+            None,
+            accepting_block,
         );
 
         self.acceptance_to_tx_id_partition
-            .insert_wtx(wtx, tx_id.as_bytes());
+            .insert_wtx(wtx, tx_id.as_bytes(), None, accepting_block);
+
+        if let Some(accepting_block) = accepting_block {
+            self.unknown_accepting_daa_partition
+                .mark_handshake_unknown_daa(
+                    wtx,
+                    RpcHash::from_bytes(accepting_block),
+                    &hk_for_resolution,
+                )?;
+        }
 
         Ok(())
     }
@@ -214,24 +234,30 @@ impl BlockWorker {
 
         let mut alias = [0u8; 16];
         alias[..op.alias.len().min(16)].copy_from_slice(op.alias);
-
+        let accepting_block = self
+            .unknown_tx_partition
+            .remove_unknown(wtx, *tx_id)?
+            .map(|b| b.as_bytes());
+        let cmk_for_resolution = ContextualMessageKeyForResolution {
+            alias,
+            block_time: block.header.timestamp.to_be_bytes(),
+            block_hash: block.header.hash.as_bytes(),
+            version: 1,
+            tx_id: tx_id.as_bytes(),
+            attempt_count: 0,
+        };
         self.tx_id_to_acceptance_partition
-            .insert_contextual_message_wtx(
-                wtx,
-                tx_id.as_bytes(),
-                &ContextualMessageKeyForResolution {
-                    alias,
-                    block_time: block.header.timestamp.to_be_bytes(),
-                    block_hash: block.header.hash.as_bytes(),
-                    version: 1,
-                    tx_id: tx_id.as_bytes(),
-                    attempt_count: 0,
-                },
-            );
-
+            .insert_contextual_message_wtx(wtx, tx_id.as_bytes(), &cmk_for_resolution, None, accepting_block);
         self.acceptance_to_tx_id_partition
-            .insert_wtx(wtx, tx_id.as_bytes());
-
+            .insert_wtx(wtx, tx_id.as_bytes(), None, accepting_block);
+        if let Some(accepting_block) = accepting_block {
+            self.unknown_accepting_daa_partition
+                .mark_contextual_message_unknown_daa(
+                    wtx,
+                    RpcHash::from_bytes(accepting_block),
+                    &cmk_for_resolution,
+                )?;
+        }
         Ok(())
     }
 
@@ -254,7 +280,10 @@ impl BlockWorker {
         debug!(receiver=?receiver, amount, "Inserting payment by receiver");
         self.tx_id_to_payment_partition
             .insert_wtx(wtx, tx_id.as_ref(), amount, op.sealed_hex)?;
-
+        let accepting_block = self
+            .unknown_tx_partition
+            .remove_unknown(wtx, *tx_id)?
+            .map(|b| b.as_bytes());
         self.payment_by_receiver_partition.insert_wtx(
             wtx,
             &PaymentKeyByReceiver {
@@ -266,23 +295,32 @@ impl BlockWorker {
             },
             None,
         );
-
+        let pk_for_resolution = PaymentKeyForResolution {
+            block_time: block.header.timestamp.to_be_bytes(),
+            block_hash: block.header.hash.as_bytes(),
+            receiver,
+            version: 1,
+            tx_id: tx_id.as_bytes(),
+            attempt_count: 0,
+        };
         self.tx_id_to_acceptance_partition.insert_payment_wtx(
             wtx,
             tx_id.as_bytes(),
-            &PaymentKeyForResolution {
-                block_time: block.header.timestamp.to_be_bytes(),
-                block_hash: block.header.hash.as_bytes(),
-                receiver,
-                version: 1,
-                tx_id: tx_id.as_bytes(),
-                attempt_count: 0,
-            },
+            &pk_for_resolution,
+            None,
+            accepting_block,
         );
 
         self.acceptance_to_tx_id_partition
-            .insert_wtx(wtx, tx_id.as_bytes());
-
+            .insert_wtx(wtx, tx_id.as_bytes(), None, accepting_block);
+        if let Some(accepting_block) = accepting_block {
+            self.unknown_accepting_daa_partition
+                .mark_payment_unknown_daa(
+                    wtx,
+                    RpcHash::from_bytes(accepting_block),
+                    &pk_for_resolution,
+                )?;
+        }
         Ok(())
     }
 }
