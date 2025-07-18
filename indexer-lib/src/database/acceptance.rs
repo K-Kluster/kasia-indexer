@@ -7,7 +7,8 @@ use crate::database::resolution_keys::{
 use anyhow::Result;
 use bytemuck::{AnyBitPattern, NoUninit};
 use fjall::{
-    KvSeparationOptions, PartitionCreateOptions, ReadTransaction, UserKey, WriteTransaction,
+    KvSeparationOptions, PartitionCreateOptions, ReadTransaction, UserKey, UserValue,
+    WriteTransaction,
 };
 use kaspa_rpc_core::RpcHash;
 use std::marker::PhantomData;
@@ -20,6 +21,25 @@ pub enum AcceptingBlockResolutionData {
     ContextualMessageKey(LikeContextualMessageKeyForResolution<UserKey>),
     PaymentKey(LikePaymentKeyForResolution<UserKey>),
     None,
+}
+
+pub struct LikeTxIds<T: AsRef<[u8]> = UserValue> {
+    bts: T,
+    phantom_data: PhantomData<[u8; 32]>,
+}
+
+impl<T: AsRef<[u8]>> LikeTxIds<T> {
+    pub fn new(bts: T) -> Self {
+        assert_eq!(bts.as_ref().len() % 32, 0);
+        Self {
+            bts,
+            phantom_data: PhantomData,
+        }
+    }
+
+    pub fn as_tx_ids(&self) -> &[[u8; 32]] {
+        self.bts.as_ref().as_chunks::<32>().0
+    }
 }
 
 pub struct AcceptingBlockToTxIDPartition(fjall::TxPartition);
@@ -43,6 +63,15 @@ impl AcceptingBlockToTxIDPartition {
             accepted_by_block_hash.as_bytes(),
             tx_ids.as_flattened(),
         );
+    }
+
+    pub fn remove_wtx(
+        &self,
+        wtx: &mut WriteTransaction,
+        accepted_by_block_hash: &RpcHash,
+    ) -> Result<Option<LikeTxIds<UserValue>>> {
+        let old = wtx.fetch_update(&self.0, accepted_by_block_hash.as_bytes(), |_old| None)?;
+        Ok(old.map(LikeTxIds::new))
     }
 }
 

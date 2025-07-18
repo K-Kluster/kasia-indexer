@@ -82,7 +82,7 @@ impl AcceptanceWorker {
         vcc.removed_chain_block_hashes
             .iter()
             .try_for_each(|hash| -> anyhow::Result<()> {
-                self.handle_chain_block_removal(&mut wtx, hash)?;
+                self.handle_chain_block_removal(&mut wtx, &rtx, hash)?;
                 Ok(())
             })?;
         vcc.accepted_transaction_ids.iter().try_for_each(
@@ -116,10 +116,27 @@ impl AcceptanceWorker {
 
     fn handle_chain_block_removal(
         &self,
-        _wtx: &mut WriteTransaction,
-        _removed_block_hash: &RpcHash,
+        wtx: &mut WriteTransaction,
+        rtx: &ReadTransaction,
+        removed_block_hash: &RpcHash,
     ) -> anyhow::Result<()> {
-        todo!("handle chain_block_removal")
+        let Some(tx_id_s) = self
+            .acceptance_to_tx_id_partition
+            .remove_wtx(wtx, removed_block_hash)?
+        else {
+            return Ok(());
+        };
+        for tx_id in tx_id_s.as_tx_ids() {
+            for r in self.tx_id_to_acceptance_partition.get_by_tx_id(rtx, tx_id) {
+                // todo only key is needed
+                let (key, _value) = r?;
+                self.tx_id_to_acceptance_partition.remove(wtx, key);
+                self.unknown_accepting_daa_partition
+                    .remove_by_accepting_block_hash(wtx, *removed_block_hash)?;
+            }
+        }
+        // todo consider update of metadata partition
+        Ok(())
     }
 
     fn handle_accepted_block(
