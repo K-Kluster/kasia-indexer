@@ -1,16 +1,17 @@
 use crate::database::acceptance::{
-    AcceptanceToTxIDPartition, AcceptingBlockResolutionData, TxIDToAcceptancePartition,
+    AcceptingBlockResolutionData, AcceptingBlockToTxIDPartition, TxIDToAcceptancePartition,
 };
 use crate::database::metadata::MetadataPartition;
 use crate::database::skip_tx::SkipTxPartition;
+use crate::database::unknown_tx::UnknownTxPartition;
 use crate::historical_syncer::Cursor;
 use fjall::{ReadTransaction, TxKeyspace, WriteTransaction};
+use itertools::{Itertools, process_results};
 use kaspa_consensus_core::BlueWorkType;
 use kaspa_rpc_core::{
     RpcAcceptedTransactionIds, RpcBlock, RpcHash, RpcTransactionId, VirtualChainChangedNotification,
 };
 use tracing::{info, trace};
-use crate::database::unknown_tx::UnknownTxPartition;
 
 pub struct VirtualChainChangedNotificationAndBlueWork {
     pub vcc: VirtualChainChangedNotification,
@@ -25,7 +26,7 @@ pub struct AcceptanceWorker {
     metadata_partition: MetadataPartition,
     skip_tx_partition: SkipTxPartition,
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
-    acceptance_to_tx_id_partition: AcceptanceToTxIDPartition,
+    acceptance_to_tx_id_partition: AcceptingBlockToTxIDPartition,
     unknown_tx_partition: UnknownTxPartition,
 }
 
@@ -124,25 +125,33 @@ impl AcceptanceWorker {
         accepting_block_hash: &RpcHash,
         tx_id_s: &[RpcTransactionId],
     ) -> anyhow::Result<()> {
-        for tx_id in tx_id_s {
-            if self
-                .skip_tx_partition
-                .should_skip_wtx(wtx, tx_id.as_bytes())?
-            {
-                // todo add debug log
-                continue;
-            }
+        let filtered = process_results(
+            tx_id_s.iter().map(|tx_id| {
+                self.skip_tx_partition
+                    .should_skip_wtx(wtx, tx_id.as_bytes())
+                    .map(|skip| (tx_id, skip))
+            }),
+            |iter| {
+                iter.filter(|(_, skip)| !*skip)
+                    .map(|(x, _)| x.as_bytes())
+                    .collect::<Vec<_>>()
+            },
+        )?;
+        for tx_id in &filtered {
             let mut is_required = false;
-            for r in self
-                .tx_id_to_acceptance_partition
-                .get_by_tx_id(rtx, tx_id.as_bytes())
-            {
+            for r in self.tx_id_to_acceptance_partition.get_by_tx_id(rtx, tx_id) {
                 let (partition, resolution) = r?;
                 is_required = true;
                 match resolution {
-                    AcceptingBlockResolutionData::HandshakeKey(_) => {todo!()}
-                    AcceptingBlockResolutionData::ContextualMessageKey(_) =>  {todo!()}
-                    AcceptingBlockResolutionData::PaymentKey(_) => {todo!()}
+                    AcceptingBlockResolutionData::HandshakeKey(hk) => {
+                        todo!()
+                    }
+                    AcceptingBlockResolutionData::ContextualMessageKey(_) => {
+                        todo!()
+                    }
+                    AcceptingBlockResolutionData::PaymentKey(_) => {
+                        todo!()
+                    }
                     AcceptingBlockResolutionData::None => {
                         // todo warning
                         continue;
@@ -151,9 +160,13 @@ impl AcceptanceWorker {
             }
             if !is_required {
                 // todo add debug log
-                self.unknown_tx_partition.mark_unknown(wtx, *tx_id, *accepting_block_hash)?;
+                self.unknown_tx_partition
+                    .mark_unknown(wtx, tx_id, *accepting_block_hash)?;
             }
         }
+        self.acceptance_to_tx_id_partition
+            .insert_wtx(wtx, accepting_block_hash, &filtered);
+
         Ok(())
     }
 }

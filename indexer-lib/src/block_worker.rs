@@ -4,7 +4,7 @@ use crate::database::unknown_tx::UnknownTxPartition;
 use crate::{
     BlockOrMany,
     database::{
-        acceptance::{AcceptanceToTxIDPartition, TxIDToAcceptancePartition},
+        acceptance::{AcceptingBlockToTxIDPartition, TxIDToAcceptancePartition},
         contextual_message_by_sender::ContextualMessageBySenderPartition,
         handshake::{
             AddressPayload, HandshakeByReceiverPartition, HandshakeKeyByReceiver,
@@ -47,7 +47,7 @@ pub struct BlockWorker {
     payment_by_receiver_partition: PaymentByReceiverPartition,
     tx_id_to_payment_partition: TxIdToPaymentPartition,
 
-    acceptance_to_tx_id_partition: AcceptanceToTxIDPartition,
+    acceptance_to_tx_id_partition: AcceptingBlockToTxIDPartition,
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
 
     skip_tx_partition: SkipTxPartition,
@@ -203,9 +203,6 @@ impl BlockWorker {
             accepting_block,
         );
 
-        self.acceptance_to_tx_id_partition
-            .insert_wtx(wtx, tx_id.as_bytes(), None, accepting_block);
-
         if let Some(accepting_block) = accepting_block {
             self.unknown_accepting_daa_partition
                 .mark_handshake_unknown_daa(
@@ -260,8 +257,6 @@ impl BlockWorker {
                 None,
                 accepting_block,
             );
-        self.acceptance_to_tx_id_partition
-            .insert_wtx(wtx, tx_id.as_bytes(), None, accepting_block);
         if let Some(accepting_block) = accepting_block {
             self.unknown_accepting_daa_partition
                 .mark_contextual_message_unknown_daa(
@@ -323,8 +318,6 @@ impl BlockWorker {
             accepting_block,
         );
 
-        self.acceptance_to_tx_id_partition
-            .insert_wtx(wtx, tx_id.as_bytes(), None, accepting_block);
         if let Some(accepting_block) = accepting_block {
             self.unknown_accepting_daa_partition
                 .mark_payment_unknown_daa(

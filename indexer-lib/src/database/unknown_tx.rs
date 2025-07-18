@@ -40,10 +40,9 @@ impl UnknownTxPartition {
     pub fn mark_unknown(
         &self,
         wtx: &mut WriteTransaction,
-        tx_id: RpcTransactionId,
+        tx_id: &[u8; 32],
         accepting_block_hash: RpcHash,
     ) -> Result<()> {
-        let tx_id: &[u8; 32] = tx_id.as_ref();
         let accepting_block_hash: &[u8; 32] = accepting_block_hash.as_ref();
         wtx.insert(&self.0, tx_id, accepting_block_hash);
         Ok(())
@@ -107,22 +106,6 @@ impl UnknownTxPartition {
             .fetch_update(&self.0, tx_id.as_bytes(), |_old| None)?
             .map(|b| RpcHash::try_from_slice(&b))
             .transpose()?)
-    }
-
-    /// Mark multiple transactions as having unknown status
-    pub fn mark_unknown_batch<'a, I>(
-        &self,
-        wtx: &mut WriteTransaction,
-        tx_ids: I,
-        accepting_block_hash: RpcHash,
-    ) -> Result<()>
-    where
-        I: Iterator<Item = &'a RpcTransactionId>,
-    {
-        for tx_id in tx_ids {
-            self.mark_unknown(wtx, *tx_id, accepting_block_hash)?;
-        }
-        Ok(())
     }
 
     /// Check multiple transactions for unknown status

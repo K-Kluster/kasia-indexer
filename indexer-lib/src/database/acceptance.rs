@@ -6,7 +6,10 @@ use crate::database::resolution_keys::{
 };
 use anyhow::Result;
 use bytemuck::{AnyBitPattern, NoUninit};
-use fjall::{PartitionCreateOptions, ReadTransaction, UserKey, WriteTransaction};
+use fjall::{
+    KvSeparationOptions, PartitionCreateOptions, ReadTransaction, UserKey, WriteTransaction,
+};
+use kaspa_rpc_core::{RpcHash, RpcTransactionId};
 use std::marker::PhantomData;
 use std::ops::Deref;
 
@@ -19,89 +22,28 @@ pub enum AcceptingBlockResolutionData {
     None,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug, AnyBitPattern, NoUninit, PartialEq, Eq)]
-pub struct TxAcceptanceKey {
-    pub accepted_by_block_hash: [u8; 32],
+pub struct AcceptingBlockToTxIDPartition(fjall::TxPartition);
 
-    pub accepted_at_daa: [u8; 8], // be
-    pub tx_id: [u8; 32],
-}
-
-#[repr(transparent)]
-#[derive(Clone, PartialEq, Eq)]
-pub struct LikeTxAcceptanceKey<T: AsRef<[u8]>> {
-    bts: T,
-    phantom_data: PhantomData<TxAcceptanceKey>,
-}
-
-impl<T: AsRef<[u8]>> LikeTxAcceptanceKey<T> {
-    fn new(bts: T) -> Self {
-        Self {
-            bts,
-            phantom_data: PhantomData,
-        }
-    }
-}
-
-impl<T: AsRef<[u8]>> Deref for LikeTxAcceptanceKey<T> {
-    type Target = TxAcceptanceKey;
-
-    fn deref(&self) -> &Self::Target {
-        bytemuck::from_bytes(self.bts.as_ref())
-    }
-}
-
-pub struct AcceptanceToTxIDPartition(fjall::TxPartition);
-
-impl AcceptanceToTxIDPartition {
+impl AcceptingBlockToTxIDPartition {
     pub fn new(keyspace: &fjall::TxKeyspace) -> anyhow::Result<Self> {
         Ok(Self(keyspace.open_partition(
-            "acceptance_to_tx_id",
-            PartitionCreateOptions::default(),
+            "accepting_block_to_tx_id",
+            PartitionCreateOptions::default().with_kv_separation(KvSeparationOptions::default()),
         )?))
-    }
-
-    pub fn insert(
-        &self,
-        tx_id: [u8; 32],
-        acceptance: Option<([u8; 32], [u8; 8])>,
-    ) -> anyhow::Result<()> {
-        let acceptance = acceptance.unwrap_or_default();
-        let key = TxAcceptanceKey {
-            tx_id,
-            accepted_at_daa: acceptance.1,
-            accepted_by_block_hash: acceptance.0,
-        };
-        Ok(self.0.insert(bytemuck::bytes_of(&key), [])?)
     }
 
     pub fn insert_wtx(
         &self,
         wtx: &mut WriteTransaction,
-        tx_id: [u8; 32],
-        accepted_at_daa: Option<u64>,
-        accepted_by_block_hash: Option<[u8; 32]>,
+        accepted_by_block_hash: &RpcHash,
+        tx_ids: &[[u8; 32]],
     ) {
-        let key = TxAcceptanceKey {
-            tx_id,
-            accepted_at_daa: accepted_at_daa.unwrap_or_default().to_be_bytes(),
-            accepted_by_block_hash: accepted_by_block_hash.unwrap_or_default(),
-        };
-        wtx.insert(&self.0, bytemuck::bytes_of(&key), []);
+        wtx.insert(
+            &self.0,
+            accepted_by_block_hash.as_bytes(),
+            tx_ids.as_flattened(),
+        );
     }
-
-    // pub fn unknown_acceptance(
-    //     &self,
-    //     rtx: &ReadTransaction,
-    // ) -> impl DoubleEndedIterator<Item = anyhow::Result<LikeTxAcceptanceKey<UserKey>>> {
-    //     let mut to = [0u8; 40];
-    //     to[39] = 1;
-    //     rtx.range(&self.0, ..to).map(|r| {
-    //         r.map_err(Into::into)
-    //             .map(|(bts, _)| LikeTxAcceptanceKey::new(bts))
-    //     })
-    // }
 }
 
 #[repr(C)]
@@ -218,7 +160,7 @@ impl TxIDToAcceptancePartition {
     pub fn get_by_tx_id(
         &self,
         rtx: &ReadTransaction,
-        tx_id: [u8; 32],
+        tx_id: &[u8; 32],
     ) -> impl DoubleEndedIterator<Item = Result<(PartitionId, AcceptingBlockResolutionData)>> + '_
     {
         rtx.prefix(&self.0, tx_id).map(|r| {
