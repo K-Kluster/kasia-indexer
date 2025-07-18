@@ -4,7 +4,7 @@ use crate::database::unknown_tx::UnknownTxPartition;
 use crate::{
     BlockOrMany,
     database::{
-        acceptance::{AcceptingBlockToTxIDPartition, TxIDToAcceptancePartition},
+        acceptance::TxIDToAcceptancePartition,
         contextual_message_by_sender::ContextualMessageBySenderPartition,
         handshake::{
             AddressPayload, HandshakeByReceiverPartition, HandshakeKeyByReceiver,
@@ -47,7 +47,6 @@ pub struct BlockWorker {
     payment_by_receiver_partition: PaymentByReceiverPartition,
     tx_id_to_payment_partition: TxIdToPaymentPartition,
 
-    acceptance_to_tx_id_partition: AcceptingBlockToTxIDPartition,
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
 
     skip_tx_partition: SkipTxPartition,
@@ -208,6 +207,7 @@ impl BlockWorker {
                 .mark_handshake_unknown_daa(
                     wtx,
                     RpcHash::from_bytes(accepting_block),
+                    *tx_id,
                     &hk_for_resolution,
                 )?;
         }
@@ -262,6 +262,7 @@ impl BlockWorker {
                 .mark_contextual_message_unknown_daa(
                     wtx,
                     RpcHash::from_bytes(accepting_block),
+                    *tx_id,
                     &cmk_for_resolution,
                 )?;
         }
@@ -323,6 +324,7 @@ impl BlockWorker {
                 .mark_payment_unknown_daa(
                     wtx,
                     RpcHash::from_bytes(accepting_block),
+                    *tx_id,
                     &pk_for_resolution,
                 )?;
         }

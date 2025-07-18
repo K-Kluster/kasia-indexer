@@ -3,7 +3,7 @@ use bytemuck::{AnyBitPattern, NoUninit};
 use fjall::UserKey;
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 
 /// Handshake key for resolution - missing sender field (that's what we're resolving)
 #[derive(Clone, Copy, Debug, AnyBitPattern, NoUninit, PartialEq, Eq)]
@@ -26,10 +26,19 @@ pub struct LikeHandshakeKeyForResolution<T: AsRef<[u8]>> {
 
 impl<T: AsRef<[u8]>> LikeHandshakeKeyForResolution<T> {
     pub fn new(bts: T) -> Self {
+        let _ = bytemuck::from_bytes::<HandshakeKeyForResolution>(bts.as_ref());
         Self {
             bts,
             phantom_data: PhantomData,
         }
+    }
+
+    pub fn to_mutable(&self) -> LikeHandshakeKeyForResolution<Vec<u8>> {
+        LikeHandshakeKeyForResolution::new(self.bts.as_ref().to_vec())
+    }
+
+    pub fn inner(self) -> T {
+        self.bts
     }
 }
 
@@ -38,6 +47,12 @@ impl<T: AsRef<[u8]>> Deref for LikeHandshakeKeyForResolution<T> {
 
     fn deref(&self) -> &Self::Target {
         bytemuck::from_bytes(self.bts.as_ref())
+    }
+}
+
+impl DerefMut for LikeHandshakeKeyForResolution<Vec<u8>> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        bytemuck::from_bytes_mut(self.bts.as_mut())
     }
 }
 
@@ -73,6 +88,13 @@ impl<T: AsRef<[u8]>> LikeContextualMessageKeyForResolution<T> {
             phantom_data: PhantomData,
         }
     }
+    pub fn to_mutable(&self) -> LikeContextualMessageKeyForResolution<Vec<u8>> {
+        LikeContextualMessageKeyForResolution::new(self.bts.as_ref().to_vec())
+    }
+
+    pub fn inner(self) -> T {
+        self.bts
+    }
 }
 
 impl<T: AsRef<[u8]>> Deref for LikeContextualMessageKeyForResolution<T> {
@@ -80,6 +102,12 @@ impl<T: AsRef<[u8]>> Deref for LikeContextualMessageKeyForResolution<T> {
 
     fn deref(&self) -> &Self::Target {
         bytemuck::from_bytes(self.bts.as_ref())
+    }
+}
+
+impl DerefMut for LikeContextualMessageKeyForResolution<Vec<u8>> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        bytemuck::from_bytes_mut(self.bts.as_mut())
     }
 }
 
@@ -115,6 +143,13 @@ impl<T: AsRef<[u8]>> LikePaymentKeyForResolution<T> {
             phantom_data: PhantomData,
         }
     }
+    pub fn to_mutable(&self) -> LikePaymentKeyForResolution<Vec<u8>> {
+        LikePaymentKeyForResolution::new(self.bts.as_ref().to_vec())
+    }
+
+    pub fn inner(self) -> T {
+        self.bts
+    }
 }
 
 impl<T: AsRef<[u8]>> Deref for LikePaymentKeyForResolution<T> {
@@ -122,6 +157,12 @@ impl<T: AsRef<[u8]>> Deref for LikePaymentKeyForResolution<T> {
 
     fn deref(&self) -> &Self::Target {
         bytemuck::from_bytes(self.bts.as_ref())
+    }
+}
+
+impl DerefMut for LikePaymentKeyForResolution<Vec<u8>> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        bytemuck::from_bytes_mut(self.bts.as_mut())
     }
 }
 
@@ -133,10 +174,20 @@ impl<T: AsRef<[u8]>> Debug for LikePaymentKeyForResolution<T> {
 
 /// Return type for DAA resolution - contains the appropriate Like key type for resolution
 #[derive(Debug, Clone)]
-pub enum DaaResolutionLikeKey {
-    HandshakeKey(LikeHandshakeKeyForResolution<UserKey>),
-    ContextualMessageKey(LikeContextualMessageKeyForResolution<UserKey>),
-    PaymentKey(LikePaymentKeyForResolution<UserKey>),
+pub enum DaaResolutionLikeKey<T: AsRef<[u8]> = UserKey> {
+    HandshakeKey(LikeHandshakeKeyForResolution<T>),
+    ContextualMessageKey(LikeContextualMessageKeyForResolution<T>),
+    PaymentKey(LikePaymentKeyForResolution<T>),
+}
+
+impl<T: AsRef<[u8]>> DaaResolutionLikeKey<T> {
+    pub fn inner(self) -> T {
+        match self {
+            DaaResolutionLikeKey::HandshakeKey(hk) => hk.inner(),
+            DaaResolutionLikeKey::ContextualMessageKey(cmk) => cmk.inner(),
+            DaaResolutionLikeKey::PaymentKey(pk) => pk.inner(),
+        }
+    }
 }
 
 /// Return type for sender resolution - contains the appropriate Like key type for resolution

@@ -5,7 +5,7 @@ use indexer_lib::{
     BlockOrMany,
     block_worker::BlockWorker,
     database::{
-        acceptance::{AcceptingBlockToTxIDPartition, TxIDToAcceptancePartition},
+        acceptance::TxIDToAcceptancePartition,
         block_compact_header::BlockCompactHeaderPartition,
         block_gaps::BlockGapsPartition,
         contextual_message_by_sender::ContextualMessageBySenderPartition,
@@ -96,7 +96,6 @@ async fn run_syncer() -> anyhow::Result<()> {
         .contextual_message_partition(ContextualMessageBySenderPartition::new(&tx_keyspace)?)
         .payment_by_receiver_partition(PaymentByReceiverPartition::new(&tx_keyspace)?)
         .tx_id_to_payment_partition(TxIdToPaymentPartition::new(&tx_keyspace)?)
-        .acceptance_to_tx_id_partition(AcceptingBlockToTxIDPartition::new(&tx_keyspace)?)
         .tx_id_to_acceptance_partition(TxIDToAcceptancePartition::new(&tx_keyspace)?)
         .skip_tx_partition(SkipTxPartition::new(&tx_keyspace)?)
         .block_compact_header_partition(BlockCompactHeaderPartition::new(&tx_keyspace)?)

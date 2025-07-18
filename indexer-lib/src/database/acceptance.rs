@@ -9,7 +9,7 @@ use bytemuck::{AnyBitPattern, NoUninit};
 use fjall::{
     KvSeparationOptions, PartitionCreateOptions, ReadTransaction, UserKey, WriteTransaction,
 };
-use kaspa_rpc_core::{RpcHash, RpcTransactionId};
+use kaspa_rpc_core::RpcHash;
 use std::marker::PhantomData;
 use std::ops::Deref;
 
@@ -57,19 +57,24 @@ pub struct AcceptanceTxKey {
 
 #[repr(transparent)]
 #[derive(Clone, PartialEq, Eq)]
-pub struct LikeAcceptanceTxKey<T: AsRef<[u8]>> {
+pub struct LikeAcceptanceTxKey<T: AsRef<[u8]> = UserKey> {
     bts: T,
     phantom_data: PhantomData<AcceptanceTxKey>,
 }
 
-// impl<T: AsRef<[u8]>> LikeAcceptanceTxKey<T> {
-//     fn new(bts: T) -> Self {
-//         Self {
-//             bts,
-//             phantom_data: PhantomData,
-//         }
-//     }
-// }
+impl<T: AsRef<[u8]>> LikeAcceptanceTxKey<T> {
+    fn new(bts: T) -> Self {
+        let _ = bytemuck::from_bytes::<AcceptanceTxKey>(bts.as_ref());
+        Self {
+            bts,
+            phantom_data: PhantomData,
+        }
+    }
+
+    fn inner(self) -> T {
+        self.bts
+    }
+}
 
 impl<T: AsRef<[u8]>> Deref for LikeAcceptanceTxKey<T> {
     type Target = AcceptanceTxKey;
@@ -161,13 +166,14 @@ impl TxIDToAcceptancePartition {
         &self,
         rtx: &ReadTransaction,
         tx_id: &[u8; 32],
-    ) -> impl DoubleEndedIterator<Item = Result<(PartitionId, AcceptingBlockResolutionData)>> + '_
-    {
+    ) -> impl DoubleEndedIterator<
+        Item = Result<(LikeAcceptanceTxKey<UserKey>, AcceptingBlockResolutionData)>,
+    > + '_ {
         rtx.prefix(&self.0, tx_id).map(|r| {
             let (key_bytes, value_bytes) = r?;
             if key_bytes.len() == 73 {
                 // 32 + 8 + 32 + 1
-                let key: AcceptanceTxKey = *bytemuck::from_bytes(&key_bytes);
+                let key = LikeAcceptanceTxKey::new(key_bytes);
 
                 let partition_id = match key.partition_id {
                     x if x == PartitionId::HandshakeBySender as u8 => {
@@ -205,7 +211,7 @@ impl TxIDToAcceptancePartition {
                     }
                 };
 
-                Ok((partition_id, resolution_data))
+                Ok((key, resolution_data))
             } else {
                 Err(anyhow::anyhow!(
                     "Invalid key length in tx_id_to_acceptance partition"
@@ -214,7 +220,9 @@ impl TxIDToAcceptancePartition {
         })
     }
 
-    // todo resolution
+    pub fn remove(&self, wtx: &mut WriteTransaction, key: LikeAcceptanceTxKey<UserKey>) {
+        wtx.remove(&self.0, key.inner())
+    }
 
     // /// Remove all accepting block resolution data for a specific transaction ID
     // /// Returns all the resolution data that was removed
