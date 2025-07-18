@@ -166,11 +166,45 @@ impl AcceptanceWorker {
                                 &hk,
                             )?;
                     }
-                    AcceptingBlockResolutionData::ContextualMessageKey(_) => {
-                        todo!()
+                    AcceptingBlockResolutionData::ContextualMessageKey(cmk) => {
+                        assert_eq!(
+                            key.partition_id,
+                            PartitionId::ContextualMessageBySender as u8
+                        );
+                        self.tx_id_to_acceptance_partition.remove(wtx, key.clone());
+                        self.tx_id_to_acceptance_partition
+                            .insert_contextual_message_wtx(
+                                wtx,
+                                key.tx_id,
+                                &cmk,
+                                None,
+                                Some(accepting_block_hash.as_bytes()),
+                            );
+                        self.unknown_accepting_daa_partition
+                            .mark_contextual_message_unknown_daa(
+                                wtx,
+                                *accepting_block_hash,
+                                TransactionId::from_bytes(*tx_id),
+                                &cmk,
+                            )?;
                     }
-                    AcceptingBlockResolutionData::PaymentKey(_) => {
-                        todo!()
+                    AcceptingBlockResolutionData::PaymentKey(pmk) => {
+                        assert_eq!(key.partition_id, PartitionId::PaymentBySender as u8);
+                        self.tx_id_to_acceptance_partition.remove(wtx, key.clone());
+                        self.tx_id_to_acceptance_partition.insert_payment_wtx(
+                            wtx,
+                            key.tx_id,
+                            &pmk,
+                            None,
+                            Some(accepting_block_hash.as_bytes()),
+                        );
+                        self.unknown_accepting_daa_partition
+                            .mark_payment_unknown_daa(
+                                wtx,
+                                *accepting_block_hash,
+                                TransactionId::from_bytes(*tx_id),
+                                &pmk,
+                            )?;
                     }
                     AcceptingBlockResolutionData::None => {
                         // todo warning
