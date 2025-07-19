@@ -17,6 +17,7 @@ kaspa-math.workspace = true
 kaspa-rpc-core.workspace = true
 kaspa-txscript.workspace = true
 kaspa-wrpc-client.workspace = true
+parking_lot = "0.12.4"
 ringmap.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 tracing.workspace = true

@@ -108,49 +108,49 @@ impl UnknownTxPartition {
             .transpose()?)
     }
 
-    /// Check multiple transactions for unknown status
-    pub fn check_unknown_batch<'a, I>(
-        &self,
-        wtx: &mut WriteTransaction,
-        tx_ids: I,
-    ) -> impl Iterator<Item = Result<(RpcTransactionId, RpcHash)>>
-    where
-        I: Iterator<Item = &'a RpcTransactionId>, // lexicographically ordered
-    {
-        let unknowns = wtx.iter(&self.0).map(|r| {
-            r.map_err(anyhow::Error::from).and_then(|(k, v)| {
-                if k.len() != 32 || v.len() != 32 {
-                    bail!("Invalid key/value length in unknown_tx partition")
-                }
-                let tx_id = RpcTransactionId::from_slice(&k);
-                let accepting_block_hash = RpcHash::from_slice(&v);
-                Ok((tx_id, accepting_block_hash))
-            })
-        });
-        unknowns.intersect_with(tx_ids)
-    }
-
-    // /// Get all unknown transactions with their accepting block hashes
-    // pub fn get_all_unknown(
+    // /// Check multiple transactions for unknown status
+    // pub fn check_unknown_batch<'a, I>(
     //     &self,
-    //     rtx: &ReadTransaction,
-    // ) -> impl DoubleEndedIterator<Item = Result<UnknownTxInfo>> + '_ {
-    //     rtx.iter(&self.0).map(|item| {
-    //         let (key, value) = item?;
-    //         if key.len() == 32 && value.len() == 32 {
-    //             let tx_id = RpcTransactionId::from_slice(&key);
-    //             let accepting_block_hash = RpcHash::from_slice(&value);
-    //             Ok(UnknownTxInfo {
-    //                 tx_id,
-    //                 accepting_block_hash,
-    //             })
-    //         } else {
-    //             Err(anyhow::anyhow!(
-    //                 "Invalid key/value length in unknown_tx partition"
-    //             ))
-    //         }
-    //     })
+    //     wtx: &mut WriteTransaction,
+    //     tx_ids: I,
+    // ) -> impl Iterator<Item = Result<(RpcTransactionId, RpcHash)>>
+    // where
+    //     I: Iterator<Item = &'a RpcTransactionId>, // lexicographically ordered
+    // {
+    //     let unknowns = wtx.iter(&self.0).map(|r| {
+    //         r.map_err(anyhow::Error::from).and_then(|(k, v)| {
+    //             if k.len() != 32 || v.len() != 32 {
+    //                 bail!("Invalid key/value length in unknown_tx partition")
+    //             }
+    //             let tx_id = RpcTransactionId::from_slice(&k);
+    //             let accepting_block_hash = RpcHash::from_slice(&v);
+    //             Ok((tx_id, accepting_block_hash))
+    //         })
+    //     });
+    //     unknowns.intersect_with(tx_ids)
     // }
+
+    /// Get all unknown transactions with their accepting block hashes
+    pub fn get_all_unknown(
+        &self,
+        rtx: &ReadTransaction,
+    ) -> impl DoubleEndedIterator<Item = Result<UnknownTxInfo>> + '_ {
+        rtx.iter(&self.0).map(|item| {
+            let (key, value) = item?;
+            if key.len() == 32 && value.len() == 32 {
+                let tx_id = RpcTransactionId::from_slice(&key);
+                let accepting_block_hash = RpcHash::from_slice(&value);
+                Ok(UnknownTxInfo {
+                    tx_id,
+                    accepting_block_hash,
+                })
+            } else {
+                Err(anyhow::anyhow!(
+                    "Invalid key/value length in unknown_tx partition"
+                ))
+            }
+        })
+    }
 }
 
 #[cfg(test)]

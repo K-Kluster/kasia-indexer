@@ -14,6 +14,8 @@ use kaspa_consensus_core::tx::TransactionId;
 use kaspa_rpc_core::{
     RpcAcceptedTransactionIds, RpcHash, RpcTransactionId, VirtualChainChangedNotification,
 };
+use parking_lot::Mutex;
+use std::sync::Arc;
 use tracing::{info, trace};
 
 pub struct VirtualChainChangedNotificationAndBlueWork {
@@ -22,6 +24,7 @@ pub struct VirtualChainChangedNotificationAndBlueWork {
 }
 
 pub struct AcceptanceWorker {
+    reorg_log: Arc<Mutex<()>>, // during reorg we should not merge unknown tx into other partitions
     vcc_rx: flume::Receiver<VirtualChainChangedNotificationAndBlueWork>,
     shutdown: flume::Receiver<()>,
     tx_keyspace: TxKeyspace,
@@ -120,6 +123,7 @@ impl AcceptanceWorker {
         rtx: &ReadTransaction,
         removed_block_hash: &RpcHash,
     ) -> anyhow::Result<()> {
+        let _lock = self.reorg_log.lock();
         let Some(tx_id_s) = self
             .acceptance_to_tx_id_partition
             .remove_wtx(wtx, removed_block_hash)?
@@ -133,6 +137,8 @@ impl AcceptanceWorker {
                 self.tx_id_to_acceptance_partition.remove(wtx, key);
                 self.unknown_accepting_daa_partition
                     .remove_by_accepting_block_hash(wtx, *removed_block_hash)?;
+                self.unknown_tx_partition
+                    .remove_unknown(wtx, RpcTransactionId::from_bytes(*tx_id))?;
             }
         }
         // todo consider update of metadata partition
@@ -225,7 +231,6 @@ impl AcceptanceWorker {
                     }
                     AcceptingBlockResolutionData::None => {
                         // todo warning
-                        continue;
                     }
                 }
             }

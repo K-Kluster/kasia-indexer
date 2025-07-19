@@ -1437,6 +1437,7 @@ dependencies = [
  "kaspa-rpc-core",
  "kaspa-txscript",
  "kaspa-wrpc-client",
+ "parking_lot",
  "protocol",
  "ringmap",
  "tokio",
