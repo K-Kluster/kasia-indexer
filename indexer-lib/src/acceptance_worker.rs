@@ -4,13 +4,12 @@ use crate::database::acceptance::{
 };
 use crate::database::metadata::MetadataPartition;
 use crate::database::skip_tx::SkipTxPartition;
-use crate::database::unknown_accepting_daa::UnknownAcceptingDaaPartition;
+use crate::database::unknown_accepting_daa::{ResolutionEntries, UnknownAcceptingDaaPartition};
 use crate::database::unknown_tx::UnknownTxPartition;
 use crate::historical_syncer::Cursor;
 use fjall::{ReadTransaction, TxKeyspace, WriteTransaction};
 use itertools::process_results;
 use kaspa_consensus_core::BlueWorkType;
-use kaspa_consensus_core::tx::TransactionId;
 use kaspa_rpc_core::{
     RpcAcceptedTransactionIds, RpcHash, RpcTransactionId, VirtualChainChangedNotification,
 };
@@ -24,6 +23,7 @@ pub struct VirtualChainChangedNotificationAndBlueWork {
 }
 
 pub struct AcceptanceWorker {
+    daa_resolution_attempt_count: u8,
     reorg_log: Arc<Mutex<()>>, // during reorg we should not merge unknown tx into other partitions
     vcc_rx: flume::Receiver<VirtualChainChangedNotificationAndBlueWork>,
     shutdown: flume::Receiver<()>,
@@ -165,6 +165,7 @@ impl AcceptanceWorker {
             },
         )?;
 
+        let mut entries = ResolutionEntries::new(self.daa_resolution_attempt_count);
         for tx_id in &filtered {
             let mut is_required = false;
             for r in self.tx_id_to_acceptance_partition.get_by_tx_id(rtx, tx_id) {
@@ -181,13 +182,7 @@ impl AcceptanceWorker {
                             None,
                             Some(accepting_block_hash.as_bytes()),
                         );
-                        self.unknown_accepting_daa_partition
-                            .mark_handshake_unknown_daa(
-                                wtx,
-                                *accepting_block_hash,
-                                TransactionId::from_bytes(*tx_id),
-                                &hk,
-                            )?;
+                        entries.push_handshake(*tx_id, &hk);
                     }
                     AcceptingBlockResolutionData::ContextualMessageKey(cmk) => {
                         assert_eq!(
@@ -203,13 +198,7 @@ impl AcceptanceWorker {
                                 None,
                                 Some(accepting_block_hash.as_bytes()),
                             );
-                        self.unknown_accepting_daa_partition
-                            .mark_contextual_message_unknown_daa(
-                                wtx,
-                                *accepting_block_hash,
-                                TransactionId::from_bytes(*tx_id),
-                                &cmk,
-                            )?;
+                        entries.push_contextual_message(*tx_id, &cmk);
                     }
                     AcceptingBlockResolutionData::PaymentKey(pmk) => {
                         assert_eq!(key.partition_id, PartitionId::PaymentBySender as u8);
@@ -221,13 +210,7 @@ impl AcceptanceWorker {
                             None,
                             Some(accepting_block_hash.as_bytes()),
                         );
-                        self.unknown_accepting_daa_partition
-                            .mark_payment_unknown_daa(
-                                wtx,
-                                *accepting_block_hash,
-                                TransactionId::from_bytes(*tx_id),
-                                &pmk,
-                            )?;
+                        entries.push_payment(*tx_id, &pmk);
                     }
                     AcceptingBlockResolutionData::None => {
                         // todo warning
@@ -240,6 +223,8 @@ impl AcceptanceWorker {
                     .mark_unknown(wtx, tx_id, *accepting_block_hash)?;
             }
         }
+        self.unknown_accepting_daa_partition
+            .insert_wtx(wtx, *accepting_block_hash, &entries)?;
         self.acceptance_to_tx_id_partition
             .insert_wtx(wtx, accepting_block_hash, &filtered);
 

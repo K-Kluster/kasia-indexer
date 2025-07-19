@@ -1,6 +1,4 @@
 use fjall::{Config, TxKeyspace};
-use indexer_lib::database::unknown_accepting_daa::UnknownAcceptingDaaPartition;
-use indexer_lib::database::unknown_tx::UnknownTxPartition;
 use indexer_lib::{
     BlockOrMany,
     block_worker::BlockWorker,
@@ -99,8 +97,6 @@ async fn run_syncer() -> anyhow::Result<()> {
         .tx_id_to_acceptance_partition(TxIDToAcceptancePartition::new(&tx_keyspace)?)
         .skip_tx_partition(SkipTxPartition::new(&tx_keyspace)?)
         .block_compact_header_partition(BlockCompactHeaderPartition::new(&tx_keyspace)?)
-        .unknown_accepting_daa_partition(UnknownAcceptingDaaPartition::new(&tx_keyspace)?)
-        .unknown_tx_partition(UnknownTxPartition::new(&tx_keyspace)?)
         .build();
 
     info!("Starting syncer and block processor tasks");

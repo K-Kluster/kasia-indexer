@@ -1,9 +1,9 @@
-use crate::database::PartitionId;
 use crate::database::resolution_keys::{
     ContextualMessageKeyForResolution, HandshakeKeyForResolution,
     LikeContextualMessageKeyForResolution, LikeHandshakeKeyForResolution,
     LikePaymentKeyForResolution, PaymentKeyForResolution,
 };
+use crate::database::{LikeTxIds, PartitionId};
 use anyhow::Result;
 use bytemuck::{AnyBitPattern, NoUninit};
 use fjall::{
@@ -21,25 +21,6 @@ pub enum AcceptingBlockResolutionData {
     ContextualMessageKey(LikeContextualMessageKeyForResolution<UserKey>),
     PaymentKey(LikePaymentKeyForResolution<UserKey>),
     None,
-}
-
-pub struct LikeTxIds<T: AsRef<[u8]> = UserValue> {
-    bts: T,
-    phantom_data: PhantomData<[u8; 32]>,
-}
-
-impl<T: AsRef<[u8]>> LikeTxIds<T> {
-    pub fn new(bts: T) -> Self {
-        assert_eq!(bts.as_ref().len() % 32, 0);
-        Self {
-            bts,
-            phantom_data: PhantomData,
-        }
-    }
-
-    pub fn as_tx_ids(&self) -> &[[u8; 32]] {
-        self.bts.as_ref().as_chunks::<32>().0
-    }
 }
 
 pub struct AcceptingBlockToTxIDPartition(fjall::TxPartition);

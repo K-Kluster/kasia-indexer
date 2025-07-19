@@ -35,7 +35,7 @@ impl SkipTxPartition {
     }
 
     /// Check if a transaction should be skipped
-    pub fn should_skip(&self, rtx: &ReadTransaction, tx_id: [u8; 32]) -> Result<bool> {
+    pub fn should_skip(&self, rtx: &ReadTransaction, tx_id: &[u8; 32]) -> Result<bool> {
         Ok(rtx.get(&self.0, tx_id)?.is_some())
     }
 
@@ -70,7 +70,7 @@ impl SkipTxPartition {
     {
         let mut results = Vec::new();
         for tx_id in tx_ids {
-            let should_skip = self.should_skip(rtx, tx_id.as_bytes())?;
+            let should_skip = self.should_skip(rtx, &tx_id.as_bytes())?;
             results.push((*tx_id, should_skip));
         }
         Ok(results)

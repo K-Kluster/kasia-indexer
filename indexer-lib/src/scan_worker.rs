@@ -1,16 +1,15 @@
 use crate::database::PartitionId;
 use crate::database::acceptance::{
-    AcceptingBlockResolutionData, AcceptingBlockToTxIDPartition, TxIDToAcceptancePartition,
+    AcceptingBlockResolutionData, TxIDToAcceptancePartition,
 };
 use crate::database::skip_tx::SkipTxPartition;
-use crate::database::unknown_accepting_daa::UnknownAcceptingDaaPartition;
-use crate::database::unknown_tx::{UnknownTxInfo, UnknownTxPartition};
+use crate::database::unknown_accepting_daa::{ResolutionEntries, UnknownAcceptingDaaPartition};
+use crate::database::unknown_tx::{UnknownTxPartition, UnknownTxUpdateAction};
 use fjall::TxKeyspace;
-use kaspa_consensus_core::tx::TransactionId;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use workflow_core::channel::{Receiver, Sender};
 
 #[derive(Debug, Copy, Clone)]
@@ -58,6 +57,7 @@ pub struct ScanWorker {
     unknown_tx_partition: UnknownTxPartition,
     skip_tx_partition: SkipTxPartition,
     unknown_accepting_daa_partition: UnknownAcceptingDaaPartition,
+    daa_resolution_attempt_count: u8,
 }
 
 impl ScanWorker {
@@ -78,6 +78,7 @@ impl ScanWorker {
 
     pub fn work(&self) -> anyhow::Result<()> {
         self.resolve_unknown_tx()?;
+        self.unknown_daa()?;
         todo!()
     }
 
@@ -86,91 +87,122 @@ impl ScanWorker {
         let mut wtx = self.tx_keyspace.write_tx()?;
         let rtx = self.tx_keyspace.read_tx();
 
-        for unknown in self.unknown_tx_partition.get_all_unknown(&rtx) {
-            let UnknownTxInfo {
-                tx_id,
-                accepting_block_hash,
-            } = unknown?;
-            if self.skip_tx_partition.should_skip(&rtx, tx_id.as_bytes())? {
-                self.unknown_tx_partition.remove_unknown(&mut wtx, tx_id)?;
-                continue;
-            }
-            for r in self
-                .tx_id_to_acceptance_partition
-                .get_by_tx_id(&rtx, tx_id.as_ref())
-            {
-                let (key, resolution) = r?;
-                match resolution {
-                    AcceptingBlockResolutionData::HandshakeKey(hk) => {
-                        assert_eq!(key.partition_id, PartitionId::HandshakeBySender as u8);
-                        self.tx_id_to_acceptance_partition
-                            .remove(&mut wtx, key.clone());
-                        self.tx_id_to_acceptance_partition.insert_handshake_wtx(
-                            &mut wtx,
-                            key.tx_id,
-                            &hk,
-                            None,
-                            Some(accepting_block_hash.as_bytes()),
-                        );
-                        self.unknown_accepting_daa_partition
-                            .mark_handshake_unknown_daa(
-                                &mut wtx,
-                                accepting_block_hash,
-                                tx_id,
-                                &hk,
-                            )?;
-                    }
-                    AcceptingBlockResolutionData::ContextualMessageKey(cmk) => {
-                        assert_eq!(
-                            key.partition_id,
-                            PartitionId::ContextualMessageBySender as u8
-                        );
-                        self.tx_id_to_acceptance_partition
-                            .remove(&mut wtx, key.clone());
-                        self.tx_id_to_acceptance_partition
-                            .insert_contextual_message_wtx(
+        // Process unknown transactions by accepting block hash (following new pattern)
+        for unknown_block_result in self.unknown_tx_partition.get_all_unknown(&rtx) {
+            let (accepting_block_hash, like_tx_ids) = unknown_block_result?;
+            let mut processed_any = false;
+
+            let mut extended_daa_requests =
+                ResolutionEntries::new(self.daa_resolution_attempt_count);
+
+            // Process each transaction in this accepting block
+            let mut remaining_tx_ids = Vec::new();
+            for tx_id in like_tx_ids.as_tx_ids() {
+                // Check if we should skip this transaction
+                if self.skip_tx_partition.should_skip(&rtx, tx_id)? {
+                    processed_any = true;
+                    continue; // Skip this tx but don't add to remaining
+                }
+
+                // Look for resolution data for this transaction
+                let mut found_resolution = false;
+
+                for r in self.tx_id_to_acceptance_partition.get_by_tx_id(&rtx, tx_id) {
+                    let (key, resolution) = r?;
+                    match resolution {
+                        AcceptingBlockResolutionData::HandshakeKey(hk) => {
+                            assert_eq!(key.partition_id, PartitionId::HandshakeBySender as u8);
+                            self.tx_id_to_acceptance_partition
+                                .remove(&mut wtx, key.clone());
+                            self.tx_id_to_acceptance_partition.insert_handshake_wtx(
                                 &mut wtx,
                                 key.tx_id,
-                                &cmk,
+                                &hk,
                                 None,
                                 Some(accepting_block_hash.as_bytes()),
                             );
-                        self.unknown_accepting_daa_partition
-                            .mark_contextual_message_unknown_daa(
+                            extended_daa_requests.push_handshake(*tx_id, &hk);
+                            found_resolution = true;
+                        }
+                        AcceptingBlockResolutionData::ContextualMessageKey(cmk) => {
+                            assert_eq!(
+                                key.partition_id,
+                                PartitionId::ContextualMessageBySender as u8
+                            );
+                            self.tx_id_to_acceptance_partition
+                                .remove(&mut wtx, key.clone());
+                            self.tx_id_to_acceptance_partition
+                                .insert_contextual_message_wtx(
+                                    &mut wtx,
+                                    key.tx_id,
+                                    &cmk,
+                                    None,
+                                    Some(accepting_block_hash.as_bytes()),
+                                );
+                            extended_daa_requests.push_contextual_message(*tx_id, &cmk);
+                            found_resolution = true;
+                            processed_any = true;
+                        }
+                        AcceptingBlockResolutionData::PaymentKey(pmk) => {
+                            assert_eq!(key.partition_id, PartitionId::PaymentBySender as u8);
+                            self.tx_id_to_acceptance_partition
+                                .remove(&mut wtx, key.clone());
+                            self.tx_id_to_acceptance_partition.insert_payment_wtx(
                                 &mut wtx,
-                                accepting_block_hash,
-                                tx_id,
-                                &cmk,
-                            )?;
-                    }
-                    AcceptingBlockResolutionData::PaymentKey(pmk) => {
-                        assert_eq!(key.partition_id, PartitionId::PaymentBySender as u8);
-                        self.tx_id_to_acceptance_partition
-                            .remove(&mut wtx, key.clone());
-                        self.tx_id_to_acceptance_partition.insert_payment_wtx(
-                            &mut wtx,
-                            key.tx_id,
-                            &pmk,
-                            None,
-                            Some(accepting_block_hash.as_bytes()),
-                        );
-                        self.unknown_accepting_daa_partition
-                            .mark_payment_unknown_daa(
-                                &mut wtx,
-                                accepting_block_hash,
-                                tx_id,
+                                key.tx_id,
                                 &pmk,
-                            )?;
-                    }
-                    AcceptingBlockResolutionData::None => {
-                        // todo warning
+                                None,
+                                Some(accepting_block_hash.as_bytes()),
+                            );
+
+                            extended_daa_requests.push_payment(*tx_id, &pmk);
+                            processed_any = true;
+                        }
+                        AcceptingBlockResolutionData::None => {
+                            // todo warning
+                        }
                     }
                 }
-                self.unknown_tx_partition.remove_unknown(&mut wtx, tx_id)?;
-            }
-            // todo warn that tx is still unknown
-        }
 
+                if !found_resolution {
+                    // Keep this transaction in unknown state
+                    remaining_tx_ids.push(*tx_id);
+                }
+            }
+
+            // Update the entry for this accepting block hash using the new explicit enum
+            if processed_any {
+                self.unknown_tx_partition.update_by_accepting_block_hash(
+                    &mut wtx,
+                    &accepting_block_hash,
+                    move |_current| {
+                        if remaining_tx_ids.is_empty() {
+                            UnknownTxUpdateAction::Delete
+                        } else {
+                            warn!(
+                                "{} unknown transactions in accepting block {} ",
+                                remaining_tx_ids.len(),
+                                accepting_block_hash
+                            );
+                            UnknownTxUpdateAction::Update(std::mem::take(&mut remaining_tx_ids))
+                        }
+                    },
+                )?;
+            }
+            if !extended_daa_requests.is_empty() {
+                self.unknown_accepting_daa_partition
+                    .extend_by_accepting_block_hash(
+                        &mut wtx,
+                        &accepting_block_hash,
+                        extended_daa_requests,
+                    )?;
+            }
+        }
+        wtx.commit()??;
         Ok(())
+    }
+
+    fn unknown_daa(&self) -> anyhow::Result<()> {
+        todo!()
     }
 }
