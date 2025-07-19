@@ -65,7 +65,7 @@ impl ScanWorker {
         loop {
             match self.tick_tx.recv_blocking()? {
                 Notification::Tick => {
-                    self.work()?;
+                    self.tick_work()?;
                     self.job_done_tx.send_blocking(())?;
                 }
                 Notification::Shutdown => {
@@ -76,9 +76,18 @@ impl ScanWorker {
         }
     }
 
-    pub fn work(&self) -> anyhow::Result<()> {
+    pub fn tick_work(&self) -> anyhow::Result<()> {
         self.resolve_unknown_tx()?;
         self.unknown_daa()?;
+        self.unknown_sender()?;
+        todo!()
+    }
+
+    pub fn handle_daa_resolution(&self) -> anyhow::Result<()> {
+        todo!()
+    }
+
+    pub fn handle_sender_resolution(&self) -> anyhow::Result<()> {
         todo!()
     }
 
@@ -203,6 +212,10 @@ impl ScanWorker {
     }
 
     fn unknown_daa(&self) -> anyhow::Result<()> {
+        todo!()
+    }
+
+    fn unknown_sender(&self) -> anyhow::Result<()> {
         todo!()
     }
 }
