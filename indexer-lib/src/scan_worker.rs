@@ -93,8 +93,8 @@ impl ScanWorker {
 
     fn resolve_unknown_tx(&self) -> anyhow::Result<()> {
         let _g = self.reorg_lock.lock();
-        let mut wtx = self.tx_keyspace.write_tx()?;
         let rtx = self.tx_keyspace.read_tx();
+        let mut wtx = self.tx_keyspace.write_tx()?;
 
         // Process unknown transactions by accepting block hash (following new pattern)
         for unknown_block_result in self.unknown_tx_partition.get_all_unknown(&rtx) {

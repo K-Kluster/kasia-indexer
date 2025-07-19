@@ -80,8 +80,8 @@ impl AcceptanceWorker {
             // todo is it possible that vcc only has removals??
             return Ok(());
         }
-        let mut wtx = self.tx_keyspace.write_tx()?;
         let rtx = self.tx_keyspace.read_tx();
+        let mut wtx = self.tx_keyspace.write_tx()?;
         vcc.removed_chain_block_hashes
             .iter()
             .try_for_each(|hash| -> anyhow::Result<()> {
