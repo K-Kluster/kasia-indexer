@@ -142,9 +142,9 @@ impl AcceptanceWorker {
         let daa = self
             .block_compact_header_partition
             .get_daa_score_rtx(rtx, removed_block_hash)?;
+        info!(block_hash = %removed_block_hash, tx_count = %tx_id_s.as_tx_ids().len(), "Processing block removal");
         for tx_id in tx_id_s.as_tx_ids() {
             for r in self.tx_id_to_acceptance_partition.get_by_tx_id(rtx, tx_id) {
-                // todo only key is needed
                 let (key, _value) = r?;
                 self.tx_id_to_acceptance_partition.remove(wtx, key);
                 self.unknown_accepting_daa_partition

@@ -24,7 +24,7 @@ use kaspa_rpc_core::{RpcAddress, RpcHash, RpcHeader, RpcTransactionId};
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 use workflow_core::channel::{Receiver, Sender};
 
 #[derive(Debug, Clone)]
@@ -126,12 +126,12 @@ impl ScanWorker {
 
         match r {
             Err(hash) => {
-                // todo logs
+                warn!(block_hash = %hash, "Failed to resolve DAA score for block, decrementing attempt count");
                 self.unknown_accepting_daa_partition
                     .decrement_attempt_counts_by_block_hash(&mut wtx, hash)?;
             }
             Ok(header) => {
-                // todo logs
+                debug!(block_hash = %header.hash, daa_score = %header.daa_score, "Successfully resolved DAA score for block");
                 self.block_compact_header_partition.insert_compact_header(
                     &header.hash,
                     header.blue_work,
@@ -225,7 +225,7 @@ impl ScanWorker {
                 let sender = (&address).try_into()?;
                 self.tx_id_to_acceptance_partition
                     .resolve(&mut wtx, tx_id.as_bytes())?;
-                // todo log
+                trace!(%tx_id, %daa_score, "Successfully resolved sender for transaction");
                 for (_partition_id, key) in self
                     .pending_sender_resolution_partition
                     .remove_pending(&mut wtx, daa_score, tx_id.as_ref())?
@@ -296,7 +296,7 @@ impl ScanWorker {
                 }
             }
             Err(SenderByTxIdAndDaa { tx_id, daa_score }) => {
-                // todo log
+                warn!(%tx_id, %daa_score, "Failed to resolve sender for transaction, decrementing attempt count");
                 self.pending_sender_resolution_partition
                     .decrement_attempt_counts_by_transaction(&mut wtx, daa_score, tx_id)?;
             }
