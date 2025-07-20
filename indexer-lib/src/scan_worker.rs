@@ -3,7 +3,17 @@ use crate::database::acceptance::{
     AcceptingBlockResolutionData, AcceptingBlockToTxIDPartition, TxIDToAcceptancePartition,
 };
 use crate::database::block_compact_header::BlockCompactHeaderPartition;
-use crate::database::pending_sender_resolution::PendingSenderResolutionPartition;
+use crate::database::contextual_message_by_sender::ContextualMessageBySenderPartition;
+use crate::database::handshake::{
+    HandshakeByReceiverPartition, HandshakeBySenderPartition, HandshakeKeyByReceiver,
+    HandshakeKeyBySender,
+};
+use crate::database::payment::{
+    PaymentByReceiverPartition, PaymentBySenderPartition, PaymentKeyByReceiver, PaymentKeyBySender,
+};
+use crate::database::pending_sender_resolution::{
+    PendingResolutionKey, PendingSenderResolutionPartition,
+};
 use crate::database::resolution_keys::{DaaResolutionLikeKey, SenderResolutionLikeKey};
 use crate::database::skip_tx::SkipTxPartition;
 use crate::database::unknown_accepting_daa::{ResolutionEntries, UnknownAcceptingDaaPartition};
@@ -68,6 +78,12 @@ pub struct ScanWorker {
     block_compact_header_partition: BlockCompactHeaderPartition,
     daa_resolution_attempt_count: u8,
     pending_sender_resolution_partition: PendingSenderResolutionPartition,
+
+    handshake_by_receiver_partition: HandshakeByReceiverPartition,
+    handshake_by_sender_partition: HandshakeBySenderPartition,
+    contextual_message_by_sender_partition: ContextualMessageBySenderPartition,
+    payment_by_receiver_partition: PaymentByReceiverPartition,
+    payment_by_sender_partition: PaymentBySenderPartition,
 }
 
 impl ScanWorker {
@@ -202,9 +218,13 @@ impl ScanWorker {
         &self,
         r: Result<(RpcAddress, SenderByTxIdAndDaa), SenderByTxIdAndDaa>,
     ) -> anyhow::Result<()> {
+        let _lock = self.reorg_lock.lock();
         let mut wtx = self.tx_keyspace.write_tx()?;
         match r {
             Ok((address, SenderByTxIdAndDaa { tx_id, daa_score })) => {
+                let sender = (&address).try_into()?;
+                self.tx_id_to_acceptance_partition
+                    .resolve(&mut wtx, tx_id.as_bytes())?;
                 // todo log
                 for (_partition_id, key) in self
                     .pending_sender_resolution_partition
@@ -212,13 +232,65 @@ impl ScanWorker {
                 {
                     match key {
                         SenderResolutionLikeKey::HandshakeKey(hk) => {
-                            todo!()
+                            self.handshake_by_sender_partition.insert_wtx(
+                                &mut wtx,
+                                &HandshakeKeyBySender {
+                                    sender,
+                                    block_time: hk.block_time,
+                                    block_hash: hk.block_hash,
+                                    receiver: hk.receiver,
+                                    version: hk.version,
+                                    tx_id: hk.tx_id,
+                                },
+                            )?;
+                            self.handshake_by_receiver_partition.insert_wtx(
+                                &mut wtx,
+                                &HandshakeKeyByReceiver {
+                                    receiver: hk.receiver,
+                                    block_time: hk.block_time,
+                                    block_hash: hk.block_hash,
+                                    version: hk.version,
+                                    tx_id: hk.tx_id,
+                                },
+                                Some(sender),
+                            )
                         }
                         SenderResolutionLikeKey::ContextualMessageKey(cmk) => {
-                            todo!()
+                            self.contextual_message_by_sender_partition.update_sender(
+                                &mut wtx,
+                                Default::default(),
+                                sender,
+                                &cmk.alias,
+                                cmk.block_time,
+                                cmk.block_hash,
+                                cmk.version,
+                                cmk.tx_id,
+                            )?;
                         }
                         SenderResolutionLikeKey::PaymentKey(pmk) => {
-                            todo!()
+                            self.payment_by_sender_partition.insert_wtx(
+                                &mut wtx,
+                                &PaymentKeyBySender {
+                                    sender,
+                                    block_time: pmk.block_time,
+                                    block_hash: pmk.block_hash,
+                                    receiver: pmk.receiver,
+                                    version: pmk.version,
+                                    tx_id: pmk.tx_id,
+                                },
+                            );
+
+                            self.payment_by_receiver_partition.insert_wtx(
+                                &mut wtx,
+                                &PaymentKeyByReceiver {
+                                    receiver: pmk.receiver,
+                                    block_time: pmk.block_time,
+                                    block_hash: pmk.block_hash,
+                                    version: pmk.version,
+                                    tx_id: pmk.tx_id,
+                                },
+                                Some(sender),
+                            );
                         }
                     }
                 }
@@ -410,7 +482,22 @@ impl ScanWorker {
     }
 
     fn unknown_sender(&self) -> anyhow::Result<()> {
-        // todo send request to resolution task
+        let rtx = self.tx_keyspace.read_tx();
+        for pending in self
+            .pending_sender_resolution_partition
+            .get_all_pending_keys(&rtx)
+        {
+            let PendingResolutionKey {
+                accepting_daa_score,
+                tx_id,
+                ..
+            } = pending?;
+            self.resolver_request_tx
+                .send_blocking(ResolverRequest::SenderByTxIdAndDaa(SenderByTxIdAndDaa {
+                    tx_id: RpcTransactionId::from_bytes(tx_id),
+                    daa_score: u64::from_be_bytes(accepting_daa_score),
+                }))?
+        }
         Ok(())
     }
 }

@@ -190,6 +190,18 @@ impl TxIDToAcceptancePartition {
         );
     }
 
+    /// Insert a payment ForResolution key
+    pub fn resolve(&self, wtx: &mut WriteTransaction, tx_id: [u8; 32]) -> Result<()> {
+        let keys = wtx
+            .prefix(&self.0, tx_id)
+            .map(|r| r.map(|kv| kv.0))
+            .collect::<Result<Vec<_>, _>>()?;
+        for k in keys {
+            wtx.update_fetch(&self.0, k, |_old| Some([].into()))?;
+        }
+        Ok(())
+    }
+
     /// Get all accepting block resolution data for a specific transaction ID
     /// Returns iterator of (PartitionId, AcceptingBlockResolutionData) pairs
     pub fn get_by_tx_id(
@@ -221,23 +233,29 @@ impl TxIDToAcceptancePartition {
                     }
                 };
 
-                let resolution_data = match partition_id {
-                    PartitionId::HandshakeBySender => AcceptingBlockResolutionData::HandshakeKey(
-                        LikeHandshakeKeyForResolution::new(value_bytes),
-                    ),
-                    PartitionId::ContextualMessageBySender => {
-                        AcceptingBlockResolutionData::ContextualMessageKey(
-                            LikeContextualMessageKeyForResolution::new(value_bytes),
-                        )
-                    }
-                    PartitionId::PaymentBySender => AcceptingBlockResolutionData::PaymentKey(
-                        LikePaymentKeyForResolution::new(value_bytes),
-                    ),
-                    _ => {
-                        return Err(anyhow::anyhow!(
-                            "Invalid partition ID for accepting block resolution: {:?}",
-                            partition_id
-                        ));
+                let resolution_data = if value_bytes.is_empty() {
+                    AcceptingBlockResolutionData::None
+                } else {
+                    match partition_id {
+                        PartitionId::HandshakeBySender => {
+                            AcceptingBlockResolutionData::HandshakeKey(
+                                LikeHandshakeKeyForResolution::new(value_bytes),
+                            )
+                        }
+                        PartitionId::ContextualMessageBySender => {
+                            AcceptingBlockResolutionData::ContextualMessageKey(
+                                LikeContextualMessageKeyForResolution::new(value_bytes),
+                            )
+                        }
+                        PartitionId::PaymentBySender => AcceptingBlockResolutionData::PaymentKey(
+                            LikePaymentKeyForResolution::new(value_bytes),
+                        ),
+                        _ => {
+                            return Err(anyhow::anyhow!(
+                                "Invalid partition ID for accepting block resolution: {:?}",
+                                partition_id
+                            ));
+                        }
                     }
                 };
 

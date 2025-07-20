@@ -203,7 +203,7 @@ impl ContextualMessageBySenderPartition {
         old_sender: AddressPayload,
         new_sender: AddressPayload,
         alias: &[u8],
-        block_time: u64,
+        block_time: [u8; 8],
         block_hash: [u8; 32],
         version: u8,
         tx_id: [u8; 32],
@@ -218,7 +218,7 @@ impl ContextualMessageBySenderPartition {
         let old_key = ContextualMessageBySenderKey {
             sender: old_sender,
             alias: alias_bytes,
-            block_time: block_time.to_be_bytes(),
+            block_time,
             block_hash,
             version,
             tx_id,
@@ -232,7 +232,7 @@ impl ContextualMessageBySenderPartition {
             let new_key = ContextualMessageBySenderKey {
                 sender: new_sender,
                 alias: alias_bytes,
-                block_time: block_time.to_be_bytes(),
+                block_time,
                 block_hash,
                 version,
                 tx_id,

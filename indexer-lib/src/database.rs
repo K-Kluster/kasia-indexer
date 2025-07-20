@@ -43,8 +43,6 @@ pub enum PartitionId {
     PaymentBySender,
     PaymentByReceiver,
     TxIdToPayment,
-
-    None = 255, // Special variant for resolved entries with empty value
 }
 
 pub mod util;

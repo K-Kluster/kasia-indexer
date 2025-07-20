@@ -2,7 +2,8 @@ use anyhow::bail;
 use bytemuck::{AnyBitPattern, NoUninit};
 use fjall::{PartitionCreateOptions, WriteTransaction};
 use kaspa_addresses::Version;
-use kaspa_rpc_core::RpcScriptPublicKey;
+use kaspa_rpc_core::{RpcAddress, RpcScriptPublicKey};
+use kaspa_txscript::pay_to_address_script;
 use kaspa_txscript::script_class::ScriptClass;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
@@ -63,6 +64,13 @@ impl TryFrom<&RpcScriptPublicKey> for AddressPayload {
                 })
             }
         }
+    }
+}
+impl TryFrom<&RpcAddress> for AddressPayload {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &RpcAddress) -> Result<Self, Self::Error> {
+        (&pay_to_address_script(value)).try_into()
     }
 }
 

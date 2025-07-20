@@ -258,6 +258,23 @@ impl PendingSenderResolutionPartition {
         })
     }
 
+    pub fn get_all_pending_keys(
+        &self,
+        rtx: &ReadTransaction,
+    ) -> impl DoubleEndedIterator<Item = Result<PendingResolutionKey>> + '_ {
+        rtx.keys(&self.0).map(|item| {
+            let key_bytes = item?;
+            if key_bytes.len() == 41 {
+                // 8 + 32 + 1
+                Ok(*bytemuck::from_bytes(&key_bytes))
+            } else {
+                Err(anyhow::anyhow!(
+                    "Invalid key length in pending_sender_resolution partition"
+                ))
+            }
+        })
+    }
+
     /// Check if a transaction has any pending sender resolution
     pub fn has_pending(
         &self,

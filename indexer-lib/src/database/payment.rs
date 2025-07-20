@@ -57,13 +57,8 @@ impl PaymentBySenderPartition {
         Ok(())
     }
 
-    pub fn insert_wtx(
-        &self,
-        wtx: &mut WriteTransaction,
-        key: &PaymentKeyBySender,
-    ) -> anyhow::Result<()> {
+    pub fn insert_wtx(&self, wtx: &mut WriteTransaction, key: &PaymentKeyBySender) {
         wtx.insert(&self.0, bytemuck::bytes_of(key), []);
-        Ok(())
     }
 }
 
