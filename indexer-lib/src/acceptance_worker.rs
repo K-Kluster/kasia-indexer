@@ -195,7 +195,6 @@ impl AcceptanceWorker {
                     AcceptingBlockResolutionData::HandshakeKey(hk) => {
                         assert_eq!(key.partition_id, PartitionId::HandshakeBySender as u8);
                         self.tx_id_to_acceptance_partition.remove(wtx, key.clone());
-                        // let daa = self.
                         self.tx_id_to_acceptance_partition.insert_handshake_wtx(
                             wtx,
                             key.tx_id,

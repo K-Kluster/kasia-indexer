@@ -19,7 +19,7 @@ pub struct SenderByTxIdAndDaa {
 #[derive(Debug, Clone)]
 pub enum ResolverResponse {
     Block(Result<Box<RpcHeader>, RpcHash>),
-    Sender(Result<(RpcAddress, RpcTransactionId), SenderByTxIdAndDaa>),
+    Sender(Result<(RpcAddress, SenderByTxIdAndDaa), SenderByTxIdAndDaa>),
 }
 
 pub struct Resolver {
@@ -81,7 +81,10 @@ impl Resolver {
                     {
                         Ok(sender) => {
                             self.response_tx
-                                .send_async(ResolverResponse::Sender(Ok((sender, tx_id))))
+                                .send_async(ResolverResponse::Sender(Ok((
+                                    sender,
+                                    SenderByTxIdAndDaa { tx_id, daa_score },
+                                ))))
                                 .await?;
                         }
                         Err(err) => {

@@ -54,6 +54,26 @@ impl AcceptingBlockToTxIDPartition {
         let old = wtx.fetch_update(&self.0, accepted_by_block_hash.as_bytes(), |_old| None)?;
         Ok(old.map(LikeTxIds::new))
     }
+
+    pub fn get_rtx(
+        &self,
+        rtx: &ReadTransaction,
+        accepted_by_block_hash: &RpcHash,
+    ) -> Result<Option<LikeTxIds<UserValue>>> {
+        Ok(rtx
+            .get(&self.0, accepted_by_block_hash.as_bytes())?
+            .map(LikeTxIds::new))
+    }
+
+    pub fn get_wtx(
+        &self,
+        wtx: &mut WriteTransaction,
+        accepted_by_block_hash: &RpcHash,
+    ) -> Result<Option<LikeTxIds<UserValue>>> {
+        Ok(wtx
+            .get(&self.0, accepted_by_block_hash.as_bytes())?
+            .map(LikeTxIds::new))
+    }
 }
 
 #[repr(C)]

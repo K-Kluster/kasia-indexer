@@ -1,8 +1,10 @@
 use crate::database::PartitionId;
-use crate::database::acceptance::{AcceptingBlockResolutionData, TxIDToAcceptancePartition};
+use crate::database::acceptance::{
+    AcceptingBlockResolutionData, AcceptingBlockToTxIDPartition, TxIDToAcceptancePartition,
+};
 use crate::database::block_compact_header::BlockCompactHeaderPartition;
 use crate::database::pending_sender_resolution::PendingSenderResolutionPartition;
-use crate::database::resolution_keys::DaaResolutionLikeKey;
+use crate::database::resolution_keys::{DaaResolutionLikeKey, SenderResolutionLikeKey};
 use crate::database::skip_tx::SkipTxPartition;
 use crate::database::unknown_accepting_daa::{ResolutionEntries, UnknownAcceptingDaaPartition};
 use crate::database::unknown_tx::{UnknownTxPartition, UnknownTxUpdateAction};
@@ -59,6 +61,7 @@ pub struct ScanWorker {
 
     tx_keyspace: TxKeyspace,
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
+    accepting_block_to_tx_id_partition: AcceptingBlockToTxIDPartition,
     unknown_tx_partition: UnknownTxPartition,
     skip_tx_partition: SkipTxPartition,
     unknown_accepting_daa_partition: UnknownAcceptingDaaPartition,
@@ -97,8 +100,20 @@ impl ScanWorker {
     }
 
     pub fn handle_daa_resolution(&self, r: Result<Box<RpcHeader>, RpcHash>) -> anyhow::Result<()> {
+        let _lock = self.reorg_lock.lock();
         let mut wtx = self.tx_keyspace.write_tx()?;
+        let rtx = self.tx_keyspace.read_tx();
+        let block_hash = match &r {
+            Ok(h) => h.hash,
+            Err(h) => *h,
+        };
+
         match r {
+            Err(hash) => {
+                // todo logs
+                self.unknown_accepting_daa_partition
+                    .decrement_attempt_counts_by_block_hash(&mut wtx, hash)?;
+            }
             Ok(header) => {
                 // todo logs
                 self.block_compact_header_partition.insert_compact_header(
@@ -106,24 +121,116 @@ impl ScanWorker {
                     header.blue_work,
                     header.daa_score,
                 )?;
-                self.unknown_accepting_daa_partition
-                    .remove_by_accepting_block_hash(&mut wtx, header.hash)?;
-            }
-            Err(hash) => {
-                // todo logs
-                self.unknown_accepting_daa_partition
-                    .decrement_attempt_counts_by_block_hash(&mut wtx, hash)?;
+                let Some(txs) = self
+                    .accepting_block_to_tx_id_partition
+                    .get_wtx(&mut wtx, &block_hash)?
+                else {
+                    return Ok(());
+                };
+
+                let accepting_daa = header.daa_score;
+                let accepting_block_hash = header.hash;
+                for tx_id in txs.as_tx_ids() {
+                    let wtx = &mut wtx;
+                    let rtx = &rtx;
+                    for r in self.tx_id_to_acceptance_partition.get_by_tx_id(rtx, tx_id) {
+                        let (key, resolution) = r?;
+                        assert_eq!(*tx_id, key.tx_id);
+                        match resolution {
+                            AcceptingBlockResolutionData::HandshakeKey(hk) => {
+                                assert_eq!(key.partition_id, PartitionId::HandshakeBySender as u8);
+                                self.tx_id_to_acceptance_partition.remove(wtx, key.clone());
+                                self.tx_id_to_acceptance_partition.insert_handshake_wtx(
+                                    wtx,
+                                    key.tx_id,
+                                    &hk,
+                                    Some(accepting_daa),
+                                    Some(accepting_block_hash.as_bytes()),
+                                );
+                                self.pending_sender_resolution_partition
+                                    .mark_handshake_pending(wtx, accepting_daa, key.tx_id, &hk)?
+                            }
+                            AcceptingBlockResolutionData::ContextualMessageKey(cmk) => {
+                                assert_eq!(
+                                    key.partition_id,
+                                    PartitionId::ContextualMessageBySender as u8
+                                );
+                                self.tx_id_to_acceptance_partition.remove(wtx, key.clone());
+                                self.tx_id_to_acceptance_partition
+                                    .insert_contextual_message_wtx(
+                                        wtx,
+                                        key.tx_id,
+                                        &cmk,
+                                        Some(accepting_daa),
+                                        Some(accepting_block_hash.as_bytes()),
+                                    );
+                                self.pending_sender_resolution_partition
+                                    .mark_contextual_message_pending(
+                                        wtx,
+                                        accepting_daa,
+                                        key.tx_id,
+                                        &cmk,
+                                    )?
+                            }
+                            AcceptingBlockResolutionData::PaymentKey(pmk) => {
+                                assert_eq!(key.partition_id, PartitionId::PaymentBySender as u8);
+                                self.tx_id_to_acceptance_partition.remove(wtx, key.clone());
+                                self.tx_id_to_acceptance_partition.insert_payment_wtx(
+                                    wtx,
+                                    key.tx_id,
+                                    &pmk,
+                                    Some(accepting_daa),
+                                    Some(accepting_block_hash.as_bytes()),
+                                );
+                                self.pending_sender_resolution_partition
+                                    .mark_payment_pending(wtx, accepting_daa, key.tx_id, &pmk)?
+                            }
+                            AcceptingBlockResolutionData::None => {
+                                warn!(tx_id = %RpcTransactionId::from_bytes(key.tx_id), "No resolution data found for transaction");
+                            }
+                        }
+                    }
+                }
             }
         }
+
         wtx.commit()??;
         Ok(())
     }
 
     pub fn handle_sender_resolution(
         &self,
-        r: Result<(RpcAddress, RpcTransactionId), SenderByTxIdAndDaa>,
+        r: Result<(RpcAddress, SenderByTxIdAndDaa), SenderByTxIdAndDaa>,
     ) -> anyhow::Result<()> {
-        todo!()
+        let mut wtx = self.tx_keyspace.write_tx()?;
+        match r {
+            Ok((address, SenderByTxIdAndDaa { tx_id, daa_score })) => {
+                // todo log
+                for (_partition_id, key) in self
+                    .pending_sender_resolution_partition
+                    .remove_pending(&mut wtx, daa_score, tx_id.as_ref())?
+                {
+                    match key {
+                        SenderResolutionLikeKey::HandshakeKey(hk) => {
+                            todo!()
+                        }
+                        SenderResolutionLikeKey::ContextualMessageKey(cmk) => {
+                            todo!()
+                        }
+                        SenderResolutionLikeKey::PaymentKey(pmk) => {
+                            todo!()
+                        }
+                    }
+                }
+            }
+            Err(SenderByTxIdAndDaa { tx_id, daa_score }) => {
+                // todo log
+                self.pending_sender_resolution_partition
+                    .decrement_attempt_counts_by_transaction(&mut wtx, daa_score, tx_id)?;
+            }
+        }
+        wtx.commit()??;
+        Ok(())
     }
 
     fn resolve_unknown_tx(&self) -> anyhow::Result<()> {
@@ -265,7 +372,7 @@ impl ScanWorker {
                     let _ = self
                         .resolver_request_tx
                         .send_blocking(ResolverRequest::BlockByHash(block))
-                        .inspect_err(|err| error!(""));
+                        .inspect_err(|err| error!("failed to send request to resolve: {}", err));
                 }
                 Some(daa) => {
                     info!(block_hash = %block, daa_score = %daa, "DAA score resolved for block");

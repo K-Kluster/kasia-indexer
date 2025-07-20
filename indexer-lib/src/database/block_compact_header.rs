@@ -53,7 +53,7 @@ impl BlockCompactHeaderPartition {
             .insert(block_hash.as_bytes(), bytemuck::bytes_of(&header))?;
         Ok(())
     }
-    
+
     pub fn get_compact_header_rtx(
         &self,
         rtx: &ReadTransaction,
