@@ -86,7 +86,7 @@ impl ScanWorker {
         self.resolve_unknown_tx()?;
         self.unknown_daa()?;
         self.unknown_sender()?;
-        todo!()
+        Ok(())
     }
 
     pub fn handle_daa_resolution(&self) -> anyhow::Result<()> {
@@ -232,40 +232,46 @@ impl ScanWorker {
                 .get_daa_score_rtx(&rtx, &block)?
             {
                 None => {
+                    warn!(block_hash = %block, "DAA score still not available for block");
                     // todo send request to resolution task
                 }
                 Some(daa) => {
+                    info!(block_hash = %block, daa_score = %daa, "DAA score resolved for block");
                     let entries = self
                         .unknown_accepting_daa_partition
                         .remove_by_accepting_block_hash(&mut wtx, block)?;
                     if let Some(entries) = entries {
-                        entries.as_entry_slice()?.iter().try_for_each(
-                            |entry| -> anyhow::Result<()> {
-                                match entry.get_resolution_key()? {
-                                    DaaResolutionLikeKey::HandshakeKey(hk) => self
-                                        .pending_sender_resolution_partition
-                                        .mark_handshake_pending(&mut wtx, daa, hk.tx_id, &hk)?,
-                                    DaaResolutionLikeKey::ContextualMessageKey(cmk) => self
-                                        .pending_sender_resolution_partition
-                                        .mark_contextual_message_pending(
-                                            &mut wtx, daa, cmk.tx_id, &cmk,
-                                        )?,
-                                    DaaResolutionLikeKey::PaymentKey(pmk) => self
-                                        .pending_sender_resolution_partition
-                                        .mark_payment_pending(&mut wtx, daa, pmk.tx_id, &pmk)?,
-                                }
-                                Ok(())
-                            },
-                        )?;
+                        let entries = entries.as_entry_slice()?;
+                        let count = entries.len();
+                        if count > 0 {
+                            info!(%count, block_hash = %block, "Moving transactions to pending sender resolution queue");
+                        }
+                        entries.iter().try_for_each(|entry| -> anyhow::Result<()> {
+                            match entry.get_resolution_key()? {
+                                DaaResolutionLikeKey::HandshakeKey(hk) => self
+                                    .pending_sender_resolution_partition
+                                    .mark_handshake_pending(&mut wtx, daa, hk.tx_id, &hk)?,
+                                DaaResolutionLikeKey::ContextualMessageKey(cmk) => self
+                                    .pending_sender_resolution_partition
+                                    .mark_contextual_message_pending(
+                                        &mut wtx, daa, cmk.tx_id, &cmk,
+                                    )?,
+                                DaaResolutionLikeKey::PaymentKey(pmk) => self
+                                    .pending_sender_resolution_partition
+                                    .mark_payment_pending(&mut wtx, daa, pmk.tx_id, &pmk)?,
+                            }
+                            Ok(())
+                        })?;
                     }
                 }
             }
         }
+        wtx.commit()??;
         Ok(())
     }
 
     fn unknown_sender(&self) -> anyhow::Result<()> {
-        let _lock = self.reorg_lock.lock();
-        todo!()
+        // todo send request to resolution task
+        Ok(())
     }
 }
