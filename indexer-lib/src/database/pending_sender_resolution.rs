@@ -60,12 +60,12 @@ impl PendingSenderResolutionPartition {
         &self,
         wtx: &mut WriteTransaction,
         accepting_daa_score: u64,
-        tx_id: RpcTransactionId,
+        tx_id: [u8; 32],
         handshake_key: &HandshakeKeyForResolution,
     ) -> Result<()> {
         let key = PendingResolutionKey {
             accepting_daa_score: accepting_daa_score.to_be_bytes(),
-            tx_id: *tx_id.as_ref(),
+            tx_id,
             partition_type: PartitionId::HandshakeBySender as u8,
         };
         wtx.insert(
@@ -81,12 +81,12 @@ impl PendingSenderResolutionPartition {
         &self,
         wtx: &mut WriteTransaction,
         accepting_daa_score: u64,
-        tx_id: RpcTransactionId,
+        tx_id: [u8; 32],
         contextual_message_key: &ContextualMessageKeyForResolution,
     ) -> Result<()> {
         let key = PendingResolutionKey {
             accepting_daa_score: accepting_daa_score.to_be_bytes(),
-            tx_id: *tx_id.as_ref(),
+            tx_id,
             partition_type: PartitionId::ContextualMessageBySender as u8,
         };
         wtx.insert(
@@ -102,12 +102,12 @@ impl PendingSenderResolutionPartition {
         &self,
         wtx: &mut WriteTransaction,
         accepting_daa_score: u64,
-        tx_id: RpcTransactionId,
+        tx_id: [u8; 32],
         payment_key: &PaymentKeyForResolution,
     ) -> Result<()> {
         let key = PendingResolutionKey {
             accepting_daa_score: accepting_daa_score.to_be_bytes(),
-            tx_id: *tx_id.as_ref(),
+            tx_id,
             partition_type: PartitionId::PaymentBySender as u8,
         };
         wtx.insert(
@@ -124,11 +124,11 @@ impl PendingSenderResolutionPartition {
         &self,
         wtx: &mut WriteTransaction,
         accepting_daa_score: u64,
-        tx_id: RpcTransactionId,
+        tx_id: &[u8; 32],
     ) -> Result<Vec<(PartitionId, SenderResolutionLikeKey)>> {
         let prefix_key = PendingResolutionKey {
             accepting_daa_score: accepting_daa_score.to_be_bytes(),
-            tx_id: *tx_id.as_ref(),
+            tx_id: *tx_id,
             partition_type: 0,
         };
 
@@ -288,7 +288,7 @@ impl PendingSenderResolutionPartition {
         I: Iterator<Item = (RpcTransactionId, &'a HandshakeKeyForResolution)>,
     {
         for (tx_id, handshake_key) in entries {
-            self.mark_handshake_pending(wtx, accepting_daa_score, tx_id, handshake_key)?;
+            self.mark_handshake_pending(wtx, accepting_daa_score, tx_id.as_bytes(), handshake_key)?;
         }
         Ok(())
     }
@@ -307,7 +307,7 @@ impl PendingSenderResolutionPartition {
             self.mark_contextual_message_pending(
                 wtx,
                 accepting_daa_score,
-                tx_id,
+                tx_id.as_bytes(),
                 contextual_message_key,
             )?;
         }
@@ -325,7 +325,7 @@ impl PendingSenderResolutionPartition {
         I: Iterator<Item = (RpcTransactionId, &'a PaymentKeyForResolution)>,
     {
         for (tx_id, payment_key) in entries {
-            self.mark_payment_pending(wtx, accepting_daa_score, tx_id, payment_key)?;
+            self.mark_payment_pending(wtx, accepting_daa_score, tx_id.as_bytes(), payment_key)?;
         }
         Ok(())
     }

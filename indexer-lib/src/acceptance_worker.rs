@@ -2,7 +2,9 @@ use crate::database::PartitionId;
 use crate::database::acceptance::{
     AcceptingBlockResolutionData, AcceptingBlockToTxIDPartition, TxIDToAcceptancePartition,
 };
+use crate::database::block_compact_header::BlockCompactHeaderPartition;
 use crate::database::metadata::MetadataPartition;
+use crate::database::pending_sender_resolution::PendingSenderResolutionPartition;
 use crate::database::skip_tx::SkipTxPartition;
 use crate::database::unknown_accepting_daa::{ResolutionEntries, UnknownAcceptingDaaPartition};
 use crate::database::unknown_tx::UnknownTxPartition;
@@ -35,6 +37,10 @@ pub struct AcceptanceWorker {
     acceptance_to_tx_id_partition: AcceptingBlockToTxIDPartition,
     unknown_tx_partition: UnknownTxPartition,
     unknown_accepting_daa_partition: UnknownAcceptingDaaPartition,
+
+    block_compact_header_partition: BlockCompactHeaderPartition,
+
+    pending_sender_resolution_partition: PendingSenderResolutionPartition,
 }
 
 impl AcceptanceWorker {
@@ -133,6 +139,9 @@ impl AcceptanceWorker {
         else {
             return Ok(());
         };
+        let daa = self
+            .block_compact_header_partition
+            .get_daa_score_rtx(rtx, removed_block_hash)?;
         for tx_id in tx_id_s.as_tx_ids() {
             for r in self.tx_id_to_acceptance_partition.get_by_tx_id(rtx, tx_id) {
                 // todo only key is needed
@@ -142,6 +151,10 @@ impl AcceptanceWorker {
                     .remove_by_accepting_block_hash(wtx, *removed_block_hash)?;
                 self.unknown_tx_partition
                     .remove_unknown(wtx, RpcTransactionId::from_bytes(*tx_id))?;
+                if let Some(daa) = daa {
+                    self.pending_sender_resolution_partition
+                        .remove_pending(wtx, daa, tx_id)?;
+                }
             }
         }
         // todo consider update of metadata partition
@@ -155,6 +168,9 @@ impl AcceptanceWorker {
         accepting_block_hash: &RpcHash,
         tx_id_s: &[RpcTransactionId],
     ) -> anyhow::Result<()> {
+        let accepting_daa = self
+            .block_compact_header_partition
+            .get_daa_score_rtx(rtx, accepting_block_hash)?;
         let filtered = process_results(
             tx_id_s.iter().map(|tx_id| {
                 self.skip_tx_partition
@@ -173,19 +189,26 @@ impl AcceptanceWorker {
             let mut is_required = false;
             for r in self.tx_id_to_acceptance_partition.get_by_tx_id(rtx, tx_id) {
                 let (key, resolution) = r?;
+                assert_eq!(*tx_id, key.tx_id);
                 is_required = true;
                 match resolution {
                     AcceptingBlockResolutionData::HandshakeKey(hk) => {
                         assert_eq!(key.partition_id, PartitionId::HandshakeBySender as u8);
                         self.tx_id_to_acceptance_partition.remove(wtx, key.clone());
+                        // let daa = self.
                         self.tx_id_to_acceptance_partition.insert_handshake_wtx(
                             wtx,
                             key.tx_id,
                             &hk,
-                            None,
+                            accepting_daa,
                             Some(accepting_block_hash.as_bytes()),
                         );
-                        entries.push_handshake(*tx_id, &hk);
+                        if let Some(daa) = accepting_daa {
+                            self.pending_sender_resolution_partition
+                                .mark_handshake_pending(wtx, daa, key.tx_id, &hk)?
+                        } else {
+                            entries.push_handshake(*tx_id, &hk);
+                        }
                     }
                     AcceptingBlockResolutionData::ContextualMessageKey(cmk) => {
                         assert_eq!(
@@ -198,10 +221,15 @@ impl AcceptanceWorker {
                                 wtx,
                                 key.tx_id,
                                 &cmk,
-                                None,
+                                accepting_daa,
                                 Some(accepting_block_hash.as_bytes()),
                             );
-                        entries.push_contextual_message(*tx_id, &cmk);
+                        if let Some(daa) = accepting_daa {
+                            self.pending_sender_resolution_partition
+                                .mark_contextual_message_pending(wtx, daa, key.tx_id, &cmk)?
+                        } else {
+                            entries.push_contextual_message(key.tx_id, &cmk);
+                        }
                     }
                     AcceptingBlockResolutionData::PaymentKey(pmk) => {
                         assert_eq!(key.partition_id, PartitionId::PaymentBySender as u8);
@@ -210,10 +238,15 @@ impl AcceptanceWorker {
                             wtx,
                             key.tx_id,
                             &pmk,
-                            None,
+                            accepting_daa,
                             Some(accepting_block_hash.as_bytes()),
                         );
-                        entries.push_payment(*tx_id, &pmk);
+                        if let Some(daa) = accepting_daa {
+                            self.pending_sender_resolution_partition
+                                .mark_payment_pending(wtx, daa, key.tx_id, &pmk)?
+                        } else {
+                            entries.push_payment(key.tx_id, &pmk);
+                        }
                     }
                     AcceptingBlockResolutionData::None => {
                         warn!(tx_id = %RpcTransactionId::from_bytes(key.tx_id), "No resolution data found for transaction");
@@ -226,8 +259,16 @@ impl AcceptanceWorker {
                     .mark_unknown(wtx, tx_id, *accepting_block_hash)?;
             }
         }
-        self.unknown_accepting_daa_partition
-            .insert_wtx(wtx, *accepting_block_hash, &entries)?;
+        if accepting_daa.is_none() {
+            self.unknown_accepting_daa_partition.insert_wtx(
+                wtx,
+                *accepting_block_hash,
+                &entries,
+            )?;
+        } else {
+            assert!(entries.is_empty());
+        }
+
         self.acceptance_to_tx_id_partition
             .insert_wtx(wtx, accepting_block_hash, &filtered);
 

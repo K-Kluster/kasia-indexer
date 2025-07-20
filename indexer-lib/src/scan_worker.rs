@@ -1,5 +1,10 @@
 use crate::database::PartitionId;
 use crate::database::acceptance::{AcceptingBlockResolutionData, TxIDToAcceptancePartition};
+use crate::database::block_compact_header::{BlockCompactHeaderPartition, CompactHeader};
+use crate::database::pending_sender_resolution::{
+    PendingSenderResolution, PendingSenderResolutionPartition,
+};
+use crate::database::resolution_keys::DaaResolutionLikeKey;
 use crate::database::skip_tx::SkipTxPartition;
 use crate::database::unknown_accepting_daa::{ResolutionEntries, UnknownAcceptingDaaPartition};
 use crate::database::unknown_tx::{UnknownTxPartition, UnknownTxUpdateAction};
@@ -56,7 +61,9 @@ pub struct ScanWorker {
     unknown_tx_partition: UnknownTxPartition,
     skip_tx_partition: SkipTxPartition,
     unknown_accepting_daa_partition: UnknownAcceptingDaaPartition,
+    block_compact_header_partition: BlockCompactHeaderPartition,
     daa_resolution_attempt_count: u8,
+    pending_sender_resolution_partition: PendingSenderResolutionPartition,
 }
 
 impl ScanWorker {
@@ -212,10 +219,53 @@ impl ScanWorker {
     }
 
     fn unknown_daa(&self) -> anyhow::Result<()> {
-        todo!()
+        let _lock = self.reorg_lock.lock();
+        let rtx = self.tx_keyspace.read_tx();
+        let mut wtx = self.tx_keyspace.write_tx()?;
+        for block in self
+            .unknown_accepting_daa_partition
+            .get_all_unknown_accepting_blocks(&rtx)
+        {
+            let block = block?;
+            match self
+                .block_compact_header_partition
+                .get_daa_score_rtx(&rtx, &block)?
+            {
+                None => {
+                    // todo send request to resolution task
+                }
+                Some(daa) => {
+                    let entries = self
+                        .unknown_accepting_daa_partition
+                        .remove_by_accepting_block_hash(&mut wtx, block)?;
+                    if let Some(entries) = entries {
+                        entries.as_entry_slice()?.iter().try_for_each(
+                            |entry| -> anyhow::Result<()> {
+                                match entry.get_resolution_key()? {
+                                    DaaResolutionLikeKey::HandshakeKey(hk) => self
+                                        .pending_sender_resolution_partition
+                                        .mark_handshake_pending(&mut wtx, daa, hk.tx_id, &hk)?,
+                                    DaaResolutionLikeKey::ContextualMessageKey(cmk) => self
+                                        .pending_sender_resolution_partition
+                                        .mark_contextual_message_pending(
+                                            &mut wtx, daa, cmk.tx_id, &cmk,
+                                        )?,
+                                    DaaResolutionLikeKey::PaymentKey(pmk) => self
+                                        .pending_sender_resolution_partition
+                                        .mark_payment_pending(&mut wtx, daa, pmk.tx_id, &pmk)?,
+                                }
+                                Ok(())
+                            },
+                        )?;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     fn unknown_sender(&self) -> anyhow::Result<()> {
+        let _lock = self.reorg_lock.lock();
         todo!()
     }
 }

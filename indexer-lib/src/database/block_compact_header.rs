@@ -62,7 +62,7 @@ impl BlockCompactHeaderPartition {
     pub fn get_compact_header_rtx(
         &self,
         rtx: &ReadTransaction,
-        block_hash: RpcHash,
+        block_hash: &RpcHash,
     ) -> Result<Option<CompactHeader>> {
         if let Some(bytes) = rtx.get(&self.0, block_hash.as_bytes())? {
             if bytes.len() == size_of::<CompactHeader>() {
@@ -96,7 +96,7 @@ impl BlockCompactHeaderPartition {
     pub fn get_blue_work_rtx(
         &self,
         rtx: &ReadTransaction,
-        block_hash: RpcHash,
+        block_hash: &RpcHash,
     ) -> Result<Option<BlueWorkType>> {
         if let Some(header) = self.get_compact_header_rtx(rtx, block_hash)? {
             Ok(Some(BlueWorkType::from_le_bytes(header.blue_work)))
@@ -108,7 +108,7 @@ impl BlockCompactHeaderPartition {
     pub fn get_daa_score_rtx(
         &self,
         rtx: &ReadTransaction,
-        block_hash: RpcHash,
+        block_hash: &RpcHash,
     ) -> Result<Option<u64>> {
         if let Some(header) = self.get_compact_header_rtx(rtx, block_hash)? {
             Ok(Some(u64::from_le_bytes(header.daa_score)))
