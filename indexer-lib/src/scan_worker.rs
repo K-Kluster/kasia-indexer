@@ -1,7 +1,5 @@
 use crate::database::PartitionId;
-use crate::database::acceptance::{
-    AcceptingBlockResolutionData, AcceptingBlockToTxIDPartition, TxIDToAcceptancePartition,
-};
+use crate::database::acceptance::{AcceptingBlockResolutionData, TxIDToAcceptancePartition};
 use crate::database::block_compact_header::BlockCompactHeaderPartition;
 use crate::database::contextual_message_by_sender::ContextualMessageBySenderPartition;
 use crate::database::handshake::{
