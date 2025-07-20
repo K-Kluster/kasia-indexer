@@ -71,7 +71,6 @@ pub struct ScanWorker {
 
     tx_keyspace: TxKeyspace,
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
-    accepting_block_to_tx_id_partition: AcceptingBlockToTxIDPartition,
     unknown_tx_partition: UnknownTxPartition,
     skip_tx_partition: SkipTxPartition,
     unknown_accepting_daa_partition: UnknownAcceptingDaaPartition,
@@ -118,12 +117,6 @@ impl ScanWorker {
     pub fn handle_daa_resolution(&self, r: Result<Box<RpcHeader>, RpcHash>) -> anyhow::Result<()> {
         let _lock = self.reorg_lock.lock();
         let mut wtx = self.tx_keyspace.write_tx()?;
-        let rtx = self.tx_keyspace.read_tx();
-        let block_hash = match &r {
-            Ok(h) => h.hash,
-            Err(h) => *h,
-        };
-
         match r {
             Err(hash) => {
                 warn!(block_hash = %hash, "Failed to resolve DAA score for block, decrementing attempt count");
@@ -131,79 +124,68 @@ impl ScanWorker {
                     .decrement_attempt_counts_by_block_hash(&mut wtx, hash)?;
             }
             Ok(header) => {
+                let pending_daa = self
+                    .unknown_accepting_daa_partition
+                    .remove_by_accepting_block_hash(&mut wtx, header.hash)?;
+                let Some(pending) = pending_daa else {
+                    return Ok(());
+                };
                 debug!(block_hash = %header.hash, daa_score = %header.daa_score, "Successfully resolved DAA score for block");
                 self.block_compact_header_partition.insert_compact_header(
                     &header.hash,
                     header.blue_work,
                     header.daa_score,
                 )?;
-                let Some(txs) = self
-                    .accepting_block_to_tx_id_partition
-                    .get_wtx(&mut wtx, &block_hash)?
-                else {
-                    return Ok(());
-                };
-
                 let accepting_daa = header.daa_score;
                 let accepting_block_hash = header.hash;
-                for tx_id in txs.as_tx_ids() {
+                for entry in pending.as_entry_slice()? {
+                    let resolution = entry.get_resolution_key()?;
                     let wtx = &mut wtx;
-                    let rtx = &rtx;
-                    for r in self.tx_id_to_acceptance_partition.get_by_tx_id(rtx, tx_id) {
-                        let (key, resolution) = r?;
-                        assert_eq!(*tx_id, key.tx_id);
-                        match resolution {
-                            AcceptingBlockResolutionData::HandshakeKey(hk) => {
-                                assert_eq!(key.partition_id, PartitionId::HandshakeBySender as u8);
-                                self.tx_id_to_acceptance_partition.remove(wtx, key.clone());
-                                self.tx_id_to_acceptance_partition.insert_handshake_wtx(
+                    match resolution {
+                        DaaResolutionLikeKey::HandshakeKey(hk) => {
+                            self.tx_id_to_acceptance_partition
+                                .remove_by_tx_id(wtx, entry.tx_id)?;
+                            self.tx_id_to_acceptance_partition.insert_handshake_wtx(
+                                wtx,
+                                entry.tx_id,
+                                &hk,
+                                Some(accepting_daa),
+                                Some(accepting_block_hash.as_bytes()),
+                            );
+                            self.pending_sender_resolution_partition
+                                .mark_handshake_pending(wtx, accepting_daa, entry.tx_id, &hk)?
+                        }
+                        DaaResolutionLikeKey::ContextualMessageKey(cmk) => {
+                            self.tx_id_to_acceptance_partition
+                                .remove_by_tx_id(wtx, entry.tx_id)?;
+                            self.tx_id_to_acceptance_partition
+                                .insert_contextual_message_wtx(
                                     wtx,
-                                    key.tx_id,
-                                    &hk,
+                                    entry.tx_id,
+                                    &cmk,
                                     Some(accepting_daa),
                                     Some(accepting_block_hash.as_bytes()),
                                 );
-                                self.pending_sender_resolution_partition
-                                    .mark_handshake_pending(wtx, accepting_daa, key.tx_id, &hk)?
-                            }
-                            AcceptingBlockResolutionData::ContextualMessageKey(cmk) => {
-                                assert_eq!(
-                                    key.partition_id,
-                                    PartitionId::ContextualMessageBySender as u8
-                                );
-                                self.tx_id_to_acceptance_partition.remove(wtx, key.clone());
-                                self.tx_id_to_acceptance_partition
-                                    .insert_contextual_message_wtx(
-                                        wtx,
-                                        key.tx_id,
-                                        &cmk,
-                                        Some(accepting_daa),
-                                        Some(accepting_block_hash.as_bytes()),
-                                    );
-                                self.pending_sender_resolution_partition
-                                    .mark_contextual_message_pending(
-                                        wtx,
-                                        accepting_daa,
-                                        key.tx_id,
-                                        &cmk,
-                                    )?
-                            }
-                            AcceptingBlockResolutionData::PaymentKey(pmk) => {
-                                assert_eq!(key.partition_id, PartitionId::PaymentBySender as u8);
-                                self.tx_id_to_acceptance_partition.remove(wtx, key.clone());
-                                self.tx_id_to_acceptance_partition.insert_payment_wtx(
+                            self.pending_sender_resolution_partition
+                                .mark_contextual_message_pending(
                                     wtx,
-                                    key.tx_id,
-                                    &pmk,
-                                    Some(accepting_daa),
-                                    Some(accepting_block_hash.as_bytes()),
-                                );
-                                self.pending_sender_resolution_partition
-                                    .mark_payment_pending(wtx, accepting_daa, key.tx_id, &pmk)?
-                            }
-                            AcceptingBlockResolutionData::None => {
-                                warn!(tx_id = %RpcTransactionId::from_bytes(key.tx_id), "No resolution data found for transaction");
-                            }
+                                    accepting_daa,
+                                    entry.tx_id,
+                                    &cmk,
+                                )?
+                        }
+                        DaaResolutionLikeKey::PaymentKey(pmk) => {
+                            self.tx_id_to_acceptance_partition
+                                .remove_by_tx_id(wtx, entry.tx_id)?;
+                            self.tx_id_to_acceptance_partition.insert_payment_wtx(
+                                wtx,
+                                entry.tx_id,
+                                &pmk,
+                                Some(accepting_daa),
+                                Some(accepting_block_hash.as_bytes()),
+                            );
+                            self.pending_sender_resolution_partition
+                                .mark_payment_pending(wtx, accepting_daa, entry.tx_id, &pmk)?
                         }
                     }
                 }

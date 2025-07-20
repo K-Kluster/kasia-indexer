@@ -272,55 +272,23 @@ impl TxIDToAcceptancePartition {
         wtx.remove(&self.0, key.inner())
     }
 
-    // /// Remove all accepting block resolution data for a specific transaction ID
-    // /// Returns all the resolution data that was removed
-    // pub fn remove_by_tx_id(
-    //     &self,
-    //     wtx: &mut WriteTransaction,
-    //     tx_id: [u8; 32],
-    // ) -> Result<Vec<(PartitionId, AcceptingBlockResolutionData)>> {
-    //     let prefix = tx_id.as_slice();
-    //     let mut results = Vec::new();
-    //     let mut keys_to_remove = Vec::new();
-    //
-    //     // First collect all entries
-    //     for item in wtx.prefix(&self.0, prefix) {
-    //         let (key_bytes, value_bytes) = item?;
-    //         if key_bytes.len() == 73 { // 32 + 8 + 32 + 1
-    //             let key: AcceptanceTxKey = *bytemuck::from_bytes(&key_bytes);
-    //             keys_to_remove.push(key);
-    //
-    //             let partition_id = match key.partition_id {
-    //                 x if x == PartitionId::HandshakeBySender as u8 => PartitionId::HandshakeBySender,
-    //                 x if x == PartitionId::ContextualMessageBySender as u8 => PartitionId::ContextualMessageBySender,
-    //                 x if x == PartitionId::PaymentBySender as u8 => PartitionId::PaymentBySender,
-    //                 x if x == PartitionId::None as u8 => PartitionId::None,
-    //                 _ => return Err(anyhow::anyhow!("Invalid partition ID: {}", key.partition_id)),
-    //             };
-    //
-    //             let resolution_data = match partition_id {
-    //                 PartitionId::HandshakeBySender => AcceptingBlockResolutionData::HandshakeKey(
-    //                     LikeHandshakeKeyForResolution::new(value_bytes)
-    //                 ),
-    //                 PartitionId::ContextualMessageBySender => AcceptingBlockResolutionData::ContextualMessageKey(
-    //                     LikeContextualMessageKeyForResolution::new(value_bytes)
-    //                 ),
-    //                 PartitionId::PaymentBySender => AcceptingBlockResolutionData::PaymentKey(
-    //                     LikePaymentKeyForResolution::new(value_bytes)
-    //                 ),
-    //                 PartitionId::None => AcceptingBlockResolutionData::None,
-    //                 _ => return Err(anyhow::anyhow!("Invalid partition ID for accepting block resolution: {:?}", partition_id)),
-    //             };
-    //
-    //             results.push((partition_id, resolution_data));
-    //         }
-    //     }
-    //
-    //     // Then remove all collected keys
-    //     for key in keys_to_remove {
-    //         wtx.remove(&self.0, bytemuck::bytes_of(&key));
-    //     }
-    //
-    //     Ok(results)
-    // }
+    /// Remove all accepting block resolution data for a specific transaction ID
+    /// Returns all the resolution data that was removed
+    pub fn remove_by_tx_id(&self, wtx: &mut WriteTransaction, tx_id: [u8; 32]) -> Result<()> {
+        let prefix = tx_id.as_slice();
+        let mut keys_to_remove = Vec::new();
+
+        // First collect all entries
+        for item in wtx.prefix(&self.0, prefix) {
+            let (key_bytes, _value_bytes) = item?;
+            keys_to_remove.push(key_bytes);
+        }
+
+        // Then remove all collected keys
+        for key in keys_to_remove {
+            wtx.remove(&self.0, key);
+        }
+
+        Ok(())
+    }
 }
