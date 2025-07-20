@@ -96,8 +96,27 @@ impl ScanWorker {
         Ok(())
     }
 
-    pub fn handle_daa_resolution(&self, R: Result<Box<RpcHeader>, RpcHash>) -> anyhow::Result<()> {
-        todo!()
+    pub fn handle_daa_resolution(&self, r: Result<Box<RpcHeader>, RpcHash>) -> anyhow::Result<()> {
+        let mut wtx = self.tx_keyspace.write_tx()?;
+        match r {
+            Ok(header) => {
+                // todo logs
+                self.block_compact_header_partition.insert_compact_header(
+                    &header.hash,
+                    header.blue_work,
+                    header.daa_score,
+                )?;
+                self.unknown_accepting_daa_partition
+                    .remove_by_accepting_block_hash(&mut wtx, header.hash)?;
+            }
+            Err(hash) => {
+                // todo logs
+                self.unknown_accepting_daa_partition
+                    .decrement_attempt_counts_by_block_hash(&mut wtx, hash)?;
+            }
+        }
+        wtx.commit()??;
+        Ok(())
     }
 
     pub fn handle_sender_resolution(

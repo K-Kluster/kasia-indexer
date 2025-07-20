@@ -53,12 +53,7 @@ impl BlockCompactHeaderPartition {
             .insert(block_hash.as_bytes(), bytemuck::bytes_of(&header))?;
         Ok(())
     }
-
-    pub fn insert_blue_work(&self, block_hash: &RpcHash, blue_work: BlueWorkType) -> Result<()> {
-        // For backward compatibility, set DAA score to 0 when only blue work is provided
-        self.insert_compact_header(block_hash, blue_work, 0)
-    }
-
+    
     pub fn get_compact_header_rtx(
         &self,
         rtx: &ReadTransaction,
