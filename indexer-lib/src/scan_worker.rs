@@ -1,25 +1,25 @@
 use crate::database::PartitionId;
 use crate::database::acceptance::{AcceptingBlockResolutionData, TxIDToAcceptancePartition};
-use crate::database::block_compact_header::{BlockCompactHeaderPartition, CompactHeader};
-use crate::database::pending_sender_resolution::{
-    PendingSenderResolution, PendingSenderResolutionPartition,
-};
+use crate::database::block_compact_header::BlockCompactHeaderPartition;
+use crate::database::pending_sender_resolution::PendingSenderResolutionPartition;
 use crate::database::resolution_keys::DaaResolutionLikeKey;
 use crate::database::skip_tx::SkipTxPartition;
 use crate::database::unknown_accepting_daa::{ResolutionEntries, UnknownAcceptingDaaPartition};
 use crate::database::unknown_tx::{UnknownTxPartition, UnknownTxUpdateAction};
+use crate::resolver::{ResolverRequest, ResolverResponse, SenderByTxIdAndDaa};
 use fjall::TxKeyspace;
-use kaspa_rpc_core::RpcTransactionId;
+use kaspa_rpc_core::{RpcAddress, RpcHash, RpcHeader, RpcTransactionId};
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
 use workflow_core::channel::{Receiver, Sender};
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub enum Notification {
     Tick,
     Shutdown,
+    ResolverResponse(ResolverResponse),
 }
 
 pub async fn run_ticker(
@@ -52,8 +52,9 @@ pub async fn run_ticker(
 }
 
 pub struct ScanWorker {
-    tick_tx: Receiver<Notification>,
+    tick_and_resolution_rx: Receiver<Notification>,
     job_done_tx: Sender<()>,
+    resolver_request_tx: Sender<ResolverRequest>,
     reorg_lock: Arc<Mutex<()>>, // its okay to merge unknown txs before or after reorg deletion but not in parallel
 
     tx_keyspace: TxKeyspace,
@@ -69,10 +70,16 @@ pub struct ScanWorker {
 impl ScanWorker {
     pub fn worker(&self) -> anyhow::Result<()> {
         loop {
-            match self.tick_tx.recv_blocking()? {
+            match self.tick_and_resolution_rx.recv_blocking()? {
                 Notification::Tick => {
                     self.tick_work()?;
                     self.job_done_tx.send_blocking(())?;
+                }
+                Notification::ResolverResponse(ResolverResponse::Block(r)) => {
+                    self.handle_daa_resolution(r)?;
+                }
+                Notification::ResolverResponse(ResolverResponse::Sender(r)) => {
+                    self.handle_sender_resolution(r)?;
                 }
                 Notification::Shutdown => {
                     info!("Shutting down scan worker");
@@ -89,11 +96,14 @@ impl ScanWorker {
         Ok(())
     }
 
-    pub fn handle_daa_resolution(&self) -> anyhow::Result<()> {
+    pub fn handle_daa_resolution(&self, R: Result<Box<RpcHeader>, RpcHash>) -> anyhow::Result<()> {
         todo!()
     }
 
-    pub fn handle_sender_resolution(&self) -> anyhow::Result<()> {
+    pub fn handle_sender_resolution(
+        &self,
+        r: Result<(RpcAddress, RpcTransactionId), SenderByTxIdAndDaa>,
+    ) -> anyhow::Result<()> {
         todo!()
     }
 
@@ -233,7 +243,10 @@ impl ScanWorker {
             {
                 None => {
                     warn!(block_hash = %block, "DAA score still not available for block");
-                    // todo send request to resolution task
+                    let _ = self
+                        .resolver_request_tx
+                        .send_blocking(ResolverRequest::BlockByHash(block))
+                        .inspect_err(|err| error!(""));
                 }
                 Some(daa) => {
                     info!(block_hash = %block, daa_score = %daa, "DAA score resolved for block");
