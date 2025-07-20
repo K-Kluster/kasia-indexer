@@ -11,8 +11,7 @@ use fjall::{ReadTransaction, TxKeyspace, WriteTransaction};
 use itertools::process_results;
 use kaspa_consensus_core::BlueWorkType;
 use kaspa_rpc_core::{
-    RpcAcceptedTransactionIds, RpcHash, RpcTransactionId,
-    VirtualChainChangedNotification,
+    RpcAcceptedTransactionIds, RpcHash, RpcTransactionId, VirtualChainChangedNotification,
 };
 use parking_lot::Mutex;
 use std::sync::Arc;
