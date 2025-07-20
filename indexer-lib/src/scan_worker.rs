@@ -1,15 +1,14 @@
 use crate::database::PartitionId;
-use crate::database::acceptance::{
-    AcceptingBlockResolutionData, TxIDToAcceptancePartition,
-};
+use crate::database::acceptance::{AcceptingBlockResolutionData, TxIDToAcceptancePartition};
 use crate::database::skip_tx::SkipTxPartition;
 use crate::database::unknown_accepting_daa::{ResolutionEntries, UnknownAcceptingDaaPartition};
 use crate::database::unknown_tx::{UnknownTxPartition, UnknownTxUpdateAction};
 use fjall::TxKeyspace;
+use kaspa_rpc_core::RpcTransactionId;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use workflow_core::channel::{Receiver, Sender};
 
 #[derive(Debug, Copy, Clone)]
@@ -168,17 +167,17 @@ impl ScanWorker {
                             processed_any = true;
                         }
                         AcceptingBlockResolutionData::None => {
-                            // todo warning
+                            warn!(tx_id = %RpcTransactionId::from_bytes(key.tx_id), "No resolution data found for transaction");
                         }
                     }
                 }
 
                 if !found_resolution {
+                    debug!(tx_id = %RpcTransactionId::from_bytes(*tx_id), "Keeping transaction in unknown state");
                     // Keep this transaction in unknown state
                     remaining_tx_ids.push(*tx_id);
                 }
             }
-
             // Update the entry for this accepting block hash using the new explicit enum
             if processed_any {
                 self.unknown_tx_partition.update_by_accepting_block_hash(
@@ -189,7 +188,7 @@ impl ScanWorker {
                             UnknownTxUpdateAction::Delete
                         } else {
                             warn!(
-                                "{} unknown transactions in accepting block {} ",
+                                "{} unknown transactions in accepting block {}",
                                 remaining_tx_ids.len(),
                                 accepting_block_hash
                             );
@@ -199,6 +198,7 @@ impl ScanWorker {
                 )?;
             }
             if !extended_daa_requests.is_empty() {
+                debug!(count = %extended_daa_requests.len(), %accepting_block_hash, "Extending DAA requests");
                 self.unknown_accepting_daa_partition
                     .extend_by_accepting_block_hash(
                         &mut wtx,

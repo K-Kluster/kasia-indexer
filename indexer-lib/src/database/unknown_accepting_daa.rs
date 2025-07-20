@@ -3,7 +3,7 @@ use crate::database::resolution_keys::{
     LikeContextualMessageKeyForResolution, LikeHandshakeKeyForResolution,
     LikePaymentKeyForResolution, PaymentKeyForResolution,
 };
-use anyhow::{Result};
+use anyhow::Result;
 use bytemuck::{AnyBitPattern, NoUninit};
 use fjall::{PartitionCreateOptions, ReadTransaction, UserValue, WriteTransaction};
 use kaspa_rpc_core::RpcHash;

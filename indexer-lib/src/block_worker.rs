@@ -138,7 +138,7 @@ impl BlockWorker {
                 self.handle_payment(wtx, block, tx, &tx_id, op)?;
             }
             None => {
-                trace!(%tx_id, "No valid sealed operation found, skipping");
+                debug!(%tx_id, "No valid sealed operation found, skipping");
                 self.skip_tx_partition.mark_skip(wtx, tx_id.as_bytes());
             }
         }

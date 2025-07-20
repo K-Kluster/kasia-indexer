@@ -11,11 +11,12 @@ use fjall::{ReadTransaction, TxKeyspace, WriteTransaction};
 use itertools::process_results;
 use kaspa_consensus_core::BlueWorkType;
 use kaspa_rpc_core::{
-    RpcAcceptedTransactionIds, RpcHash, RpcTransactionId, VirtualChainChangedNotification,
+    RpcAcceptedTransactionIds, RpcHash, RpcTransactionId,
+    VirtualChainChangedNotification,
 };
 use parking_lot::Mutex;
 use std::sync::Arc;
-use tracing::{info, trace};
+use tracing::{debug, info, trace, warn};
 
 pub struct VirtualChainChangedNotificationAndBlueWork {
     pub vcc: VirtualChainChangedNotification,
@@ -77,6 +78,7 @@ impl AcceptanceWorker {
         }: &VirtualChainChangedNotificationAndBlueWork,
     ) -> anyhow::Result<()> {
         if vcc.added_chain_block_hashes.is_empty() {
+            info!(added = %vcc.added_chain_block_hashes.len(), removed = %vcc.removed_chain_block_hashes.len(), "Handling VCC notification");
             // todo is it possible that vcc only has removals??
             return Ok(());
         }
@@ -85,6 +87,7 @@ impl AcceptanceWorker {
         vcc.removed_chain_block_hashes
             .iter()
             .try_for_each(|hash| -> anyhow::Result<()> {
+                debug!(%hash, "Handling chain block removal");
                 self.handle_chain_block_removal(&mut wtx, &rtx, hash)?;
                 Ok(())
             })?;
@@ -94,6 +97,7 @@ impl AcceptanceWorker {
                  accepted_transaction_ids,
              }|
              -> anyhow::Result<()> {
+                debug!(%accepting_block_hash, tx_count = %accepted_transaction_ids.len(), "Handling accepted block");
                 self.handle_accepted_block(
                     &mut wtx,
                     &rtx,
@@ -104,7 +108,7 @@ impl AcceptanceWorker {
             },
         )?;
         let last_block = vcc.added_chain_block_hashes.last().unwrap();
-        // todo add info log
+        info!(hash = %last_block, "Updating latest accepting block cursor");
         self.metadata_partition.set_latest_accepting_block_cursor(
             &mut wtx,
             Cursor {
@@ -213,12 +217,12 @@ impl AcceptanceWorker {
                         entries.push_payment(*tx_id, &pmk);
                     }
                     AcceptingBlockResolutionData::None => {
-                        // todo warning
+                        warn!(tx_id = %RpcTransactionId::from_bytes(key.tx_id), "No resolution data found for transaction");
                     }
                 }
             }
             if !is_required {
-                // todo add debug log
+                debug!(tx_id = %RpcTransactionId::from_bytes(*tx_id), %accepting_block_hash, "Marking transaction as unknown");
                 self.unknown_tx_partition
                     .mark_unknown(wtx, tx_id, *accepting_block_hash)?;
             }
