@@ -1,3 +1,4 @@
+use crate::APP_IS_RUNNING;
 use crate::database::PartitionId;
 use crate::database::acceptance::{AcceptingBlockResolutionData, TxIDToAcceptancePartition};
 use crate::database::block_compact_header::BlockCompactHeaderPartition;
@@ -16,11 +17,12 @@ use crate::database::resolution_keys::{DaaResolutionLikeKey, SenderResolutionLik
 use crate::database::skip_tx::SkipTxPartition;
 use crate::database::unknown_accepting_daa::{ResolutionEntries, UnknownAcceptingDaaPartition};
 use crate::database::unknown_tx::{UnknownTxPartition, UnknownTxUpdateAction};
-use crate::resolver::{ResolverRequest, ResolverResponse, SenderByTxIdAndDaa};
+use crate::resolver::{ResolverResponse, SenderByTxIdAndDaa};
 use fjall::TxKeyspace;
 use kaspa_rpc_core::{RpcAddress, RpcHash, RpcHeader, RpcTransactionId};
 use parking_lot::Mutex;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tracing::{debug, error, info, trace, warn};
 use workflow_core::channel::{Receiver, Sender};
@@ -53,7 +55,7 @@ pub async fn run_ticker(
                 need_to_send = true;
             }
             r = &mut shutdown => {
-                info!("Shutting down scan worker");
+                info!("Shutting down scan ticker");
                 r?;
                 return Ok(())
             }
@@ -61,10 +63,12 @@ pub async fn run_ticker(
     }
 }
 
+#[derive(bon::Builder)]
 pub struct ScanWorker {
     tick_and_resolution_rx: Receiver<Notification>,
     job_done_tx: Sender<()>,
-    resolver_request_tx: Sender<ResolverRequest>,
+    resolver_request_sender_tx: Sender<SenderByTxIdAndDaa>,
+    resolver_request_block_tx: Sender<RpcHash>,
     reorg_lock: Arc<Mutex<()>>, // its okay to merge unknown txs before or after reorg deletion but not in parallel
 
     tx_keyspace: TxKeyspace,
@@ -420,14 +424,18 @@ impl ScanWorker {
                 .get_daa_score_rtx(&rtx, &block)?
             {
                 None => {
-                    warn!(block_hash = %block, "DAA score still not available for block");
+                    debug!(block_hash = %block, "DAA score still not available for block");
                     let _ = self
-                        .resolver_request_tx
-                        .send_blocking(ResolverRequest::BlockByHash(block))
-                        .inspect_err(|err| error!("failed to send request to resolve: {}", err));
+                        .resolver_request_block_tx
+                        .send_blocking(block)
+                        .inspect_err(|err| {
+                            if APP_IS_RUNNING.load(Ordering::Relaxed) {
+                                error!("failed to send request to resolve: {}", err)
+                            }
+                        });
                 }
                 Some(daa) => {
-                    info!(block_hash = %block, daa_score = %daa, "DAA score resolved for block");
+                    debug!(block_hash = %block, daa_score = %daa, "DAA score resolved for block");
                     let entries = self
                         .unknown_accepting_daa_partition
                         .remove_by_accepting_block_hash(&mut wtx, block)?;
@@ -472,11 +480,11 @@ impl ScanWorker {
                 tx_id,
                 ..
             } = pending?;
-            self.resolver_request_tx
-                .send_blocking(ResolverRequest::SenderByTxIdAndDaa(SenderByTxIdAndDaa {
+            self.resolver_request_sender_tx
+                .send_blocking(SenderByTxIdAndDaa {
                     tx_id: RpcTransactionId::from_bytes(tx_id),
                     daa_score: u64::from_be_bytes(accepting_daa_score),
-                }))?
+                })?
         }
         Ok(())
     }

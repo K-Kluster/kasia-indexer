@@ -2,6 +2,7 @@ use crate::BlockOrMany;
 use crate::database::block_gaps::{BlockGap, BlockGapsPartition};
 use crate::historical_syncer::{Cursor, HistoricalDataSyncer};
 use crate::selected_chain_syncer::Intake;
+use anyhow::Context;
 use futures_util::future::FutureExt;
 use kaspa_rpc_core::api::ctl::RpcState;
 use kaspa_rpc_core::api::rpc::RpcApi;
@@ -46,6 +47,7 @@ impl Subscriber {
         shutdown_rx: tokio::sync::oneshot::Receiver<()>,
         block_gaps_partition: BlockGapsPartition,
         selected_chain_syncer: tokio::sync::mpsc::Sender<Intake>,
+        last_block_cursor: Option<Cursor>,
     ) -> Self {
         let notification_channel = Channel::bounded(256);
 
@@ -55,7 +57,7 @@ impl Subscriber {
             shutdown_rx,
             notification_channel,
             listener_id: None,
-            last_block_cursor: None,
+            last_block_cursor,
             historical_data_syncer_shutdown_tx: Vec::new(),
             block_gaps_partition,
             selected_chain_syncer,
@@ -238,13 +240,15 @@ impl Subscriber {
                 let cursor = block.header.as_ref().into();
                 self.block_handler
                     .send_async(BlockOrMany::Block(block))
-                    .await?;
+                    .await
+                    .context("block handler send failed")?;
                 self.last_block_cursor = Some(cursor);
             }
             Notification::VirtualChainChanged(vcc) => {
                 self.selected_chain_syncer
                     .send(Intake::VirtualChainChangedNotification(vcc))
-                    .await?;
+                    .await
+                    .context("block handler send failed")?;
             }
             _ => {
                 warn!("unknown notification: {:?}", notification)

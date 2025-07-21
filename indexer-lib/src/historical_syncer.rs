@@ -1,5 +1,6 @@
-use crate::BlockOrMany;
 use crate::database::block_gaps::{BlockGap, BlockGapsPartition};
+use crate::{APP_IS_RUNNING, BlockOrMany};
+use anyhow::bail;
 use itertools::FoldWhile::{Continue, Done};
 use itertools::Itertools;
 use kaspa_math::Uint192;
@@ -119,6 +120,9 @@ impl HistoricalDataSyncer {
         info!("Starting historical data synchronization");
 
         loop {
+            if !APP_IS_RUNNING.load(std::sync::atomic::Ordering::Relaxed) {
+                bail!("App is stopped");
+            }
             let fetch_next_batch = async || {
                 loop {
                     let Ok(blocks) = self
@@ -191,7 +195,6 @@ impl HistoricalDataSyncer {
                     to_blue_work: Some(self.target_cursor.blue_work),
                     to_block_hash: Some(self.target_cursor.hash),
                 };
-                // todo it could update gap at every iteration
                 task::spawn_blocking(move || gaps_partition.remove_gap(gap)).await??;
                 return Ok(());
             }

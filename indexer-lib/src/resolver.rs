@@ -1,4 +1,5 @@
-use flume::{Receiver, Sender};
+use crate::APP_IS_RUNNING;
+use anyhow::bail;
 use kaspa_rpc_core::api::ops::RpcApiOps;
 use kaspa_rpc_core::prelude::*;
 use kaspa_rpc_core::{
@@ -6,13 +7,8 @@ use kaspa_rpc_core::{
 };
 use kaspa_wrpc_client::KaspaRpcClient;
 use tracing::{debug, error, info};
+use workflow_core::channel::{Receiver, Sender};
 use workflow_serializer::serializer::Serializable;
-
-#[derive(Debug, Clone)]
-pub enum ResolverRequest {
-    BlockByHash(RpcHash),
-    SenderByTxIdAndDaa(SenderByTxIdAndDaa),
-}
 
 #[derive(Debug, Clone, Copy)]
 pub struct SenderByTxIdAndDaa {
@@ -27,19 +23,19 @@ pub enum ResolverResponse {
 }
 
 pub struct Resolver {
-    shutdown_rx: Receiver<()>,
+    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
     block_request_rx: Receiver<RpcHash>,
-    sender_request_rx: Receiver<(RpcTransactionId, u64)>,
+    sender_request_rx: Receiver<SenderByTxIdAndDaa>,
     kaspa_rpc_client: KaspaRpcClient,
-    response_tx: Sender<ResolverResponse>,
+    response_tx: Sender<crate::scan_worker::Notification>,
 }
 
 impl Resolver {
     pub fn new(
-        shutdown_rx: Receiver<()>,
+        shutdown_rx: tokio::sync::oneshot::Receiver<()>,
         block_request_rx: Receiver<RpcHash>,
-        sender_request_rx: Receiver<(RpcTransactionId, u64)>,
-        response_tx: Sender<ResolverResponse>,
+        sender_request_rx: Receiver<SenderByTxIdAndDaa>,
+        response_tx: Sender<crate::scan_worker::Notification>,
         kaspa_rpc_client: KaspaRpcClient,
     ) -> Self {
         Self {
@@ -51,26 +47,26 @@ impl Resolver {
         }
     }
 
-    pub async fn process(&self) -> anyhow::Result<()> {
+    pub async fn process(&mut self) -> anyhow::Result<()> {
         info!("Resolver started");
         loop {
-            match self.select_input()? {
-                Input::Shutdown => {
-                    info!("Resolver received shutdown signal, stopping.");
-                    return Ok(());
-                }
+            match self.select_input().await? {
                 Input::BlockRequest(hash) => {
                     debug!(%hash, "Received block resolution request");
                     match get_block_with_retries(&self.kaspa_rpc_client, hash).await {
                         Ok(block) => {
                             self.response_tx
-                                .send_async(ResolverResponse::Block(Ok(Box::new(block.header))))
+                                .send(crate::scan_worker::Notification::ResolverResponse(
+                                    ResolverResponse::Block(Ok(Box::new(block.header))),
+                                ))
                                 .await?;
                         }
                         Err(err) => {
                             error!(%err, "Failed to get block for hash: {hash}");
                             self.response_tx
-                                .send_async(ResolverResponse::Block(Err(hash)))
+                                .send(crate::scan_worker::Notification::ResolverResponse(
+                                    ResolverResponse::Block(Err(hash)),
+                                ))
                                 .await?;
                         }
                     }
@@ -86,38 +82,50 @@ impl Resolver {
                     {
                         Ok(sender) => {
                             self.response_tx
-                                .send_async(ResolverResponse::Sender(Ok((
-                                    sender,
-                                    SenderByTxIdAndDaa { tx_id, daa_score },
-                                ))))
+                                .send(crate::scan_worker::Notification::ResolverResponse(
+                                    ResolverResponse::Sender(Ok((
+                                        sender,
+                                        SenderByTxIdAndDaa { tx_id, daa_score },
+                                    ))),
+                                ))
                                 .await?;
                         }
                         Err(err) => {
                             error!(%err, "Failed to get sender for tx id: {tx_id} and daa score: {daa_score}");
                             self.response_tx
-                                .send_async(ResolverResponse::Sender(Err(SenderByTxIdAndDaa {
-                                    tx_id,
-                                    daa_score,
-                                })))
+                                .send(crate::scan_worker::Notification::ResolverResponse(
+                                    ResolverResponse::Sender(Err(SenderByTxIdAndDaa {
+                                        tx_id,
+                                        daa_score,
+                                    })),
+                                ))
                                 .await?;
                         }
                     }
+                }
+                Input::Shutdown => {
+                    info!("Resolver received shutdown signal, stopping.");
+                    return Ok(());
                 }
             }
         }
     }
 
-    fn select_input(&self) -> anyhow::Result<Input> {
-        flume::Selector::new()
-            .recv(&self.shutdown_rx, |_| Ok(Input::Shutdown))
-            .recv(&self.block_request_rx, |res| {
-                res.map(Input::BlockRequest).map_err(|e| e.into())
-            })
-            .recv(&self.sender_request_rx, |res| {
-                res.map(|(tx_id, daa_score)| Input::SenderRequest { tx_id, daa_score })
-                    .map_err(|e| e.into())
-            })
-            .wait()
+    async fn select_input(&mut self) -> anyhow::Result<Input> {
+        tokio::select! {
+            biased;
+            _ = &mut self.shutdown_rx => {
+                Ok(Input::Shutdown)
+            }
+            req = self.block_request_rx.recv() => {
+                Ok(Input::BlockRequest(req?))
+            }
+
+            req = self.sender_request_rx.recv() => {
+                let SenderByTxIdAndDaa{tx_id,daa_score} = req?;
+                Ok(Input::SenderRequest{tx_id, daa_score})
+            }
+        }
     }
 }
 
@@ -135,6 +143,9 @@ async fn get_block_with_retries(
     rpc_hash: RpcHash,
 ) -> anyhow::Result<RpcBlock> {
     loop {
+        if !APP_IS_RUNNING.load(std::sync::atomic::Ordering::Relaxed) {
+            bail!("App is stopped");
+        }
         if !client.is_connected() {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             continue;
@@ -166,6 +177,9 @@ async fn get_utxo_return_address_with_retries(
     accepting_block_daa_score: u64,
 ) -> anyhow::Result<RpcAddress> {
     loop {
+        if !APP_IS_RUNNING.load(std::sync::atomic::Ordering::Relaxed) {
+            bail!("App is stopped");
+        }
         if !client.is_connected() {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             continue;

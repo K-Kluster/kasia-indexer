@@ -2,6 +2,7 @@
 members = [
     "indexer-lib",
     "protocol",
+    "indexer",
 ]
 resolver = "3"
 
@@ -32,6 +33,7 @@ workflow-rpc = "0.18.0"
 workflow-serializer = "0.18.0"
 
 protocol = { path = "protocol" }
+indexer-lib = { path = "indexer-lib" }
 
 [patch.crates-io]
 kaspa-addresses = { git = "https://github.com/kaspanet/rusty-kaspa.git", tag = "v1.0.1" }

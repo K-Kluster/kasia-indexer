@@ -23,6 +23,7 @@ pub enum AcceptingBlockResolutionData {
     None,
 }
 
+#[derive(Clone)]
 pub struct AcceptingBlockToTxIDPartition(fjall::TxPartition);
 
 impl AcceptingBlockToTxIDPartition {
@@ -114,6 +115,7 @@ impl<T: AsRef<[u8]>> Deref for LikeAcceptanceTxKey<T> {
     }
 }
 
+#[derive(Clone)]
 pub struct TxIDToAcceptancePartition(fjall::TxPartition);
 
 impl TxIDToAcceptancePartition {

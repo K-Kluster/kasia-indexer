@@ -1,7 +1,9 @@
+use crate::APP_IS_RUNNING;
 use crate::acceptance_worker::VirtualChainChangedNotificationAndBlueWork;
 use crate::database::block_compact_header::BlockCompactHeaderPartition;
 use crate::database::metadata::MetadataPartition;
 use crate::historical_syncer::Cursor;
+use anyhow::bail;
 use kaspa_consensus_core::BlueWorkType;
 use kaspa_rpc_core::VirtualChainChangedNotification;
 use kaspa_rpc_core::api::rpc::RpcApi;
@@ -70,6 +72,8 @@ pub struct SelectedChainSyncer {
     historical_sync_done_tx: tokio::sync::mpsc::Sender<HistoricalSyncResult>,
     worker_sender: flume::Sender<VirtualChainChangedNotificationAndBlueWork>,
     shutdown: tokio::sync::oneshot::Receiver<()>,
+
+    queue_pow: u32,
 }
 
 impl SelectedChainSyncer {
@@ -92,6 +96,7 @@ impl SelectedChainSyncer {
             historical_sync_done_tx,
             worker_sender,
             shutdown,
+            queue_pow: 10,
         }
     }
 
@@ -104,21 +109,18 @@ impl SelectedChainSyncer {
         loop {
             tokio::select! {
                 biased;
-
-                _ = &mut self.shutdown => {
-                    return self.handle_shutdown(&mut state).await;
-                }
-
                 sync_result = self.historical_sync_done_rx.recv() => {
                     self.handle_sync_result(&mut state, sync_result).await?;
                 }
-
                 intake = self.intake_rx.recv() => {
                     let Some(intake) = intake else {
                         warn!("Selected chain syncer intake channel closed");
                         return self.handle_shutdown(&mut state).await
                     };
                     self.handle_intake(&mut state, intake).await?;
+                }
+                _ = &mut self.shutdown => {
+                    return self.handle_shutdown(&mut state).await;
                 }
             }
         }
@@ -214,10 +216,6 @@ impl SelectedChainSyncer {
             Some(HistoricalSyncResult::Interrupted {
                 last_processed_block,
             }) => {
-                info!(
-                    "Historical sync interrupted at block: {:?}",
-                    last_processed_block
-                );
                 state.is_synced = false;
                 state.clear_historical_task();
                 self.handle_interruption(state, last_processed_block)
@@ -231,7 +229,7 @@ impl SelectedChainSyncer {
         Ok(())
     }
 
-    async fn handle_intake(&self, state: &mut SyncState, intake: Intake) -> anyhow::Result<()> {
+    async fn handle_intake(&mut self, state: &mut SyncState, intake: Intake) -> anyhow::Result<()> {
         match intake {
             Intake::Disconnect => {
                 self.handle_disconnect(state).await;
@@ -260,6 +258,9 @@ impl SelectedChainSyncer {
 
         // Keep trying to initialize sync until it succeeds
         loop {
+            if !APP_IS_RUNNING.load(std::sync::atomic::Ordering::Relaxed) {
+                bail!("App is stopped");
+            }
             if let Err(e) = self.try_initialize_sync(state).await {
                 error!(
                     "Failed to initialize sync on connection: {}, retrying in 5 seconds",
@@ -275,7 +276,7 @@ impl SelectedChainSyncer {
     }
 
     async fn handle_vcc_notification(
-        &self,
+        &mut self,
         state: &mut SyncState,
         vcc: VirtualChainChangedNotification,
     ) -> anyhow::Result<()> {
@@ -303,11 +304,12 @@ impl SelectedChainSyncer {
                 });
 
             // Warn about queue growth but don't limit it - we need all notifications for sync correctness
-            if state.vcc_queue.len() > 1000 {
+            if state.vcc_queue.len() > 2u32.pow(self.queue_pow) as usize {
                 warn!(
                     "VCC queue size is large: {} notifications queued",
                     state.vcc_queue.len()
                 );
+                self.queue_pow += 1;
             }
         }
         Ok(())
@@ -402,10 +404,7 @@ impl SelectedChainSyncer {
             hash: sink_hash,
         };
 
-        info!(
-            "Spawning historical syncer: from={:?} to={:?}",
-            from, target
-        );
+        info!("Selected chain syncer: from={:?} to={:?}", from, target);
 
         let (interrupt_tx, interrupt_rx) = tokio::sync::oneshot::channel();
         let mut syncer = HistoricalSyncer::new(
@@ -516,6 +515,9 @@ impl HistoricalSyncer {
         >,
         current: &mut Cursor,
     ) -> anyhow::Result<Option<HistoricalSyncResult>> {
+        if !APP_IS_RUNNING.load(std::sync::atomic::Ordering::Relaxed) {
+            bail!("App is stopped");
+        }
         let vcc_response = match vcc_result {
             Ok(vcc) => vcc,
             Err(_) => {
@@ -586,6 +588,9 @@ impl HistoricalSyncer {
         match local_blue_work {
             Some(blue_work) => Ok(blue_work),
             None => loop {
+                if !APP_IS_RUNNING.load(std::sync::atomic::Ordering::Relaxed) {
+                    bail!("App is stopped");
+                }
                 // TODO: Add proper error handling with HistoricalSyncResult::Failed variant
                 // to avoid infinite retry loops and allow graceful failure handling
                 match self.rpc_client.get_block(block_hash, false).await {

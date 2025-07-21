@@ -2,6 +2,9 @@ use kaspa_rpc_core::RpcBlock;
 use std::ops::Deref;
 use std::slice;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+
+pub static APP_IS_RUNNING: AtomicBool = AtomicBool::new(true);
 
 pub mod fifo_set;
 pub mod historical_syncer;

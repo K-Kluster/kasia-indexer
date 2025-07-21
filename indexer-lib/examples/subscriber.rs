@@ -117,6 +117,7 @@ async fn run_subscriber() -> anyhow::Result<()> {
             shutdown_rx,
             block_gaps_partition,
             intake_tx,
+            None,
         );
         if let Err(e) = subscriber.task().await {
             error!("Subscriber task failed: {}", e);

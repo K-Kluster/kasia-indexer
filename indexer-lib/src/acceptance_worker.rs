@@ -24,6 +24,7 @@ pub struct VirtualChainChangedNotificationAndBlueWork {
     pub last_block_blue_work: BlueWorkType,
 }
 
+#[derive(bon::Builder)]
 pub struct AcceptanceWorker {
     daa_resolution_attempt_count: u8,
     reorg_log: Arc<Mutex<()>>, // during reorg we should not merge unknown tx into other partitions
@@ -113,7 +114,7 @@ impl AcceptanceWorker {
             },
         )?;
         let last_block = vcc.added_chain_block_hashes.last().unwrap();
-        info!(hash = %last_block, "Updating latest accepting block cursor");
+        debug!(hash = %last_block, "Updating latest accepting block cursor");
         self.metadata_partition.set_latest_accepting_block_cursor(
             &mut wtx,
             Cursor {

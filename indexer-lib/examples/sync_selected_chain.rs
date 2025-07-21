@@ -82,6 +82,7 @@ async fn run_selected_chain_syncer() -> anyhow::Result<()> {
             subscriber_shutdown_rx,
             block_gaps_partition,
             intake_tx,
+            None,
         );
         if let Err(e) = subscriber.task().await {
             error!("Subscriber task failed: {}", e);

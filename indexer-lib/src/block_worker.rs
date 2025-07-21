@@ -82,7 +82,7 @@ impl BlockWorker {
     }
 
     fn handle_blocks(&mut self, blocks: &[RpcBlock]) -> anyhow::Result<()> {
-        info!("Received {} blocks for processing", blocks.len());
+        debug!("Received {} blocks for processing", blocks.len());
         for block in blocks {
             let hash = &block.header.hash;
             if self.processed_blocks.contains(hash) {

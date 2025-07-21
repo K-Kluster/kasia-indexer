@@ -1436,6 +1436,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "indexer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fjall",
+ "flume",
+ "indexer-lib",
+ "kaspa-wrpc-client",
+ "parking_lot",
+ "rolling-file",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "workflow-core",
+]
+
+[[package]]
 name = "indexer-lib"
 version = "0.1.0"
 dependencies = [
@@ -2971,6 +2988,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7043b63bd0cd1aaa628e476b80e6d4023a3b50eb32789f2728908107bd0c793a"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "rolling-file"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8395b4f860856b740f20a296ea2cd4d823e81a2658cf05ef61be22916026a906"
+dependencies = [
+ "chrono",
 ]
 
 [[package]]

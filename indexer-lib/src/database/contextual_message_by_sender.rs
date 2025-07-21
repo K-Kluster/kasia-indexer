@@ -143,44 +143,6 @@ impl ContextualMessageBySenderPartition {
             ))
         })
     }
-    // todo fix me
-    // /// Get all contextual messages for a sender and alias prefix (REST API support)
-    // pub fn get_by_sender_and_alias_prefix(
-    //     &self,
-    //     rtx: &ReadTransaction,
-    //     sender: AddressPayload,
-    //     alias_prefix: &[u8],
-    // ) -> Result<impl DoubleEndedIterator<Item = Result<(LikeContextualMessageBySenderKey<UserKey>, Vec<u8>)>> + '_> {
-    //     if alias_prefix.len() > 16 {
-    //         bail!("Alias prefix length cannot exceed 16 bytes, got {}", alias_prefix.len());
-    //     }
-    //
-    //     let mut alias_bytes = [0u8; 16];
-    //     alias_bytes[..alias_prefix.len()].copy_from_slice(alias_prefix);
-    //
-    //     let prefix_key = ContextualMessageBySenderKey {
-    //         sender,
-    //         alias: alias_bytes,
-    //         block_time: [0u8; 8],
-    //         block_hash: [0u8; 32],
-    //         version: 0,
-    //         tx_id: [0u8; 32],
-    //     };
-    //
-    //     // Create prefix: sender + alias prefix
-    //     let prefix_len = 34 + alias_prefix.len(); // AddressPayload + actual alias prefix length
-    //     let prefix = &bytemuck::bytes_of(&prefix_key)[..prefix_len];
-    //
-    //     Ok(rtx.prefix(&self.0, prefix)
-    //         .map(|item| {
-    //             let (key_bytes, value_bytes) = item?;
-    //             Ok((
-    //                 LikeContextualMessageBySenderKey::new(key_bytes),
-    //                 value_bytes.to_vec(),
-    //             ))
-    //         }))
-    // }
-
     /// Get all contextual messages (for admin/debug purposes)
     pub fn get_all(
         &self,

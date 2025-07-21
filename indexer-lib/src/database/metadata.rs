@@ -3,6 +3,7 @@ use anyhow::{Result, bail};
 use bytemuck::{AnyBitPattern, NoUninit};
 use fjall::{CompressionType, PartitionCreateOptions, ReadTransaction, WriteTransaction};
 use std::cmp::Ordering;
+use tracing::warn;
 
 /// Metadata partition for storing latest known cursors
 /// Key: enum of metadata types
@@ -32,13 +33,7 @@ impl MetadataPartition {
                 PartitionCreateOptions::default()
                     .block_size(1024)
                     .max_memtable_size(128)
-                    .compression(CompressionType::None)
-                    .compaction_strategy(fjall::compaction::Strategy::Fifo(
-                        fjall::compaction::Fifo {
-                            limit: 1024,
-                            ttl_seconds: None,
-                        },
-                    )),
+                    .compression(CompressionType::None),
             )?,
         ))
     }
@@ -137,6 +132,7 @@ impl MetadataPartition {
                 bail!("Invalid cursor value size")
             }
         } else {
+            warn!("Latest accepting block cursor not found");
             Ok(None)
         }
     }
