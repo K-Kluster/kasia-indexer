@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-kaspa-consensus-core.workspace = true
 anyhow.workspace = true
 bon.workspace = true
 bytemuck = { workspace = true, features = ["latest_stable_rust"]}
@@ -13,6 +12,7 @@ flume.workspace = true
 futures-util.workspace = true
 itertools.workspace = true
 kaspa-addresses.workspace = true
+kaspa-consensus-core.workspace = true
 kaspa-math.workspace = true
 kaspa-rpc-core.workspace = true
 kaspa-txscript.workspace = true
@@ -22,6 +22,8 @@ ringmap.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 tracing.workspace = true
 workflow-core.workspace = true
+workflow-rpc.workspace = true
+workflow-serializer.workspace = true
 
 protocol.workspace = true
 

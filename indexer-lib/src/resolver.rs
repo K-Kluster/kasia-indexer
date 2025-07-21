@@ -1,8 +1,12 @@
 use flume::{Receiver, Sender};
-use kaspa_rpc_core::api::rpc::RpcApi;
-use kaspa_rpc_core::{RpcAddress, RpcHash, RpcHeader, RpcTransactionId};
+use kaspa_rpc_core::api::ops::RpcApiOps;
+use kaspa_rpc_core::prelude::*;
+use kaspa_rpc_core::{
+    GetBlockRequest, GetBlockResponse, RpcAddress, RpcBlock, RpcHash, RpcHeader, RpcTransactionId,
+};
 use kaspa_wrpc_client::KaspaRpcClient;
 use tracing::{debug, error, info};
+use workflow_serializer::serializer::Serializable;
 
 #[derive(Debug, Clone)]
 pub enum ResolverRequest {
@@ -57,14 +61,13 @@ impl Resolver {
                 }
                 Input::BlockRequest(hash) => {
                     debug!(%hash, "Received block resolution request");
-                    match self.kaspa_rpc_client.get_block(hash, false).await {
+                    match get_block_with_retries(&self.kaspa_rpc_client, hash).await {
                         Ok(block) => {
                             self.response_tx
                                 .send_async(ResolverResponse::Block(Ok(Box::new(block.header))))
                                 .await?;
                         }
                         Err(err) => {
-                            // todo there is no way to distinguish rpc error from app level ='(
                             error!(%err, "Failed to get block for hash: {hash}");
                             self.response_tx
                                 .send_async(ResolverResponse::Block(Err(hash)))
@@ -74,10 +77,12 @@ impl Resolver {
                 }
                 Input::SenderRequest { tx_id, daa_score } => {
                     debug!(%tx_id, %daa_score, "Received sender resolution request");
-                    match self
-                        .kaspa_rpc_client
-                        .get_utxo_return_address(tx_id, daa_score)
-                        .await
+                    match get_utxo_return_address_with_retries(
+                        &self.kaspa_rpc_client,
+                        tx_id,
+                        daa_score,
+                    )
+                    .await
                     {
                         Ok(sender) => {
                             self.response_tx
@@ -88,7 +93,6 @@ impl Resolver {
                                 .await?;
                         }
                         Err(err) => {
-                            // todo there is no way to distinguish rpc error from app level ='(
                             error!(%err, "Failed to get sender for tx id: {tx_id} and daa score: {daa_score}");
                             self.response_tx
                                 .send_async(ResolverResponse::Sender(Err(SenderByTxIdAndDaa {
@@ -124,4 +128,70 @@ enum Input {
         tx_id: RpcTransactionId,
         daa_score: u64,
     },
+}
+
+async fn get_block_with_retries(
+    client: &KaspaRpcClient,
+    rpc_hash: RpcHash,
+) -> anyhow::Result<RpcBlock> {
+    loop {
+        if !client.is_connected() {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            continue;
+        }
+        match client
+            .rpc_client()
+            .call(
+                RpcApiOps::GetBlock,
+                Serializable(GetBlockRequest::new(rpc_hash, false)),
+            )
+            .await
+        {
+            Ok(Serializable(GetBlockResponse { block })) => return Ok(block),
+            Err(
+                workflow_rpc::client::error::Error::Disconnect
+                | workflow_rpc::client::error::Error::Timeout,
+            ) => {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                continue;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+async fn get_utxo_return_address_with_retries(
+    client: &KaspaRpcClient,
+    txid: RpcHash,
+    accepting_block_daa_score: u64,
+) -> anyhow::Result<RpcAddress> {
+    loop {
+        if !client.is_connected() {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            continue;
+        }
+        match client
+            .rpc_client()
+            .call(
+                RpcApiOps::GetUtxoReturnAddress,
+                Serializable(GetUtxoReturnAddressRequest::new(
+                    txid,
+                    accepting_block_daa_score,
+                )),
+            )
+            .await
+        {
+            Ok(Serializable(GetUtxoReturnAddressResponse { return_address })) => {
+                return Ok(return_address);
+            }
+            Err(
+                workflow_rpc::client::error::Error::Disconnect
+                | workflow_rpc::client::error::Error::Timeout,
+            ) => {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                continue;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
 }
