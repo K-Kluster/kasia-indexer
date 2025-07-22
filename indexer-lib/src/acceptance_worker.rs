@@ -175,7 +175,7 @@ impl AcceptanceWorker {
         let filtered = process_results(
             tx_id_s.iter().map(|tx_id| {
                 self.skip_tx_partition
-                    .should_skip_wtx(wtx, tx_id.as_bytes())
+                    .should_skip(rtx, tx_id.as_ref())
                     .map(|skip| (tx_id, skip))
             }),
             |iter| {

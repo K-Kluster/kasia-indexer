@@ -231,6 +231,7 @@ impl BlockWorker {
         };
         self.tx_id_to_acceptance_partition
             .insert_contextual_message_wtx(wtx, tx_id.as_bytes(), &cmk_for_resolution, None, None);
+        self.metrics.increment_contextual_messages_count();
         Ok(())
     }
 

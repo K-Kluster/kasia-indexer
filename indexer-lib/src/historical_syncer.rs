@@ -187,13 +187,14 @@ impl HistoricalDataSyncer {
                 };
 
                 info!(
-                    "Sync progress: {}% ({}/{} batches, {} total blocks), current blue work: {}, target blue work: {}",
+                    current_block = %self.current_cursor.hash,
+                    current_blue_work = %current_blue_work,
+                    target_block = %self.target_cursor.hash,
+                    target_blue_work = %target_blue_work,
+                    "Sync progress: {}% ({} batches processed, {} blocks processed)",
                     percentage,
                     self.batches_processed,
                     self.total_blocks_processed,
-                    self.total_blocks_processed,
-                    self.current_cursor.blue_work,
-                    self.target_cursor.blue_work,
                 );
             }
 

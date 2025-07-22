@@ -125,13 +125,12 @@ impl Resolver {
             _ = &mut self.shutdown_rx => {
                 Ok(Input::Shutdown)
             }
-            req = self.block_request_rx.recv() => {
-                Ok(Input::BlockRequest(req?))
-            }
-
             req = self.sender_request_rx.recv() => {
                 let SenderByTxIdAndDaa{tx_id,daa_score} = req?;
                 Ok(Input::SenderRequest{tx_id, daa_score})
+            }
+            req = self.block_request_rx.recv() => {
+                Ok(Input::BlockRequest(req?))
             }
         }
     }

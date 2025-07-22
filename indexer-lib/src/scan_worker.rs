@@ -139,10 +139,6 @@ impl ScanWorker {
             .set_payments_by_receiver(self.tx_id_to_payment_partition.approximate_len() as u64);
         self.metrics
             .set_payments_by_sender(self.payment_by_sender_partition.approximate_len() as u64);
-        self.metrics.set_contextual_messages(
-            self.contextual_message_by_sender_partition
-                .approximate_len() as u64,
-        );
         self.metrics.set_latest_block(
             self.metadata_partition
                 .get_latest_block_cursor()?

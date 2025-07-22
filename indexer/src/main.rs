@@ -79,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
         handshakes_by_receiver: tx_id_to_handshake_partition.approximate_len() as u64,
         payments_by_sender: payment_by_sender_partition.approximate_len() as u64,
         payments_by_receiver: tx_id_to_payment_partition.approximate_len() as u64,
-        contextual_messages: contextual_message_partition.approximate_len() as u64,
+        contextual_messages: contextual_message_partition.len()? as u64,
         blocks_processed: block_compact_header_partition.len()? as u64,
         latest_block: metadata_partition
             .get_latest_block_cursor_rtx(&tx_keyspace.read_tx())?

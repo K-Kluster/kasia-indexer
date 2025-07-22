@@ -13,7 +13,6 @@ use std::ops::Deref;
 /// Designed for REST API prefix search by sender, alias, time
 #[derive(Clone)]
 pub struct ContextualMessageBySenderPartition(fjall::TxPartition);
-
 #[derive(Clone, Copy, Debug, AnyBitPattern, NoUninit, PartialEq, Eq)]
 #[repr(C)]
 pub struct ContextualMessageBySenderKey {
@@ -63,8 +62,12 @@ impl ContextualMessageBySenderPartition {
         )?))
     }
 
-    pub fn approximate_len(&self) -> usize {
-        self.0.approximate_len()
+    pub fn len(&self) -> Result<usize> {
+        Ok(self.0.inner().len()?)
+    }
+
+    pub fn is_empty(&self) -> Result<bool> {
+        Ok(self.0.inner().is_empty()?)
     }
 
     /// Insert a contextual message

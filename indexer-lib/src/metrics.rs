@@ -57,8 +57,8 @@ impl Display for IndexerMetricsSnapshot {
             "  Unknown sender entries: {}",
             self.unknown_sender_entries
         )?;
-        writeln!(f, " Resolved DAA entries: {}", self.resolved_daa)?;
-        writeln!(f, " Resolved senders: {}", self.resolved_senders)
+        writeln!(f, "  Resolved DAA entries: {}", self.resolved_daa)?;
+        writeln!(f, "  Resolved senders: {}", self.resolved_senders)
     }
 }
 
@@ -165,8 +165,8 @@ impl IndexerMetrics {
     }
 
     /// Update contextual messages count
-    pub fn set_contextual_messages(&self, count: u64) {
-        self.contextual_messages.store(count, Ordering::Relaxed);
+    pub fn increment_contextual_messages_count(&self) {
+        self.contextual_messages.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Increment blocks processed count by 1
