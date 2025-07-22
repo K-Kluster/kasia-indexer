@@ -2,11 +2,13 @@ use fjall::Config;
 use indexer_lib::database::block_gaps::BlockGap;
 use indexer_lib::fifo_set::FifoSet;
 use indexer_lib::historical_syncer::{Cursor, HistoricalDataSyncer};
+use indexer_lib::metrics::IndexerMetricsSnapshot;
 use indexer_lib::scan_worker::Notification;
 use indexer_lib::{
     acceptance_worker::{self},
     block_worker::BlockWorker,
     database::{self},
+    metrics::create_shared_metrics_from_snapshot,
     resolver::Resolver,
     scan_worker::{self, run_ticker},
     selected_chain_syncer::SelectedChainSyncer,
@@ -36,9 +38,13 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::new(&db_path);
     let tx_keyspace = config.open_transactional()?;
     let reorg_lock = Arc::new(Mutex::new(()));
-
     // Partitions
     let metadata_partition = database::metadata::MetadataPartition::new(&tx_keyspace)?;
+    {
+        // compact metadata at restart/start. todo move to periodic job
+        metadata_partition.0.inner().major_compact()?;
+    }
+
     let handshake_by_receiver_partition =
         database::handshake::HandshakeByReceiverPartition::new(&tx_keyspace)?;
     let tx_id_to_handshake_partition =
@@ -68,8 +74,32 @@ async fn main() -> anyhow::Result<()> {
         database::payment::PaymentBySenderPartition::new(&tx_keyspace)?;
     let block_gaps_partition = database::block_gaps::BlockGapsPartition::new(&tx_keyspace)?;
 
-    let (block_intake_tx, block_intake_rx) = flume::bounded(255);
-    let (vcc_intake_tx, vcc_intake_rx) = flume::bounded(255);
+    let metrics = create_shared_metrics_from_snapshot(IndexerMetricsSnapshot {
+        handshakes_by_sender: handshake_by_sender_partition.approximate_len() as u64,
+        handshakes_by_receiver: tx_id_to_handshake_partition.approximate_len() as u64,
+        payments_by_sender: payment_by_sender_partition.approximate_len() as u64,
+        payments_by_receiver: tx_id_to_payment_partition.approximate_len() as u64,
+        contextual_messages: contextual_message_partition.approximate_len() as u64,
+        blocks_processed: block_compact_header_partition.len()? as u64,
+        latest_block: metadata_partition
+            .get_latest_block_cursor_rtx(&tx_keyspace.read_tx())?
+            .unwrap_or_default()
+            .hash,
+        latest_accepting_block: metadata_partition
+            .get_latest_accepting_block_cursor()?
+            .unwrap_or_default()
+            .hash,
+        unknown_daa_entries: unknown_accepting_daa_partition.len()? as u64,
+        unknown_sender_entries: pending_sender_resolution_partition.len()? as u64,
+        resolved_daa: 0,
+        resolved_senders: 0,
+    });
+
+    // let (block_intake_tx, block_intake_rx) = flume::bounded(255);
+    let (block_intake_tx, block_intake_rx) = flume::unbounded();
+    let (vcc_intake_tx, vcc_intake_rx) = flume::unbounded();
+
+    // let (vcc_intake_tx, vcc_intake_rx) = flume::bounded(255);
     let (shutdown_block_worker_tx, shutdown_block_worker_rx) = flume::bounded(1);
     let (shutdown_acceptance_worker_tx, shutdown_acceptance_worker_rx) = flume::bounded(1);
 
@@ -89,6 +119,7 @@ async fn main() -> anyhow::Result<()> {
         .tx_id_to_acceptance_partition(tx_id_to_acceptance_partition.clone())
         .skip_tx_partition(skip_tx_partition.clone())
         .block_compact_header_partition(block_compact_header_partition.clone())
+        .metrics(metrics.clone())
         .build();
 
     let mut acceptance_worker = acceptance_worker::AcceptanceWorker::builder()
@@ -108,10 +139,13 @@ async fn main() -> anyhow::Result<()> {
         .build();
 
     let (resolver_block_request_tx, resolver_block_request_rx) =
-        workflow_core::channel::bounded(255);
+        // workflow_core::channel::bounded(255);
+        workflow_core::channel::unbounded();
     let (resolver_sender_request_tx, resolver_sender_request_rx) =
-        workflow_core::channel::bounded(255);
-    let (resolver_response_tx, resolver_response_rx) = workflow_core::channel::bounded(255);
+        // workflow_core::channel::bounded(1024);
+        workflow_core::channel::unbounded();
+    // let (resolver_response_tx, resolver_response_rx) = workflow_core::channel::bounded(255);
+    let (resolver_response_tx, resolver_response_rx) = workflow_core::channel::unbounded();
     let (shutdown_resolver_tx, shutdown_resolver_rx) = tokio::sync::oneshot::channel();
 
     let mut resolver = Resolver::new(
@@ -122,9 +156,9 @@ async fn main() -> anyhow::Result<()> {
         rpc_client.clone(),
     );
 
-    let (scan_worker_job_done_tx, scan_worker_job_done_rx) = workflow_core::channel::unbounded();
+    let (scan_worker_job_done_tx, scan_worker_job_done_rx) = workflow_core::channel::bounded(1);
 
-    let scan_worker = scan_worker::ScanWorker::builder()
+    let mut scan_worker = scan_worker::ScanWorker::builder()
         .tick_and_resolution_rx(resolver_response_rx)
         .resolver_request_block_tx(resolver_block_request_tx)
         .resolver_request_sender_tx(resolver_sender_request_tx)
@@ -143,6 +177,12 @@ async fn main() -> anyhow::Result<()> {
         .contextual_message_by_sender_partition(contextual_message_partition.clone())
         .payment_by_receiver_partition(payment_by_receiver_partition.clone())
         .payment_by_sender_partition(payment_by_sender_partition.clone())
+        .tx_id_to_payment_partition(tx_id_to_payment_partition.clone())
+        .tx_id_to_handshake_partition(tx_id_to_handshake_partition.clone())
+        .metrics(metrics)
+        .metrics_snapshot_interval(Duration::from_secs(10))
+        .last_metrics_snapshot_time(std::time::Instant::now())
+        .metadata_partition(metadata_partition.clone())
         .build();
 
     let (selected_chain_intake_tx, selected_chain_intake_rx) = tokio::sync::mpsc::channel(128);
@@ -168,7 +208,7 @@ async fn main() -> anyhow::Result<()> {
         shutdown_subscriber_rx,
         block_gaps_partition.clone(),
         selected_chain_intake_tx,
-        metadata_partition.get_latest_block_cursor(&tx_keyspace.read_tx())?,
+        metadata_partition.get_latest_block_cursor_rtx(&tx_keyspace.read_tx())?,
     );
 
     let (shutdown_ticker_tx, shutdown_ticker_rx) = tokio::sync::oneshot::channel();
@@ -180,9 +220,26 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     // Spawn workers
-    let block_worker_handle = std::thread::spawn(move || block_worker.process());
-    let acceptance_worker_handle = std::thread::spawn(move || acceptance_worker.process());
-    let scan_worker_handle = std::thread::spawn(move || scan_worker.worker());
+    let block_worker_handle = std::thread::spawn(move || {
+        block_worker
+            .process()
+            .inspect(|_| info!("block worker has stopped"))
+            .inspect_err(|err| error!("block worker stopped with error: {err}"))
+    });
+    let acceptance_worker_handle = std::thread::spawn(move || {
+        acceptance_worker
+            .process()
+            .inspect(|_| info!("acceptance worker has stopped"))
+            .inspect_err(|err| error!("acceptance worker stopped with error: {err}"))
+    });
+    let scan_worker_handle = std::thread::spawn(move || {
+        scan_worker
+            .worker()
+            .inspect_err(|err| {
+                error!("scan worker stopped with error: {err}");
+            })
+            .inspect(|_| info!("scan worker has stopped"))
+    });
 
     let resolver_handle = tokio::spawn(async move { resolver.process().await });
     let selected_chain_syncer_handle =
@@ -199,7 +256,7 @@ async fn main() -> anyhow::Result<()> {
             .await
             .map_err(|e| anyhow::anyhow!("Failed to connect to node: {}", e))?;
         if metadata_partition
-            .get_latest_block_cursor(&tx_keyspace.read_tx())?
+            .get_latest_block_cursor_rtx(&tx_keyspace.read_tx())?
             .is_none()
         {
             let data = tmp_rpc_client.get_block_dag_info().await?;
@@ -331,18 +388,15 @@ async fn main() -> anyhow::Result<()> {
     info!("waiting for acceptance worker finish");
     _ = acceptance_worker_handle
         .join()
-        .expect("failed to join acceptance worker")
-        .inspect(|_| info!("acceptance worker has stopped")); // todo logs
+        .expect("failed to join acceptance worker"); // todo logs
     info!("waiting for scan worker finish");
     _ = scan_worker_handle
         .join()
-        .expect("failed to join scan_worker thread")
-        .inspect(|_| info!("scan worker has stopped")); // todo logs
+        .expect("failed to join scan_worker thread"); // todo logs
     info!("waiting for block worker finish");
     _ = block_worker_handle
         .join()
-        .expect("failed to join block_worker thread")
-        .inspect(|_| info!("block worker has stopped")); // todo logs
+        .expect("failed to join block_worker thread"); // todo logs
 
     info!("All tasks shut down.");
 

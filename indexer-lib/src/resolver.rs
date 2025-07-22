@@ -105,6 +105,14 @@ impl Resolver {
                 }
                 Input::Shutdown => {
                     info!("Resolver received shutdown signal, stopping.");
+                    while !self.block_request_rx.is_empty() {
+                        _ = self.block_request_rx.try_recv();
+                    }
+                    while !self.sender_request_rx.is_empty() {
+                        _ = self.sender_request_rx.try_recv();
+                    }
+                    info!("drainin all requests is done");
+
                     return Ok(());
                 }
             }

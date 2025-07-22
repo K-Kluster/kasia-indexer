@@ -9,7 +9,7 @@ use tracing::warn;
 /// Key: enum of metadata types
 /// Value: cursor data (blue work + block hash)
 #[derive(Clone)]
-pub struct MetadataPartition(fjall::TxPartition);
+pub struct MetadataPartition(pub fjall::TxPartition);
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -63,9 +63,28 @@ impl MetadataPartition {
     }
 
     /// Get latest block cursor
-    pub fn get_latest_block_cursor(&self, rtx: &ReadTransaction) -> Result<Option<Cursor>> {
+    pub fn get_latest_block_cursor_rtx(&self, rtx: &ReadTransaction) -> Result<Option<Cursor>> {
         let key = [MetadataKey::LatestBlockCursor as u8];
         if let Some(bytes) = rtx.get(&self.0, key)? {
+            if bytes.len() == 56 {
+                // 24 + 32
+                let value: CursorValue = *bytemuck::from_bytes(&bytes);
+                Ok(Some(Cursor {
+                    blue_work: kaspa_math::Uint192::from_be_bytes(value.blue_work),
+                    hash: kaspa_rpc_core::RpcHash::from_slice(&value.block_hash),
+                }))
+            } else {
+                bail!("Invalid cursor value size")
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Get latest block cursor
+    pub fn get_latest_block_cursor(&self) -> Result<Option<Cursor>> {
+        let key = [MetadataKey::LatestBlockCursor as u8];
+        if let Some(bytes) = self.0.get(key)? {
             if bytes.len() == 56 {
                 // 24 + 32
                 let value: CursorValue = *bytemuck::from_bytes(&bytes);

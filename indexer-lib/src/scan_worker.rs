@@ -3,10 +3,13 @@ use crate::database::PartitionId;
 use crate::database::acceptance::{AcceptingBlockResolutionData, TxIDToAcceptancePartition};
 use crate::database::block_compact_header::BlockCompactHeaderPartition;
 use crate::database::contextual_message_by_sender::ContextualMessageBySenderPartition;
+use crate::database::handshake::TxIdToHandshakePartition;
 use crate::database::handshake::{
     HandshakeByReceiverPartition, HandshakeBySenderPartition, HandshakeKeyByReceiver,
     HandshakeKeyBySender,
 };
+use crate::database::metadata::MetadataPartition;
+use crate::database::payment::TxIdToPaymentPartition;
 use crate::database::payment::{
     PaymentByReceiverPartition, PaymentBySenderPartition, PaymentKeyByReceiver, PaymentKeyBySender,
 };
@@ -17,6 +20,7 @@ use crate::database::resolution_keys::{DaaResolutionLikeKey, SenderResolutionLik
 use crate::database::skip_tx::SkipTxPartition;
 use crate::database::unknown_accepting_daa::{ResolutionEntries, UnknownAcceptingDaaPartition};
 use crate::database::unknown_tx::{UnknownTxPartition, UnknownTxUpdateAction};
+use crate::metrics::SharedMetrics;
 use crate::resolver::{ResolverResponse, SenderByTxIdAndDaa};
 use fjall::TxKeyspace;
 use kaspa_rpc_core::{RpcAddress, RpcHash, RpcHeader, RpcTransactionId};
@@ -24,6 +28,7 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
 use tracing::{debug, error, info, trace, warn};
 use workflow_core::channel::{Receiver, Sender};
 
@@ -82,24 +87,30 @@ pub struct ScanWorker {
 
     handshake_by_receiver_partition: HandshakeByReceiverPartition,
     handshake_by_sender_partition: HandshakeBySenderPartition,
+    tx_id_to_handshake_partition: TxIdToHandshakePartition,
     contextual_message_by_sender_partition: ContextualMessageBySenderPartition,
     payment_by_receiver_partition: PaymentByReceiverPartition,
     payment_by_sender_partition: PaymentBySenderPartition,
+    tx_id_to_payment_partition: TxIdToPaymentPartition,
+    metadata_partition: MetadataPartition,
+    metrics: SharedMetrics,
+    metrics_snapshot_interval: Duration,
+    last_metrics_snapshot_time: Instant,
 }
 
 impl ScanWorker {
-    pub fn worker(&self) -> anyhow::Result<()> {
-        loop {
+    pub fn worker(&mut self) -> anyhow::Result<()> {
+        while APP_IS_RUNNING.load(Ordering::Relaxed) {
             match self.tick_and_resolution_rx.recv_blocking()? {
-                Notification::Tick => {
-                    self.tick_work()?;
-                    self.job_done_tx.send_blocking(())?;
-                }
                 Notification::ResolverResponse(ResolverResponse::Block(r)) => {
                     self.handle_daa_resolution(r)?;
                 }
                 Notification::ResolverResponse(ResolverResponse::Sender(r)) => {
                     self.handle_sender_resolution(r)?;
+                }
+                Notification::Tick => {
+                    self.tick_work()?;
+                    self.job_done_tx.send_blocking(())?;
                 }
                 Notification::Shutdown => {
                     info!("Shutting down scan worker");
@@ -107,12 +118,53 @@ impl ScanWorker {
                 }
             }
         }
+        info!("Scan worker shut down");
+        Ok(())
     }
 
-    pub fn tick_work(&self) -> anyhow::Result<()> {
+    pub fn tick_work(&mut self) -> anyhow::Result<()> {
         self.resolve_unknown_tx()?;
         self.unknown_daa()?;
         self.unknown_sender()?;
+        self.update_metrics()?;
+        Ok(())
+    }
+
+    fn update_metrics(&mut self) -> anyhow::Result<()> {
+        self.metrics
+            .set_handshakes_by_receiver(self.tx_id_to_handshake_partition.approximate_len() as u64);
+        self.metrics
+            .set_handshakes_by_sender(self.handshake_by_sender_partition.approximate_len() as u64);
+        self.metrics
+            .set_payments_by_receiver(self.tx_id_to_payment_partition.approximate_len() as u64);
+        self.metrics
+            .set_payments_by_sender(self.payment_by_sender_partition.approximate_len() as u64);
+        self.metrics.set_contextual_messages(
+            self.contextual_message_by_sender_partition
+                .approximate_len() as u64,
+        );
+        self.metrics.set_latest_block(
+            self.metadata_partition
+                .get_latest_block_cursor()?
+                .unwrap_or_default()
+                .hash,
+        );
+        self.metrics.set_latest_accepting_block(
+            self.metadata_partition
+                .get_latest_accepting_block_cursor()?
+                .unwrap_or_default()
+                .hash,
+        );
+
+        if self.metadata_partition.0.inner().disk_space() > 1024 * 1024 {
+            self.metadata_partition.0.inner().major_compact()?;
+        }
+
+        if self.last_metrics_snapshot_time.elapsed() > self.metrics_snapshot_interval {
+            info!("{}", self.metrics.snapshot());
+            self.last_metrics_snapshot_time = Instant::now();
+        }
+
         Ok(())
     }
 
@@ -126,6 +178,8 @@ impl ScanWorker {
                     .decrement_attempt_counts_by_block_hash(&mut wtx, hash)?;
             }
             Ok(header) => {
+                self.metrics.set_latest_accepting_block(header.hash);
+                self.metrics.increment_daa_resolved();
                 let pending_daa = self
                     .unknown_accepting_daa_partition
                     .remove_by_accepting_block_hash(&mut wtx, header.hash)?;
@@ -206,6 +260,7 @@ impl ScanWorker {
         let mut wtx = self.tx_keyspace.write_tx()?;
         match r {
             Ok((address, SenderByTxIdAndDaa { tx_id, daa_score })) => {
+                self.metrics.increment_senders_resolved();
                 let sender = (&address).try_into()?;
                 self.tx_id_to_acceptance_partition
                     .resolve(&mut wtx, tx_id.as_bytes())?;
@@ -414,11 +469,13 @@ impl ScanWorker {
         let _lock = self.reorg_lock.lock();
         let rtx = self.tx_keyspace.read_tx();
         let mut wtx = self.tx_keyspace.write_tx()?;
+        let mut count = 0;
         for block in self
             .unknown_accepting_daa_partition
             .get_all_unknown_accepting_blocks(&rtx)
         {
             let block = block?;
+            count += 1;
             match self
                 .block_compact_header_partition
                 .get_daa_score_rtx(&rtx, &block)?
@@ -466,11 +523,13 @@ impl ScanWorker {
             }
         }
         wtx.commit()??;
+        self.metrics.set_unknown_daa_entries(count);
         Ok(())
     }
 
     fn unknown_sender(&self) -> anyhow::Result<()> {
         let rtx = self.tx_keyspace.read_tx();
+        let mut count = 0;
         for pending in self
             .pending_sender_resolution_partition
             .get_all_pending_keys(&rtx)
@@ -480,12 +539,14 @@ impl ScanWorker {
                 tx_id,
                 ..
             } = pending?;
+            count += 1;
             self.resolver_request_sender_tx
                 .send_blocking(SenderByTxIdAndDaa {
                     tx_id: RpcTransactionId::from_bytes(tx_id),
                     daa_score: u64::from_be_bytes(accepting_daa_score),
                 })?
         }
+        self.metrics.set_unknown_sender_entries(count);
         Ok(())
     }
 }

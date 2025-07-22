@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow.workspace = true
+arc-swap.workspace = true
 bon.workspace = true
 bytemuck = { workspace = true, features = ["latest_stable_rust"]}
 fjall.workspace = true

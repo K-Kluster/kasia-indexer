@@ -11,7 +11,7 @@ use std::fmt;
 use tokio::task;
 use tracing::{debug, error, info, trace, warn};
 
-#[derive(Copy, Clone, PartialEq, Eq, Ord, PartialOrd)]
+#[derive(Copy, Clone, PartialEq, Eq, Ord, PartialOrd, Default)]
 pub struct Cursor {
     pub blue_work: Uint192,
     pub hash: RpcHash,
@@ -173,9 +173,24 @@ impl HistoricalDataSyncer {
 
             // Log progress periodically
             if self.batches_processed % 100 == 0 {
+                let initial_blue_work = self.from_cursor.blue_work;
+                let current_blue_work = self.current_cursor.blue_work;
+                let target_blue_work = self.target_cursor.blue_work;
+
+                let total_work_to_sync = target_blue_work - initial_blue_work;
+                let work_synced = current_blue_work - initial_blue_work;
+
+                let percentage = if total_work_to_sync > Uint192::from_u64(0) {
+                    (work_synced.as_u128() * 100) / total_work_to_sync.as_u128()
+                } else {
+                    100
+                };
+
                 info!(
-                    "Sync progress: {} batches processed, {} total blocks, current blue work: {}, target blue work: {}",
+                    "Sync progress: {}% ({}/{} batches, {} total blocks), current blue work: {}, target blue work: {}",
+                    percentage,
                     self.batches_processed,
+                    self.total_blocks_processed,
                     self.total_blocks_processed,
                     self.current_cursor.blue_work,
                     self.target_cursor.blue_work,

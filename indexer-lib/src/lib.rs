@@ -11,6 +11,7 @@ pub mod historical_syncer;
 pub mod subscriber;
 
 pub mod database;
+pub mod metrics;
 
 pub mod acceptance_worker;
 pub mod block_worker;

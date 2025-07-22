@@ -17,6 +17,7 @@ use crate::{
     },
     fifo_set::FifoSet,
     historical_syncer::Cursor,
+    metrics::SharedMetrics,
 };
 use fjall::{TxKeyspace, WriteTransaction};
 use kaspa_consensus_core::tx::{Transaction, TransactionId};
@@ -49,6 +50,7 @@ pub struct BlockWorker {
 
     skip_tx_partition: SkipTxPartition,
     block_compact_header_partition: BlockCompactHeaderPartition,
+    metrics: SharedMetrics,
 }
 
 impl BlockWorker {
@@ -58,7 +60,7 @@ impl BlockWorker {
             match self.select_input()? {
                 BlocksOrShutdown::Shutdown(_) => {
                     info!("Block worker received shutdown signal, draining notifications first");
-                    let rx = std::mem::replace(&mut self.intake, flume::bounded(0).1);
+                    let rx = std::mem::replace(&mut self.intake, flume::unbounded().1);
                     rx.drain().try_for_each(|blocks| -> anyhow::Result<()> {
                         self.handle_blocks(&blocks)?;
                         Ok(())
@@ -110,6 +112,7 @@ impl BlockWorker {
 
             wtx.commit()??;
             self.processed_blocks.insert(*hash);
+            self.metrics.increment_blocks_processed();
         }
         Ok(())
     }

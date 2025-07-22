@@ -281,6 +281,14 @@ impl UnknownAcceptingDaaPartition {
         ))
     }
 
+    pub fn len(&self) -> Result<usize> {
+        Ok(self.0.inner().len()?)
+    }
+
+    pub fn is_empty(&self) -> Result<bool> {
+        Ok(self.0.inner().is_empty()?)
+    }
+
     /// Insert a complete resolution entry vector for an accepting block hash
     pub fn insert_wtx<T: AsRef<[u8]>>(
         &self,

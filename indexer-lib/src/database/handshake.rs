@@ -84,6 +84,10 @@ impl HandshakeBySenderPartition {
             PartitionCreateOptions::default(),
         )?))
     }
+
+    pub fn approximate_len(&self) -> usize {
+        self.0.approximate_len()
+    }
 }
 
 #[derive(Clone, Copy, Debug, AnyBitPattern, NoUninit, PartialEq, Eq)]
@@ -209,5 +213,9 @@ impl TxIdToHandshakePartition {
     pub fn insert_wtx(&self, wtx: &mut WriteTransaction, tx_id: &[u8; 32], sealed_hex: &[u8]) {
         assert_eq!(tx_id.len(), 32);
         wtx.insert(&self.0, tx_id, sealed_hex);
+    }
+
+    pub fn approximate_len(&self) -> usize {
+        self.0.approximate_len()
     }
 }

@@ -3,7 +3,7 @@ use crate::acceptance_worker::VirtualChainChangedNotificationAndBlueWork;
 use crate::database::block_compact_header::BlockCompactHeaderPartition;
 use crate::database::metadata::MetadataPartition;
 use crate::historical_syncer::Cursor;
-use anyhow::bail;
+use anyhow::{Context, bail};
 use kaspa_consensus_core::BlueWorkType;
 use kaspa_rpc_core::VirtualChainChangedNotification;
 use kaspa_rpc_core::api::rpc::RpcApi;
@@ -482,13 +482,15 @@ impl HistoricalSyncer {
                 biased;
 
                 _ = &mut self.shutdown => {
+                    info!("Historical syncer shutting down");
                     return self.handle_interruption(current).await;
                 }
 
+                // todo handle error
                 vcc_result = self.rpc_client.get_virtual_chain_from_block(current.hash, true) => {
                     match self.process_vcc_result(vcc_result, &mut current).await? {
                         Some(result) => {
-                            self.historical_sync_done_tx.send(result).await?;
+                            self.historical_sync_done_tx.send(result).await.context("Failed to send historical sync result")?;
                             return Ok(());
                         }
                         None => continue,

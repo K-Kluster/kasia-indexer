@@ -63,6 +63,10 @@ impl ContextualMessageBySenderPartition {
         )?))
     }
 
+    pub fn approximate_len(&self) -> usize {
+        self.0.approximate_len()
+    }
+
     /// Insert a contextual message
     pub fn insert(
         &self,

@@ -60,6 +60,10 @@ impl PaymentBySenderPartition {
     pub fn insert_wtx(&self, wtx: &mut WriteTransaction, key: &PaymentKeyBySender) {
         wtx.insert(&self.0, bytemuck::bytes_of(key), []);
     }
+
+    pub fn approximate_len(&self) -> usize {
+        self.0.approximate_len()
+    }
 }
 
 #[derive(Clone, Copy, Debug, AnyBitPattern, NoUninit, PartialEq, Eq)]
@@ -142,6 +146,9 @@ impl TxIdToPaymentPartition {
             "tx_id_to_payment",
             PartitionCreateOptions::default(),
         )?))
+    }
+    pub fn approximate_len(&self) -> usize {
+        self.0.approximate_len()
     }
 
     pub fn insert(&self, tx_id: &[u8], amount: u64, sealed_hex: &[u8]) -> anyhow::Result<()> {

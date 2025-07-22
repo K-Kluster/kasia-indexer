@@ -1457,6 +1457,7 @@ name = "indexer-lib"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "bon",
  "bytemuck",
  "fjall",
