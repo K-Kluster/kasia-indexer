@@ -11,6 +11,9 @@ kaspa-wrpc-client = { workspace = true }
 parking_lot = { workspace = true }
 time = { workspace = true , features = ["macros"]}
 tokio = { workspace = true, features = ["signal"] }
+
+dotenv = { workspace = true }
+
 tracing = { workspace = true }
 tracing-appender.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter", "local-time"] }

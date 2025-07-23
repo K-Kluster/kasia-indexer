@@ -14,4 +14,4 @@ WORKDIR /usr/src/indexer
 
 COPY --from=builder /usr/src/indexer/target/release/indexer .
 
-CMD ["RUST_LOG=info ./indexer"]
+CMD ["./indexer"]

@@ -1,3 +1,4 @@
+use dotenv::dotenv;
 use fjall::Config;
 use indexer_lib::database::block_gaps::BlockGap;
 use indexer_lib::fifo_set::FifoSet;
@@ -33,6 +34,8 @@ use tracing_subscriber::{EnvFilter, Layer};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    dotenv().ok();
+
     let db_path = std::env::var("KASIA_INDEXER_DB_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::home_dir().unwrap().join(".kasia-indexer"));
@@ -412,8 +415,13 @@ async fn main() -> anyhow::Result<()> {
 fn create_rpc_client() -> anyhow::Result<KaspaRpcClient> {
     let encoding = WrpcEncoding::Borsh;
 
-    let resolver = Some(kaspa_wrpc_client::Resolver::default());
-    let url = None;
+    let url = std::env::var("KASPA_NODE_WBORSH_URL").ok();
+    let resolver = if url.is_some() {
+        None
+    } else {
+        Some(kaspa_wrpc_client::Resolver::default())
+    };
+
     let network_type = NetworkType::Mainnet;
     let selected_network = Some(NetworkId::new(network_type));
 
@@ -423,7 +431,7 @@ fn create_rpc_client() -> anyhow::Result<KaspaRpcClient> {
 
     let client = KaspaRpcClient::new(
         encoding,
-        url,
+        url.as_deref(),
         resolver,
         selected_network,
         subscription_context,
