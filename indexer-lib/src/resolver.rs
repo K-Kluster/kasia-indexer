@@ -78,7 +78,6 @@ impl Resolver {
                         continue;
                     } else {
                         debug!(%hash, "Received block resolution request");
-                        self.block_requests_cache.insert(hash);
                     }
                     match get_block_with_retries(&self.kaspa_rpc_client, hash).await {
                         Ok(block) => {
@@ -87,6 +86,7 @@ impl Resolver {
                                     ResolverResponse::Block(Ok(Box::new(block.header))),
                                 ))
                                 .await?;
+                            self.block_requests_cache.insert(hash);
                         }
                         Err(err) => {
                             error!(%err, "Failed to get block for hash: {hash}");
@@ -104,7 +104,6 @@ impl Resolver {
                         continue;
                     } else {
                         debug!(%tx_id, %daa_score, "Received sender resolution request");
-                        self.sender_request_cache.insert(i);
                     }
                     match get_utxo_return_address_with_retries(
                         &self.kaspa_rpc_client,
@@ -122,6 +121,7 @@ impl Resolver {
                                     ))),
                                 ))
                                 .await?;
+                            self.sender_request_cache.insert(i);
                         }
                         Err(err) => {
                             error!(%err, "Failed to get sender for tx id: {tx_id} and daa score: {daa_score}");
