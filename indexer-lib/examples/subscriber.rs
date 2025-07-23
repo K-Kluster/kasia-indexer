@@ -192,8 +192,6 @@ async fn setup_rpc_client() -> anyhow::Result<KaspaRpcClient> {
         .connect(Some(options))
         .await
         .map_err(|e| anyhow::anyhow!("Failed to connect to node: {}", e))?;
-    let a = 3;
-    let b = Some(a).is_some().then_some(3).unwrap_or_default();
     info!("Successfully connected to Kaspa node");
     Ok(client)
 }
