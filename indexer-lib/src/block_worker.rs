@@ -31,6 +31,7 @@ use tracing::{debug, info, trace};
 #[derive(bon::Builder)]
 pub struct BlockWorker {
     processed_blocks: FifoSet<RpcHash>,
+    processed_txs: FifoSet<TransactionId>,
     intake: flume::Receiver<BlockOrMany>,
     shutdown: flume::Receiver<()>,
 
@@ -127,6 +128,11 @@ impl BlockWorker {
             Some(data) => data.transaction_id,
             None => Transaction::try_from(tx.clone())?.id(),
         };
+        if self.processed_txs.contains(&tx_id) {
+            debug!(%tx_id, "Skipping already processed transaction");
+            return Ok(());
+        }
+
         trace!(%tx_id, "Processing transaction");
         match parse_sealed_operation(&tx.payload).inspect(|op| {
             trace!(%tx_id, kind = op.op_type_name(), "Parsed sealed operation");
@@ -145,6 +151,7 @@ impl BlockWorker {
                 self.skip_tx_partition.mark_skip(wtx, tx_id.as_bytes());
             }
         }
+        self.processed_txs.insert(tx_id);
 
         Ok(())
     }

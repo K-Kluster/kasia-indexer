@@ -5,7 +5,9 @@ use crate::database::resolution_keys::{
 };
 use anyhow::Result;
 use bytemuck::{AnyBitPattern, NoUninit};
-use fjall::{KvSeparationOptions, PartitionCreateOptions, ReadTransaction, UserValue, WriteTransaction};
+use fjall::{
+    KvSeparationOptions, PartitionCreateOptions, ReadTransaction, UserValue, WriteTransaction,
+};
 use kaspa_rpc_core::RpcHash;
 
 /// Helper function to calculate maximum of two values at compile time
@@ -263,7 +265,7 @@ impl UnknownAcceptingDaaPartition {
                 "unknown_accepting_daa",
                 PartitionCreateOptions::default()
                     .block_size(64 * 1024)
-                    .with_kv_separation(KvSeparationOptions::default().separation_threshold(1024))
+                    .with_kv_separation(KvSeparationOptions::default().separation_threshold(1024)),
             )?,
         ))
     }

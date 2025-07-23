@@ -1,5 +1,5 @@
 use crate::database::LikeTxIds;
-use anyhow::{Result, bail};
+use anyhow::{Result};
 use fjall::{PartitionCreateOptions, ReadTransaction, UserValue, WriteTransaction};
 use kaspa_rpc_core::{RpcHash, RpcTransactionId};
 

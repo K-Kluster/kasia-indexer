@@ -120,6 +120,9 @@ async fn main() -> anyhow::Result<()> {
         .skip_tx_partition(skip_tx_partition.clone())
         .block_compact_header_partition(block_compact_header_partition.clone())
         .metrics(metrics.clone())
+        .processed_txs(FifoSet::new(
+            300/*txs per block*/ * 255, /*max mergeset size*/
+        ))
         .build();
 
     let mut acceptance_worker = acceptance_worker::AcceptanceWorker::builder()
