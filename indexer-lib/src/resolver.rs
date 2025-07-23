@@ -1,4 +1,5 @@
 use crate::APP_IS_RUNNING;
+use crate::fifo_set::FifoSet;
 use anyhow::bail;
 use kaspa_rpc_core::api::ops::RpcApiOps;
 use kaspa_rpc_core::prelude::*;
@@ -10,7 +11,7 @@ use tracing::{debug, error, info};
 use workflow_core::channel::{Receiver, Sender};
 use workflow_serializer::serializer::Serializable;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SenderByTxIdAndDaa {
     pub tx_id: RpcTransactionId,
     pub daa_score: u64,
@@ -28,6 +29,8 @@ pub struct Resolver {
     sender_request_rx: Receiver<SenderByTxIdAndDaa>,
     kaspa_rpc_client: KaspaRpcClient,
     response_tx: Sender<crate::scan_worker::Notification>,
+    block_requests_cache: FifoSet<RpcHash>,
+    sender_request_cache: FifoSet<SenderByTxIdAndDaa>,
 }
 
 impl Resolver {
@@ -39,6 +42,24 @@ impl Resolver {
         kaspa_rpc_client: KaspaRpcClient,
     ) -> Self {
         Self {
+            block_requests_cache: FifoSet::new(
+                if let Some(cap) = block_request_rx.capacity()
+                    && cap > 0
+                {
+                    cap
+                } else {
+                    256
+                },
+            ),
+            sender_request_cache: FifoSet::new(
+                if let Some(cap) = sender_request_rx.capacity()
+                    && cap > 0
+                {
+                    cap
+                } else {
+                    256 * 300
+                },
+            ),
             shutdown_rx,
             block_request_rx,
             sender_request_rx,
@@ -52,7 +73,13 @@ impl Resolver {
         loop {
             match self.select_input().await? {
                 Input::BlockRequest(hash) => {
-                    debug!(%hash, "Received block resolution request");
+                    if self.block_requests_cache.contains(&hash) {
+                        debug!("Block request cache hit, request is skipped");
+                        continue;
+                    } else {
+                        debug!(%hash, "Received block resolution request");
+                        self.block_requests_cache.insert(hash);
+                    }
                     match get_block_with_retries(&self.kaspa_rpc_client, hash).await {
                         Ok(block) => {
                             self.response_tx
@@ -71,8 +98,14 @@ impl Resolver {
                         }
                     }
                 }
-                Input::SenderRequest { tx_id, daa_score } => {
-                    debug!(%tx_id, %daa_score, "Received sender resolution request");
+                Input::SenderRequest(i @ SenderByTxIdAndDaa { tx_id, daa_score }) => {
+                    if self.sender_request_cache.contains(&i) {
+                        debug!(%tx_id, %daa_score, "Sender request skipped since it's already processed before");
+                        continue;
+                    } else {
+                        debug!(%tx_id, %daa_score, "Received sender resolution request");
+                        self.sender_request_cache.insert(i);
+                    }
                     match get_utxo_return_address_with_retries(
                         &self.kaspa_rpc_client,
                         tx_id,
@@ -127,7 +160,7 @@ impl Resolver {
             }
             req = self.sender_request_rx.recv() => {
                 let SenderByTxIdAndDaa{tx_id,daa_score} = req?;
-                Ok(Input::SenderRequest{tx_id, daa_score})
+                Ok(Input::SenderRequest(SenderByTxIdAndDaa{tx_id,daa_score}))
             }
             req = self.block_request_rx.recv() => {
                 Ok(Input::BlockRequest(req?))
@@ -139,10 +172,7 @@ impl Resolver {
 enum Input {
     Shutdown,
     BlockRequest(RpcHash),
-    SenderRequest {
-        tx_id: RpcTransactionId,
-        daa_score: u64,
-    },
+    SenderRequest(SenderByTxIdAndDaa),
 }
 
 async fn get_block_with_retries(

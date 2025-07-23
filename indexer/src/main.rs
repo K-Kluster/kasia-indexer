@@ -48,7 +48,6 @@ async fn main() -> anyhow::Result<()> {
     // Partitions
     let metadata_partition = database::metadata::MetadataPartition::new(&tx_keyspace)?;
     {
-        // compact metadata at restart/start. todo move to periodic job
         metadata_partition.0.inner().major_compact()?;
     }
 
@@ -83,9 +82,9 @@ async fn main() -> anyhow::Result<()> {
 
     let metrics = create_shared_metrics_from_snapshot(IndexerMetricsSnapshot {
         handshakes_by_sender: handshake_by_sender_partition.approximate_len() as u64,
-        handshakes_by_receiver: tx_id_to_handshake_partition.approximate_len() as u64, // todo use len at startup and atomic for update
+        handshakes_by_receiver: tx_id_to_handshake_partition.approximate_len() as u64,
         payments_by_sender: payment_by_sender_partition.approximate_len() as u64,
-        payments_by_receiver: tx_id_to_payment_partition.approximate_len() as u64, // todo use len at startup and atomic for update
+        payments_by_receiver: tx_id_to_payment_partition.approximate_len() as u64,
         contextual_messages: contextual_message_partition.len()? as u64,
         blocks_processed: block_compact_header_partition.len()? as u64,
         latest_block: metadata_partition
