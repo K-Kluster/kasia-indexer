@@ -32,7 +32,6 @@ impl MetadataPartition {
                 "metadata",
                 PartitionCreateOptions::default()
                     .block_size(1024)
-                    .max_memtable_size(128)
                     .compression(CompressionType::None),
             )?,
         ))

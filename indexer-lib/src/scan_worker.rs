@@ -22,6 +22,7 @@ use crate::database::unknown_accepting_daa::{ResolutionEntries, UnknownAccepting
 use crate::database::unknown_tx::{UnknownTxPartition, UnknownTxUpdateAction};
 use crate::metrics::SharedMetrics;
 use crate::resolver::{ResolverResponse, SenderByTxIdAndDaa};
+use anyhow::Context;
 use fjall::TxKeyspace;
 use kaspa_rpc_core::{RpcAddress, RpcHash, RpcHeader, RpcTransactionId};
 use parking_lot::Mutex;
@@ -29,7 +30,6 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
-use anyhow::Context;
 use tracing::{debug, error, info, trace, warn};
 use workflow_core::channel::{Receiver, Sender};
 
@@ -96,6 +96,7 @@ pub struct ScanWorker {
     metadata_partition: MetadataPartition,
     metrics: SharedMetrics,
     metrics_snapshot_interval: Duration,
+    #[builder(default = Instant::now())]
     last_metrics_snapshot_time: Instant,
 }
 
@@ -123,13 +124,14 @@ impl ScanWorker {
         Ok(())
     }
 
-    pub fn tick_work(&mut self) -> anyhow::Result<()> {
-        self.resolve_unknown_tx()?;
-        self.unknown_daa()?;
-        self.unknown_sender()?;
-        self.update_metrics()?;
-        Ok(())
-    }
+    // pub fn tick_work(&mut self) -> anyhow::Result<()> {
+    //     // TODO DONT REQUEST ALREADY REQUESTED. SIMPLY CALCULATE HOW MANY THINGS WE WAITING FOR, DONT PERFORM ANY OP UNTIL WE GET ENOUGH RESULTS
+    //     self.resolve_unknown_tx()?;
+    //     self.unknown_daa()?;
+    //     self.unknown_sender()?;
+    //     self.update_metrics()?;
+    //     Ok(())
+    // }
 
     fn update_metrics(&mut self) -> anyhow::Result<()> {
         self.metrics
@@ -245,7 +247,8 @@ impl ScanWorker {
             }
         }
 
-        wtx.commit()?.context("failed to commit, conflict handle_daa_resolution")?;
+        wtx.commit()?
+            .context("failed to commit, conflict handle_daa_resolution")?;
         Ok(())
     }
 
@@ -341,7 +344,8 @@ impl ScanWorker {
                     .decrement_attempt_counts_by_transaction(&mut wtx, daa_score, tx_id)?;
             }
         }
-        wtx.commit()?.context("failed to commit, conflict sender_resolution")?;
+        wtx.commit()?
+            .context("failed to commit, conflict sender_resolution")?;
         Ok(())
     }
 
@@ -464,7 +468,8 @@ impl ScanWorker {
                     )?;
             }
         }
-        wtx.commit()?.context("failed to commit, conflict resolve_unknown_tx")?;
+        wtx.commit()?
+            .context("failed to commit, conflict resolve_unknown_tx")?;
         Ok(())
     }
 
@@ -525,7 +530,8 @@ impl ScanWorker {
                 }
             }
         }
-        wtx.commit()?.context("failed to commit, conflict unknown_daa")?;
+        wtx.commit()?
+            .context("failed to commit, conflict unknown_daa")?;
         self.metrics.set_unknown_daa_entries(count);
         Ok(())
     }

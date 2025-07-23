@@ -13,7 +13,7 @@ arc-swap = "1.7.1"
 bon = "3.*"
 bytemuck = "1.23.1"
 faster-hex = "0.10.0"
-fjall = { version = "2.11.1", default-features = false, features = ["lz4", "miniz", "ssi_tx"] }
+fjall = { version = "2.11.2", default-features = false, features = ["lz4", "miniz", "ssi_tx"] }
 flume = "0.11.1"
 futures-util = "0.3.31"
 itertools = "0.14.0"
@@ -26,8 +26,10 @@ kaspa-wrpc-client = "1.*"
 parking_lot = "0.12.4"
 ringmap = "0.1.4"
 rolling-file = "0.2.0"
+time = "0.3.41"
 tokio = "1.45.1"
 tracing = "0.1.41"
+tracing-appender = "0.2.3"
 tracing-subscriber = "0.3.19"
 workflow-core = "0.18.0"
 workflow-rpc = "0.18.0"
@@ -43,3 +45,5 @@ kaspa-math = { git = "https://github.com/kaspanet/rusty-kaspa.git", tag = "v1.0.
 kaspa-rpc-core = { git = "https://github.com/kaspanet/rusty-kaspa.git", tag = "v1.0.1" }
 kaspa-txscript = { git = "https://github.com/kaspanet/rusty-kaspa.git", tag = "v1.0.1" }
 kaspa-wrpc-client = { git = "https://github.com/kaspanet/rusty-kaspa.git", tag = "v1.0.1" }
+
+fjall = { git = "https://github.com/fjall-rs/fjall.git", branch = "improve-write-stalling" }

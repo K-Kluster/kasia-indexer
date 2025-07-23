@@ -404,7 +404,7 @@ impl SelectedChainSyncer {
             hash: sink_hash,
         };
 
-        info!("Selected chain syncer: from={:?} to={:?}", from, target);
+        info!(from = ?from, to = ?target, "Selected chain syncer spawned");
 
         let (interrupt_tx, interrupt_rx) = tokio::sync::oneshot::channel();
         let mut syncer = HistoricalSyncer::new(
@@ -451,6 +451,10 @@ pub struct HistoricalSyncer {
     worker_sender: flume::Sender<VirtualChainChangedNotificationAndBlueWork>,
     from: Cursor,
     to: Cursor,
+
+    // Initialize progress tracking
+    total_blocks_processed: u64,
+    batches_processed: u64,
 }
 
 impl HistoricalSyncer {
@@ -471,6 +475,8 @@ impl HistoricalSyncer {
             worker_sender,
             from,
             to,
+            total_blocks_processed: 0,
+            batches_processed: 0,
         }
     }
 
@@ -485,11 +491,14 @@ impl HistoricalSyncer {
                     info!("Historical syncer shutting down");
                     return self.handle_interruption(current).await;
                 }
-
                 // todo handle error
                 vcc_result = self.rpc_client.get_virtual_chain_from_block(current.hash, true) => {
                     match self.process_vcc_result(vcc_result, &mut current).await? {
                         Some(result) => {
+                            info!(
+                                "Historical sync completed. Total blocks: {}, Total batches: {}",
+                                self.total_blocks_processed, self.batches_processed
+                            );
                             self.historical_sync_done_tx.send(result).await.context("Failed to send historical sync result")?;
                             return Ok(());
                         }
@@ -510,7 +519,7 @@ impl HistoricalSyncer {
     }
 
     async fn process_vcc_result(
-        &self,
+        &mut self,
         vcc_result: Result<
             kaspa_rpc_core::GetVirtualChainFromBlockResponse,
             kaspa_rpc_core::RpcError,
@@ -534,6 +543,11 @@ impl HistoricalSyncer {
             accepted_transaction_ids: Arc::new(vcc_response.accepted_transaction_ids),
         };
 
+        // Update progress tracking
+        let batch_size = vcc.added_chain_block_hashes.len();
+        self.total_blocks_processed += batch_size as u64;
+        self.batches_processed += 1;
+
         let last_block = *vcc.added_chain_block_hashes.last().unwrap();
         let last_blue_work = self.get_block_blue_work(last_block).await?;
 
@@ -541,6 +555,32 @@ impl HistoricalSyncer {
             hash: last_block,
             blue_work: last_blue_work,
         };
+
+        // Log progress periodically (every 100 batches like in HistoricalDataSyncer)
+        if self.batches_processed % 100 == 0 {
+            let current_blue_work = current.blue_work;
+            let target_blue_work = self.to.blue_work;
+
+            let total_work_to_sync = target_blue_work - self.from.blue_work;
+            let work_synced = current_blue_work - self.from.blue_work;
+
+            let percentage = if total_work_to_sync > kaspa_math::Uint192::from_u64(0) {
+                (work_synced.as_u128() * 100) / total_work_to_sync.as_u128()
+            } else {
+                100
+            };
+
+            info!(
+                current_block = %current.hash,
+                current_blue_work = %current_blue_work,
+                target_block = %self.to.hash,
+                target_blue_work = %target_blue_work,
+                "Selected chain sync progress: {}% ({} batches processed, {} blocks processed)",
+                percentage,
+                self.batches_processed,
+                self.total_blocks_processed,
+            );
+        }
 
         self.worker_sender
             .send_async(VirtualChainChangedNotificationAndBlueWork {

@@ -19,22 +19,26 @@ use kaspa_wrpc_client::client::{ConnectOptions, ConnectStrategy};
 use kaspa_wrpc_client::prelude::{NetworkId, NetworkType, RpcApi};
 use kaspa_wrpc_client::{KaspaRpcClient, WrpcEncoding};
 use parking_lot::Mutex;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
+use time::macros::format_description;
 use tracing::{error, info};
-use tracing_subscriber::FmtSubscriber;
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::filter::Directive;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, Layer};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let subscriber = FmtSubscriber::builder()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .finish();
-    tracing::subscriber::set_global_default(subscriber).expect("Failed to set tracing subscriber");
-
     let db_path = std::env::var("KASIA_INDEXER_DB_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::home_dir().unwrap().join(".kasia-indexer"));
+    let log_path = db_path.join("app_logs");
+    std::fs::create_dir_all(&log_path)?;
+    let _g = init_logs(log_path)?;
     let config = Config::new(&db_path);
     let tx_keyspace = config.open_transactional()?;
     let reorg_lock = Arc::new(Mutex::new(()));
@@ -95,11 +99,11 @@ async fn main() -> anyhow::Result<()> {
         resolved_senders: 0,
     });
 
-    // let (block_intake_tx, block_intake_rx) = flume::bounded(255);
-    let (block_intake_tx, block_intake_rx) = flume::unbounded();
-    let (vcc_intake_tx, vcc_intake_rx) = flume::unbounded();
+    let (block_intake_tx, block_intake_rx) = flume::bounded(4096);
+    // let (block_intake_tx, block_intake_rx) = flume::unbounded();
+    // let (vcc_intake_tx, vcc_intake_rx) = flume::unbounded();
 
-    // let (vcc_intake_tx, vcc_intake_rx) = flume::bounded(255);
+    let (vcc_intake_tx, vcc_intake_rx) = flume::bounded(4096);
     let (shutdown_block_worker_tx, shutdown_block_worker_rx) = flume::bounded(1);
     let (shutdown_acceptance_worker_tx, shutdown_acceptance_worker_rx) = flume::bounded(1);
 
@@ -143,11 +147,11 @@ async fn main() -> anyhow::Result<()> {
 
     let (resolver_block_request_tx, resolver_block_request_rx) =
         // workflow_core::channel::bounded(255);
-        workflow_core::channel::unbounded();
+    workflow_core::channel::unbounded();
     let (resolver_sender_request_tx, resolver_sender_request_rx) =
-        // workflow_core::channel::bounded(1024);
-        workflow_core::channel::unbounded();
-    // let (resolver_response_tx, resolver_response_rx) = workflow_core::channel::bounded(255);
+        // workflow_core::channel::bounded(4096);
+    workflow_core::channel::unbounded();
+    // let (resolver_response_tx, resolver_response_rx) = workflow_core::channel::bounded(4096);
     let (resolver_response_tx, resolver_response_rx) = workflow_core::channel::unbounded();
     let (shutdown_resolver_tx, shutdown_resolver_rx) = tokio::sync::oneshot::channel();
 
@@ -184,11 +188,10 @@ async fn main() -> anyhow::Result<()> {
         .tx_id_to_handshake_partition(tx_id_to_handshake_partition.clone())
         .metrics(metrics)
         .metrics_snapshot_interval(Duration::from_secs(10))
-        .last_metrics_snapshot_time(std::time::Instant::now())
         .metadata_partition(metadata_partition.clone())
         .build();
 
-    let (selected_chain_intake_tx, selected_chain_intake_rx) = tokio::sync::mpsc::channel(128);
+    let (selected_chain_intake_tx, selected_chain_intake_rx) = tokio::sync::mpsc::channel(4096);
     let (historical_sync_done_tx, historical_sync_done_rx) = tokio::sync::mpsc::channel(1);
 
     let (shutdown_selected_chain_syncer_tx, shutdown_selected_chain_syncer_rx) =
@@ -219,7 +222,7 @@ async fn main() -> anyhow::Result<()> {
         shutdown_ticker_rx,
         scan_worker_job_done_rx,
         resolver_response_tx.clone(),
-        Duration::from_secs(5),
+        Duration::from_secs(30),
     ));
 
     // Spawn workers
@@ -360,11 +363,11 @@ async fn main() -> anyhow::Result<()> {
     _ = resolver_response_tx
         .send(Notification::Shutdown)
         .await
-        .inspect_err(|_err| error!("failed to shutdown resolver response"));
+        .inspect_err(|_err| error!("failed to shutdown scan worker"));
     info!("try shutdown resolver");
     _ = shutdown_resolver_tx
         .send(())
-        .inspect_err(|_err| error!("failed to shutdown resolver resolver"));
+        .inspect_err(|_err| error!("failed to shutdown resolver"));
 
     // Await on all tasks to complete
     info!("waiting for resolver finish");
@@ -427,4 +430,43 @@ fn create_rpc_client() -> anyhow::Result<KaspaRpcClient> {
     )
     .map_err(|e| anyhow::anyhow!("Failed to create RPC client: {}", e))?;
     Ok(client)
+}
+
+pub fn init_logs<P: AsRef<Path>>(logs_dir: P) -> anyhow::Result<(WorkerGuard, WorkerGuard)> {
+    let file_appender = rolling_file::BasicRollingFileAppender::new(
+        logs_dir.as_ref().join("kasia-indexer.mainnet.log"),
+        rolling_file::RollingConditionBasic::new()
+            .max_size(1024 * 1024 * 8)
+            .daily(),
+        14,
+    )?;
+
+    let (non_blocking_appender, guard_file) = tracing_appender::non_blocking(file_appender);
+    let file_subscriber = tracing_subscriber::fmt::layer()
+        .with_ansi(false)
+        .with_writer(non_blocking_appender)
+        .with_filter(
+            EnvFilter::builder()
+                .with_env_var("RUST_LOG_FILE")
+                .with_default_directive(Directive::from_str("info")?)
+                .from_env_lossy(),
+        );
+    let (non_blocking_appender, guard_stdout) = tracing_appender::non_blocking(std::io::stdout());
+    let stdout_subscriber = tracing_subscriber::fmt::layer()
+        .with_timer(tracing_subscriber::fmt::time::LocalTime::new(
+            format_description!("[year]-[month]-[day] [hour]:[minute]:[second]"),
+        ))
+        .with_writer(non_blocking_appender)
+        .with_filter(
+            EnvFilter::builder()
+                .with_default_directive(Directive::from_str("info")?)
+                .from_env_lossy(),
+        );
+
+    tracing_subscriber::registry()
+        .with(file_subscriber)
+        .with(stdout_subscriber)
+        .init();
+
+    Ok((guard_file, guard_stdout))
 }
