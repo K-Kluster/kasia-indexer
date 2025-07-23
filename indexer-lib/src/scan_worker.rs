@@ -132,11 +132,11 @@ impl ScanWorker {
 
     fn update_metrics(&mut self) -> anyhow::Result<()> {
         self.metrics
-            .set_handshakes_by_receiver(self.tx_id_to_handshake_partition.approximate_len() as u64);
+            .set_handshakes_by_receiver(self.tx_id_to_handshake_partition.approximate_len() as u64); // todo use len at startup and atomic for update
         self.metrics
             .set_handshakes_by_sender(self.handshake_by_sender_partition.approximate_len() as u64);
         self.metrics
-            .set_payments_by_receiver(self.tx_id_to_payment_partition.approximate_len() as u64);
+            .set_payments_by_receiver(self.tx_id_to_payment_partition.approximate_len() as u64);// todo use len at startup and atomic for update
         self.metrics
             .set_payments_by_sender(self.payment_by_sender_partition.approximate_len() as u64);
         self.metrics.set_latest_block(

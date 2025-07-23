@@ -76,9 +76,9 @@ async fn main() -> anyhow::Result<()> {
 
     let metrics = create_shared_metrics_from_snapshot(IndexerMetricsSnapshot {
         handshakes_by_sender: handshake_by_sender_partition.approximate_len() as u64,
-        handshakes_by_receiver: tx_id_to_handshake_partition.approximate_len() as u64, // todo
+        handshakes_by_receiver: tx_id_to_handshake_partition.approximate_len() as u64, // todo use len at startup and atomic for update
         payments_by_sender: payment_by_sender_partition.approximate_len() as u64,
-        payments_by_receiver: tx_id_to_payment_partition.approximate_len() as u64, // todo
+        payments_by_receiver: tx_id_to_payment_partition.approximate_len() as u64, // todo use len at startup and atomic for update
         contextual_messages: contextual_message_partition.len()? as u64,
         blocks_processed: block_compact_header_partition.len()? as u64,
         latest_block: metadata_partition

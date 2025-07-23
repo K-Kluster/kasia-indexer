@@ -5,7 +5,7 @@ use crate::database::resolution_keys::{
 };
 use anyhow::Result;
 use bytemuck::{AnyBitPattern, NoUninit};
-use fjall::{PartitionCreateOptions, ReadTransaction, UserValue, WriteTransaction};
+use fjall::{KvSeparationOptions, PartitionCreateOptions, ReadTransaction, UserValue, WriteTransaction};
 use kaspa_rpc_core::RpcHash;
 
 /// Helper function to calculate maximum of two values at compile time
@@ -241,15 +241,6 @@ impl<'a> From<&'a UserValue> for ResolutionEntries<&'a fjall::UserKey> {
     }
 }
 
-/// FIFO partition for storing accepting block hashes with unknown DAA scores
-/// Key: accepting_block_hash (32 bytes only)
-/// Value: ResolutionEntryVector containing entries with txid + partition_type + resolution key data
-/// Note: These are accepting blocks (selected blocks in GHOSTDAG), not regular blocks
-///
-/// Uses FIFO compaction strategy because:
-/// - Unknown DAA scores are temporary - will be resolved when RPC call completes
-/// - Older entries become irrelevant as blockchain progresses
-/// - Self-balancing: automatically removes old entries when size limit reached
 #[derive(Clone)]
 pub struct UnknownAcceptingDaaPartition(fjall::TxPartition);
 
@@ -266,17 +257,13 @@ pub enum DaaResolutionPartitionType {
 
 impl UnknownAcceptingDaaPartition {
     pub fn new(keyspace: &fjall::TxKeyspace) -> Result<Self> {
+        // todo cannot be fifo partition, it would lead to 36 gb bound
         Ok(Self(
             keyspace.open_partition(
                 "unknown_accepting_daa",
                 PartitionCreateOptions::default()
                     .block_size(64 * 1024)
-                    .compaction_strategy(fjall::compaction::Strategy::Fifo(
-                        fjall::compaction::Fifo {
-                            limit: 160 * 1024 * 1024,
-                            ttl_seconds: None,
-                        },
-                    )),
+                    .with_kv_separation(KvSeparationOptions::default().separation_threshold(1024))
             )?,
         ))
     }

@@ -141,6 +141,16 @@ impl PaymentByReceiverPartition {
 pub struct TxIdToPaymentPartition(fjall::TxPartition);
 
 impl TxIdToPaymentPartition {
+    pub fn len(&self) -> anyhow::Result<usize> {
+        Ok(self.0.inner().len()?)
+    }
+
+    pub fn is_empty(&self) -> anyhow::Result<bool> {
+        Ok(self.0.inner().is_empty()?)
+    }
+}
+
+impl TxIdToPaymentPartition {
     pub fn new(keyspace: &fjall::TxKeyspace) -> anyhow::Result<Self> {
         Ok(Self(keyspace.open_partition(
             "tx_id_to_payment",
