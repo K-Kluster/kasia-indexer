@@ -151,7 +151,7 @@ impl AcceptanceWorker {
                 self.unknown_accepting_daa_partition
                     .remove_by_accepting_block_hash(wtx, *removed_block_hash)?;
                 self.unknown_tx_partition
-                    .remove_unknown(wtx, RpcTransactionId::from_bytes(*tx_id))?;
+                    .remove_by_accepting_block_hash(wtx, removed_block_hash)?;
                 if let Some(daa) = daa {
                     self.pending_sender_resolution_partition
                         .remove_pending(wtx, daa, tx_id)?;
@@ -186,6 +186,7 @@ impl AcceptanceWorker {
         )?;
 
         let mut entries = ResolutionEntries::new(self.daa_resolution_attempt_count);
+        let mut unknown_tx_ids = Vec::with_capacity(filtered.len());
         for tx_id in &filtered {
             let mut is_required = false;
             for r in self.tx_id_to_acceptance_partition.get_by_tx_id(rtx, tx_id) {
@@ -255,8 +256,7 @@ impl AcceptanceWorker {
             }
             if !is_required {
                 debug!(tx_id = %RpcTransactionId::from_bytes(*tx_id), %accepting_block_hash, "Marking transaction as unknown");
-                self.unknown_tx_partition
-                    .mark_unknown(wtx, tx_id, *accepting_block_hash)?;
+                unknown_tx_ids.push(*tx_id);
             }
         }
         if accepting_daa.is_none() {
@@ -271,7 +271,8 @@ impl AcceptanceWorker {
 
         self.acceptance_to_tx_id_partition
             .insert_wtx(wtx, accepting_block_hash, &filtered);
-
+        self.unknown_tx_partition
+            .insert_wtx(wtx, accepting_block_hash, unknown_tx_ids.as_slice());
         Ok(())
     }
 }

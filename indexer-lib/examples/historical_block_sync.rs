@@ -99,6 +99,9 @@ async fn run_syncer() -> anyhow::Result<()> {
         .skip_tx_partition(SkipTxPartition::new(&tx_keyspace)?)
         .block_compact_header_partition(BlockCompactHeaderPartition::new(&tx_keyspace)?)
         .metrics(create_shared_metrics())
+        .processed_txs(FifoSet::new(
+            300/*txs per block*/ * 255, /*max mergeset size*/
+        ))
         .build();
 
     info!("Starting syncer and block processor tasks");
