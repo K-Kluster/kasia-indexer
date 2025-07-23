@@ -500,7 +500,7 @@ impl ScanWorker {
                         let entries = entries.as_entry_slice()?;
                         let count = entries.len();
                         if count > 0 {
-                            info!(%count, block_hash = %block, "Moving transactions to pending sender resolution queue");
+                            debug!(%count, block_hash = %block, "Moving transactions to pending sender resolution queue");
                         }
                         entries.iter().try_for_each(|entry| -> anyhow::Result<()> {
                             match entry.get_resolution_key()? {
