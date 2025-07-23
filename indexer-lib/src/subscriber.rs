@@ -1,5 +1,8 @@
 use crate::BlockOrMany;
+use crate::database::block_gaps::{BlockGap, BlockGapsPartition};
 use crate::historical_syncer::{Cursor, HistoricalDataSyncer};
+use crate::selected_chain_syncer::Intake;
+use anyhow::Context;
 use futures_util::future::FutureExt;
 use kaspa_rpc_core::api::ctl::RpcState;
 use kaspa_rpc_core::api::rpc::RpcApi;
@@ -7,8 +10,9 @@ use kaspa_rpc_core::notify::connection::{ChannelConnection, ChannelType};
 use kaspa_rpc_core::{BlockAddedNotification, Notification};
 use kaspa_wrpc_client::KaspaRpcClient;
 use kaspa_wrpc_client::client::ConnectOptions;
-use kaspa_wrpc_client::prelude::{BlockAddedScope, ListenerId, Scope};
+use kaspa_wrpc_client::prelude::{BlockAddedScope, ListenerId, Scope, VirtualChainChangedScope};
 use std::time::Duration;
+use tokio::task;
 use tracing::{error, info, warn};
 use workflow_core::channel::Channel;
 
@@ -30,14 +34,50 @@ pub struct Subscriber {
     last_block_cursor: Option<Cursor>,
 
     historical_data_syncer_shutdown_tx: Vec<tokio::sync::oneshot::Sender<()>>,
+
+    block_gaps_partition: BlockGapsPartition,
+
+    selected_chain_syncer: tokio::sync::mpsc::Sender<Intake>,
 }
 
 impl Subscriber {
+    pub fn new(
+        rpc_client: KaspaRpcClient,
+        block_handler: flume::Sender<BlockOrMany>,
+        shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+        block_gaps_partition: BlockGapsPartition,
+        selected_chain_syncer: tokio::sync::mpsc::Sender<Intake>,
+        last_block_cursor: Option<Cursor>,
+    ) -> Self {
+        let notification_channel = Channel::bounded(256);
+
+        Self {
+            rpc_client,
+            block_handler,
+            shutdown_rx,
+            notification_channel,
+            listener_id: None,
+            last_block_cursor,
+            historical_data_syncer_shutdown_tx: Vec::new(),
+            block_gaps_partition,
+            selected_chain_syncer,
+        }
+    }
+
     pub async fn task(&mut self) -> anyhow::Result<()> {
         let rpc_ctl_channel = self.rpc_client.rpc_ctl().multiplexer().channel();
         loop {
             tokio::select! {
             biased;
+                shutdown_result = &mut self.shutdown_rx => {
+                    shutdown_result
+                    .inspect(|_| info!("Shutdown signal received, stopping subscriber task"))
+                    .inspect_err(|e|  warn!("Shutdown receiver error: {}", e))?;
+                    for shutdown in std::mem::take(&mut self.historical_data_syncer_shutdown_tx) {
+                        _ = shutdown.send(()).inspect_err(|_err| error!("Error sending shutdown signal"));
+                    }
+                    return Ok(())
+                }
                 msg = rpc_ctl_channel.receiver.recv().fuse() => {
                     match msg {
                         Ok(msg) => {
@@ -77,56 +117,52 @@ impl Subscriber {
                         }
                     }
                 },
-
-                // we use select_biased to drain rpc_ctl
-                // and notifications before shutting down
-                // as such task_ctl is last in the poll order
-                shutdown_result = &mut self.shutdown_rx => {
-                    shutdown_result
-                    .inspect(|_| info!("Shutdown signal received, stopping sync"))
-                    .inspect_err(|e|  warn!("Shutdown receiver error: {}", e))?;
-                    for shutdown in std::mem::take(&mut self.historical_data_syncer_shutdown_tx) {
-                        _ = shutdown.send(()).inspect_err(|_err| error!("Error sending shutdown signal"));
-                    }
-                    return Ok(())
-                }
-
             }
         }
     }
 
     async fn handle_connect_impl(&mut self) -> anyhow::Result<()> {
         info!("Connected to {:?}", self.rpc_client.url());
+        self.selected_chain_syncer.send(Intake::Connected).await?;
         // now that we have successfully connected we
         // can register for notifications
         self.register_notification_listeners().await?;
         let sink = self.rpc_client.get_sink().await?.sink;
-        let blue_score = self
+        let blue_work = self
             .rpc_client
             .get_block(sink, false)
             .await?
             .header
-            .blue_score;
-
-        // todo insert hole to db to be handled by the syncer in future run, here we know target block
+            .blue_work;
 
         if let Some(last) = self.last_block_cursor.take() {
+            let gaps_partition = self.block_gaps_partition.clone();
+            task::spawn_blocking(move || {
+                gaps_partition.add_gap(BlockGap {
+                    from_blue_work: last.blue_work,
+                    from_block_hash: last.hash,
+                    to_blue_work: Some(blue_work),
+                    to_block_hash: Some(sink),
+                })
+            })
+            .await??;
             let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
             self.historical_data_syncer_shutdown_tx.push(shutdown_tx);
             tokio::spawn({
                 let rpc_client = self.rpc_client.clone();
                 let block_handler = self.block_handler.clone();
+                let gaps_partition = self.block_gaps_partition.clone();
                 async move {
                     HistoricalDataSyncer::new(
                         rpc_client,
                         last,
-                        Cursor::new(blue_score, sink),
+                        Cursor::new(blue_work, sink),
                         block_handler,
                         shutdown_rx,
+                        gaps_partition,
                     );
                 }
             });
-            // todo remove processed hole
         }
 
         Ok(())
@@ -170,6 +206,15 @@ impl Subscriber {
             .start_notify(listener_id, Scope::BlockAdded(BlockAddedScope {}))
             .await?;
 
+        self.rpc_client
+            .start_notify(
+                listener_id,
+                Scope::VirtualChainChanged(VirtualChainChangedScope {
+                    include_accepted_transaction_ids: true,
+                }),
+            )
+            .await?;
+
         Ok(())
     }
 
@@ -177,8 +222,7 @@ impl Subscriber {
         info!("Disconnected from {:?}", self.rpc_client.url());
         // Unregister notifications
         self.unregister_notification_listener().await?;
-
-        // todo insert hole to db to be handled by the syncer in future run, here we dont know target block
+        self.selected_chain_syncer.send(Intake::Disconnect).await?;
 
         Ok(())
     }
@@ -196,8 +240,15 @@ impl Subscriber {
                 let cursor = block.header.as_ref().into();
                 self.block_handler
                     .send_async(BlockOrMany::Block(block))
-                    .await?;
+                    .await
+                    .context("block handler send failed")?;
                 self.last_block_cursor = Some(cursor);
+            }
+            Notification::VirtualChainChanged(vcc) => {
+                self.selected_chain_syncer
+                    .send(Intake::VirtualChainChangedNotification(vcc))
+                    .await
+                    .context("block handler send failed")?;
             }
             _ => {
                 warn!("unknown notification: {:?}", notification)

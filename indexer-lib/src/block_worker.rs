@@ -1,0 +1,310 @@
+use crate::database::block_compact_header::BlockCompactHeaderPartition;
+use crate::{
+    BlockOrMany,
+    database::{
+        acceptance::TxIDToAcceptancePartition,
+        contextual_message_by_sender::ContextualMessageBySenderPartition,
+        handshake::{
+            AddressPayload, HandshakeByReceiverPartition, HandshakeKeyByReceiver,
+            TxIdToHandshakePartition,
+        },
+        metadata::MetadataPartition,
+        payment::{PaymentByReceiverPartition, PaymentKeyByReceiver, TxIdToPaymentPartition},
+        resolution_keys::{
+            ContextualMessageKeyForResolution, HandshakeKeyForResolution, PaymentKeyForResolution,
+        },
+        skip_tx::SkipTxPartition,
+    },
+    fifo_set::FifoSet,
+    historical_syncer::Cursor,
+    metrics::SharedMetrics,
+};
+use fjall::{TxKeyspace, WriteTransaction};
+use kaspa_consensus_core::tx::{Transaction, TransactionId};
+use kaspa_rpc_core::{RpcBlock, RpcHash, RpcTransaction};
+use protocol::operation::{
+    SealedContextualMessageV1, SealedMessageOrSealedHandshakeVNone, SealedOperation,
+    SealedPaymentV1, deserializer::parse_sealed_operation,
+};
+use tracing::{debug, info, trace};
+
+#[derive(bon::Builder)]
+pub struct BlockWorker {
+    processed_blocks: FifoSet<RpcHash>,
+    processed_txs: FifoSet<TransactionId>,
+    intake: flume::Receiver<BlockOrMany>,
+    shutdown: flume::Receiver<()>,
+
+    tx_keyspace: TxKeyspace,
+
+    metadata_partition: MetadataPartition,
+
+    handshake_by_receiver_partition: HandshakeByReceiverPartition,
+    tx_id_to_handshake_partition: TxIdToHandshakePartition,
+
+    contextual_message_partition: ContextualMessageBySenderPartition,
+
+    payment_by_receiver_partition: PaymentByReceiverPartition,
+    tx_id_to_payment_partition: TxIdToPaymentPartition,
+
+    tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
+
+    skip_tx_partition: SkipTxPartition,
+    block_compact_header_partition: BlockCompactHeaderPartition,
+    metrics: SharedMetrics,
+}
+
+impl BlockWorker {
+    pub fn process(&mut self) -> anyhow::Result<()> {
+        info!("Block worker started");
+        loop {
+            match self.select_input()? {
+                BlocksOrShutdown::Shutdown(_) => {
+                    info!("Block worker received shutdown signal, draining notifications first");
+                    let rx = std::mem::replace(&mut self.intake, flume::unbounded().1);
+                    rx.drain().try_for_each(|blocks| -> anyhow::Result<()> {
+                        self.handle_blocks(&blocks)?;
+                        Ok(())
+                    })?;
+                    info!("Draining is done, stopping block worker");
+                    return Ok(());
+                }
+                BlocksOrShutdown::Blocks(blocks) => {
+                    self.handle_blocks(&blocks)?;
+                }
+            }
+        }
+    }
+
+    fn select_input(&self) -> anyhow::Result<BlocksOrShutdown> {
+        trace!("Waiting for new blocks or shutdown signal");
+        Ok(flume::Selector::new()
+            .recv(&self.intake, |r| r.map(BlocksOrShutdown::from))
+            .recv(&self.shutdown, |r| r.map(BlocksOrShutdown::from))
+            .wait()?)
+    }
+
+    fn handle_blocks(&mut self, blocks: &[RpcBlock]) -> anyhow::Result<()> {
+        debug!("Received {} blocks for processing", blocks.len());
+        for block in blocks {
+            let hash = &block.header.hash;
+            if self.processed_blocks.contains(hash) {
+                debug!(%hash, "Skipping already processed block");
+                continue;
+            }
+            self.block_compact_header_partition.insert_compact_header(
+                hash,
+                block.header.blue_work,
+                block.header.daa_score,
+            )?;
+            let mut wtx = self.tx_keyspace.write_tx()?;
+            debug!(%hash, "Processing block with {} transactions", block.transactions.len());
+            for tx in &block.transactions {
+                self.handle_transaction(&mut wtx, block, tx)?;
+            }
+
+            self.metadata_partition.set_latest_block_cursor(
+                &mut wtx,
+                Cursor {
+                    blue_work: block.header.blue_work,
+                    hash: block.header.hash,
+                },
+            )?;
+
+            wtx.commit()??;
+            self.processed_blocks.insert(*hash);
+            self.metrics.increment_blocks_processed();
+        }
+        Ok(())
+    }
+
+    fn handle_transaction(
+        &mut self,
+        wtx: &mut WriteTransaction,
+        block: &RpcBlock,
+        tx: &RpcTransaction,
+    ) -> anyhow::Result<()> {
+        let tx_id = match &tx.verbose_data {
+            Some(data) => data.transaction_id,
+            None => Transaction::try_from(tx.clone())?.id(),
+        };
+        if self.processed_txs.contains(&tx_id) {
+            debug!(%tx_id, "Skipping already processed transaction");
+            return Ok(());
+        }
+
+        trace!(%tx_id, "Processing transaction");
+        match parse_sealed_operation(&tx.payload).inspect(|op| {
+            trace!(%tx_id, kind = op.op_type_name(), "Parsed sealed operation");
+        }) {
+            Some(SealedOperation::SealedMessageOrSealedHandshakeVNone(op)) => {
+                self.handle_handshake(wtx, block, tx, &tx_id, op)?;
+            }
+            Some(SealedOperation::ContextualMessageV1(op)) => {
+                self.handle_contextual_message(wtx, block, &tx_id, op)?;
+            }
+            Some(SealedOperation::PaymentV1(op)) => {
+                self.handle_payment(wtx, block, tx, &tx_id, op)?;
+            }
+            None => {
+                debug!(%tx_id, "No valid sealed operation found, skipping");
+                self.skip_tx_partition.mark_skip(wtx, tx_id.as_bytes());
+            }
+        }
+        self.processed_txs.insert(tx_id);
+
+        Ok(())
+    }
+    fn handle_handshake(
+        &mut self,
+        wtx: &mut WriteTransaction,
+        block: &RpcBlock,
+        tx: &RpcTransaction,
+        tx_id: &TransactionId,
+        op: SealedMessageOrSealedHandshakeVNone,
+    ) -> anyhow::Result<()> {
+        debug!(%tx_id, "Handling HandshakeVNone");
+        self.tx_id_to_handshake_partition
+            .insert_wtx(wtx, tx_id.as_ref(), op.sealed_hex);
+
+        let receiver = tx
+            .outputs
+            .first()
+            .map(|o| AddressPayload::try_from(&o.script_public_key))
+            .transpose()?
+            .unwrap_or_default();
+        debug!(receiver=?receiver, "Inserting handshake by receiver");
+
+        self.handshake_by_receiver_partition.insert_wtx(
+            wtx,
+            &HandshakeKeyByReceiver {
+                receiver,
+                block_time: block.header.timestamp.to_be_bytes(),
+                block_hash: block.header.hash.as_bytes(),
+                version: 0,
+                tx_id: tx_id.as_bytes(),
+            },
+            None,
+        );
+
+        let hk_for_resolution = HandshakeKeyForResolution {
+            block_time: block.header.timestamp.to_be_bytes(),
+            block_hash: block.header.hash.as_bytes(),
+            receiver,
+            version: 0,
+            tx_id: tx_id.as_bytes(),
+            attempt_count: 0,
+        };
+        self.tx_id_to_acceptance_partition.insert_handshake_wtx(
+            wtx,
+            tx_id.as_bytes(),
+            &hk_for_resolution,
+            None,
+            None,
+        );
+
+        Ok(())
+    }
+
+    fn handle_contextual_message(
+        &mut self,
+        wtx: &mut WriteTransaction,
+        block: &RpcBlock,
+        tx_id: &TransactionId,
+        op: SealedContextualMessageV1,
+    ) -> anyhow::Result<()> {
+        debug!(%tx_id, "Handling ContextualMessageV1");
+        debug!(alias=?op.alias, "Inserting contextual message");
+        self.contextual_message_partition.insert(
+            wtx,
+            Default::default(),
+            op.alias,
+            block.header.timestamp,
+            block.header.hash.as_bytes(),
+            1,
+            tx_id.as_bytes(),
+            op.sealed_hex,
+        )?;
+
+        let mut alias = [0u8; 16];
+        alias[..op.alias.len().min(16)].copy_from_slice(op.alias);
+        let cmk_for_resolution = ContextualMessageKeyForResolution {
+            alias,
+            block_time: block.header.timestamp.to_be_bytes(),
+            block_hash: block.header.hash.as_bytes(),
+            version: 1,
+            tx_id: tx_id.as_bytes(),
+            attempt_count: 0,
+        };
+        self.tx_id_to_acceptance_partition
+            .insert_contextual_message_wtx(wtx, tx_id.as_bytes(), &cmk_for_resolution, None, None);
+        self.metrics.increment_contextual_messages_count();
+        Ok(())
+    }
+
+    fn handle_payment(
+        &mut self,
+        wtx: &mut WriteTransaction,
+        block: &RpcBlock,
+        tx: &RpcTransaction,
+        tx_id: &TransactionId,
+        op: SealedPaymentV1,
+    ) -> anyhow::Result<()> {
+        debug!(%tx_id, "Handling PaymentV1");
+        let (amount, receiver) = tx
+            .outputs
+            .first()
+            .map(|o| AddressPayload::try_from(&o.script_public_key).map(|addr| (o.value, addr)))
+            .transpose()?
+            .unwrap_or_default();
+
+        debug!(receiver=?receiver, amount, "Inserting payment by receiver");
+        self.tx_id_to_payment_partition
+            .insert_wtx(wtx, tx_id.as_ref(), amount, op.sealed_hex)?;
+        self.payment_by_receiver_partition.insert_wtx(
+            wtx,
+            &PaymentKeyByReceiver {
+                receiver,
+                block_time: block.header.timestamp.to_be_bytes(),
+                block_hash: block.header.hash.as_bytes(),
+                version: 1,
+                tx_id: tx_id.as_bytes(),
+            },
+            None,
+        );
+        let pk_for_resolution = PaymentKeyForResolution {
+            block_time: block.header.timestamp.to_be_bytes(),
+            block_hash: block.header.hash.as_bytes(),
+            receiver,
+            version: 1,
+            tx_id: tx_id.as_bytes(),
+            attempt_count: 0,
+        };
+        self.tx_id_to_acceptance_partition.insert_payment_wtx(
+            wtx,
+            tx_id.as_bytes(),
+            &pk_for_resolution,
+            None,
+            None,
+        );
+
+        Ok(())
+    }
+}
+
+enum BlocksOrShutdown {
+    Blocks(BlockOrMany),
+    Shutdown(()),
+}
+
+impl From<BlockOrMany> for BlocksOrShutdown {
+    fn from(other: BlockOrMany) -> Self {
+        Self::Blocks(other)
+    }
+}
+
+impl From<()> for BlocksOrShutdown {
+    fn from(value: ()) -> Self {
+        Self::Shutdown(value)
+    }
+}

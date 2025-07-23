@@ -1,5 +1,6 @@
 use ringmap::set::RingSet;
 
+// will be used to sort already processed blocks and/or already processed transactions
 pub struct FifoSet<K> {
     set: RingSet<K>,
 }

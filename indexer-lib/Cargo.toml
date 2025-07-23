@@ -5,17 +5,30 @@ edition = "2024"
 
 [dependencies]
 anyhow.workspace = true
+arc-swap.workspace = true
+bon.workspace = true
+bytemuck = { workspace = true, features = ["latest_stable_rust"]}
+fjall.workspace = true
 flume.workspace = true
 futures-util.workspace = true
 itertools.workspace = true
-kaspa-core.workspace = true
+kaspa-addresses.workspace = true
+kaspa-consensus-core.workspace = true
+kaspa-math.workspace = true
 kaspa-rpc-core.workspace = true
+kaspa-txscript.workspace = true
 kaspa-wrpc-client.workspace = true
+parking_lot = "0.12.4"
 ringmap.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 tracing.workspace = true
 workflow-core.workspace = true
+workflow-rpc.workspace = true
+workflow-serializer.workspace = true
+
+protocol.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["signal"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+#tempfile = "3.0"

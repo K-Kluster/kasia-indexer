@@ -1,0 +1,24 @@
+[package]
+name = "indexer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+fjall = { workspace = true }
+flume = { workspace = true }
+kaspa-wrpc-client = { workspace = true }
+parking_lot = { workspace = true }
+time = { workspace = true , features = ["macros"]}
+tokio = { workspace = true, features = ["signal"] }
+
+dotenv = { workspace = true }
+
+tracing = { workspace = true }
+tracing-appender.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter", "local-time"] }
+
+workflow-core = { workspace = true }
+rolling-file = { workspace = true }
+
+indexer-lib = { path = "../indexer-lib" }

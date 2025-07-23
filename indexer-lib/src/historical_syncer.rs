@@ -1,29 +1,43 @@
-use crate::BlockOrMany;
+use crate::database::block_gaps::{BlockGap, BlockGapsPartition};
+use crate::{APP_IS_RUNNING, BlockOrMany};
+use anyhow::bail;
 use itertools::FoldWhile::{Continue, Done};
 use itertools::Itertools;
+use kaspa_math::Uint192;
 use kaspa_rpc_core::api::rpc::RpcApi;
 use kaspa_rpc_core::{GetBlocksResponse, RpcHash, RpcHeader};
 use kaspa_wrpc_client::KaspaRpcClient;
+use std::fmt;
+use tokio::task;
 use tracing::{debug, error, info, trace, warn};
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq, Ord, PartialOrd, Default)]
 pub struct Cursor {
-    pub blue_score: u64,
+    pub blue_work: Uint192,
     pub hash: RpcHash,
+}
+
+impl fmt::Debug for Cursor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Cursor")
+            .field("blue_work", &self.blue_work.to_string())
+            .field("hash", &self.hash.to_string())
+            .finish()
+    }
 }
 
 impl From<&RpcHeader> for Cursor {
     fn from(value: &RpcHeader) -> Self {
         Self {
-            blue_score: value.blue_score,
+            blue_work: value.blue_work,
             hash: value.hash,
         }
     }
 }
 
 impl Cursor {
-    pub fn new(blue_score: u64, hash: RpcHash) -> Self {
-        Self { blue_score, hash }
+    pub fn new(blue_work: Uint192, hash: RpcHash) -> Self {
+        Self { blue_work, hash }
     }
 }
 
@@ -49,6 +63,8 @@ pub struct SyncConfig {
 
 /// Manages historical data synchronization from Kaspa node
 pub struct HistoricalDataSyncer {
+    // todo not needed if db is updated per each iteration
+    from_cursor: Cursor,
     /// Current sync position
     current_cursor: Cursor,
     /// Target sync position
@@ -66,6 +82,8 @@ pub struct HistoricalDataSyncer {
     /// Statistics for monitoring
     total_blocks_processed: u64,
     batches_processed: u64,
+
+    block_gaps_partition: BlockGapsPartition,
 }
 
 impl HistoricalDataSyncer {
@@ -76,16 +94,15 @@ impl HistoricalDataSyncer {
         target_cursor: Cursor,
         block_handler: flume::Sender<BlockOrMany>,
         shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+        block_gaps_partition: BlockGapsPartition,
     ) -> Self {
         info!(
-            "Initializing historical data syncer: start_blue_score={}, target_blue_score={}, start_hash={:?}, target_hash={:?}",
-            start_cursor.blue_score,
-            target_cursor.blue_score,
-            start_cursor.hash,
-            target_cursor.hash
+            "Initializing historical data syncer: start_blue_work={}, target_blue_work={}, start_hash={:?}, target_hash={:?}",
+            start_cursor.blue_work, target_cursor.blue_work, start_cursor.hash, target_cursor.hash
         );
 
         Self {
+            from_cursor: start_cursor,
             current_cursor: start_cursor,
             target_cursor,
             anticone_candidates: Vec::new(),
@@ -94,6 +111,7 @@ impl HistoricalDataSyncer {
             shutdown_rx,
             total_blocks_processed: 0,
             batches_processed: 0,
+            block_gaps_partition,
         }
     }
 
@@ -102,6 +120,9 @@ impl HistoricalDataSyncer {
         info!("Starting historical data synchronization");
 
         loop {
+            if !APP_IS_RUNNING.load(std::sync::atomic::Ordering::Relaxed) {
+                bail!("App is stopped");
+            }
             let fetch_next_batch = async || {
                 loop {
                     let Ok(blocks) = self
@@ -120,7 +141,7 @@ impl HistoricalDataSyncer {
             // Check for shutdown signal and fetch next batch
             let blocks_response = tokio::select! {
                 biased;
-                
+
                 shutdown_result = &mut self.shutdown_rx => {
                     shutdown_result
                     .inspect(|_| info!("Shutdown signal received, stopping sync"))
@@ -152,12 +173,28 @@ impl HistoricalDataSyncer {
 
             // Log progress periodically
             if self.batches_processed % 100 == 0 {
+                let initial_blue_work = self.from_cursor.blue_work;
+                let current_blue_work = self.current_cursor.blue_work;
+                let target_blue_work = self.target_cursor.blue_work;
+
+                let total_work_to_sync = target_blue_work - initial_blue_work;
+                let work_synced = current_blue_work - initial_blue_work;
+
+                let percentage = if total_work_to_sync > Uint192::from_u64(0) {
+                    (work_synced.as_u128() * 100) / total_work_to_sync.as_u128()
+                } else {
+                    100
+                };
+
                 info!(
-                    "Sync progress: {} batches processed, {} total blocks, current blue score: {}, target blue score: {}",
+                    current_block = %self.current_cursor.hash,
+                    current_blue_work = %current_blue_work,
+                    target_block = %self.target_cursor.hash,
+                    target_blue_work = %target_blue_work,
+                    "Sync progress: {}% ({} batches processed, {} blocks processed)",
+                    percentage,
                     self.batches_processed,
                     self.total_blocks_processed,
-                    self.current_cursor.blue_score,
-                    self.target_cursor.blue_score,
                 );
             }
 
@@ -167,6 +204,14 @@ impl HistoricalDataSyncer {
                     "Synchronization completed successfully. Status: {:?}, Total blocks: {}, Total batches: {}",
                     target_status, self.total_blocks_processed, self.batches_processed
                 );
+                let gaps_partition = self.block_gaps_partition.clone();
+                let gap = BlockGap {
+                    from_blue_work: self.from_cursor.blue_work,
+                    from_block_hash: self.from_cursor.hash,
+                    to_blue_work: Some(self.target_cursor.blue_work),
+                    to_block_hash: Some(self.target_cursor.hash),
+                };
+                task::spawn_blocking(move || gaps_partition.remove_gap(gap)).await??;
                 return Ok(());
             }
         }
@@ -195,7 +240,7 @@ impl HistoricalDataSyncer {
                 SyncTargetStatus::NotReached(self.current_cursor),
                 |_acc, (block_hash, block)| {
                     // Update cursor for each block processed
-                    last_cursor = Cursor::new(block.header.blue_score, block.header.hash);
+                    last_cursor = Cursor::new(block.header.blue_work, block.header.hash);
 
                     // Check if this block is our direct target
                     if block_hash == &self.target_cursor.hash {
@@ -209,14 +254,14 @@ impl HistoricalDataSyncer {
                             && self.check_target_in_merge_sets(verbose_data)
                         {
                             debug!(
-                                "Target found via anticone in block: {:?}, blue_score: {}",
-                                block_hash, block.header.blue_score
+                                "Target found via anticone in block: {}, blue_work: {}",
+                                block_hash, block.header.blue_work,
                             );
                             return Done(SyncTargetStatus::TargetFoundViaAnticone);
                         }
-                        // Add to anticone candidates if blue score qualifies
-                        if block.header.blue_score >= self.target_cursor.blue_score {
-                            let candidate = Cursor::new(block.header.blue_score, block.header.hash);
+                        // Add to anticone candidates if blue work qualifies
+                        if block.header.blue_work >= self.target_cursor.blue_work {
+                            let candidate = Cursor::new(block.header.blue_work, block.header.hash);
                             trace!("Adding anticone candidate: {:?}", candidate);
                             self.anticone_candidates.push(candidate);
                         }
@@ -283,8 +328,8 @@ impl HistoricalDataSyncer {
         SyncStats {
             total_blocks_processed: self.total_blocks_processed,
             batches_processed: self.batches_processed,
-            current_blue_score: self.current_cursor.blue_score,
-            target_blue_score: self.target_cursor.blue_score,
+            current_blue_work: self.current_cursor.blue_work,
+            target_blue_work: self.target_cursor.blue_work,
             anticone_candidates_count: self.anticone_candidates.len(),
         }
     }
@@ -295,7 +340,7 @@ impl HistoricalDataSyncer {
 pub struct SyncStats {
     pub total_blocks_processed: u64,
     pub batches_processed: u64,
-    pub current_blue_score: u64,
-    pub target_blue_score: u64,
+    pub current_blue_work: Uint192,
+    pub target_blue_work: Uint192,
     pub anticone_candidates_count: usize,
 }

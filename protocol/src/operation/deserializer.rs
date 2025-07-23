@@ -1,5 +1,6 @@
 use crate::operation::{
-    SealedContextualMessage, SealedMessageOrSealedHandshake, SealedOperation, SealedPayment,
+    SealedContextualMessageV1, SealedMessageOrSealedHandshakeVNone, SealedOperation,
+    SealedPaymentV1,
 };
 use tracing::warn;
 
@@ -14,8 +15,8 @@ pub fn parse_sealed_operation(payload_bytes: &[u8]) -> Option<SealedOperation> {
 
     match payload_without_protocol.strip_prefix(VERSION_1_PART.as_bytes()) {
         // Handle SealedHandshake or SealedMessage
-        None => Some(SealedOperation::SealedMessageOrSealedHandshake(
-            SealedMessageOrSealedHandshake {
+        None => Some(SealedOperation::SealedMessageOrSealedHandshakeVNone(
+            SealedMessageOrSealedHandshakeVNone {
                 sealed_hex: payload_without_protocol,
             },
         )),
@@ -31,13 +32,13 @@ pub fn parse_sealed_operation(payload_bytes: &[u8]) -> Option<SealedOperation> {
                 b':',
                 sealed_hex @ ..,
             ],
-        ) => Some(SealedOperation::Payment(SealedPayment { sealed_hex })),
+        ) => Some(SealedOperation::PaymentV1(SealedPaymentV1 { sealed_hex })),
         Some([b'c', b'o', b'm', b'm', b':', remaining @ ..]) => {
             let delimiter_idx = remaining.iter().position(|b| b == &b':')?;
             let alias = &remaining[..delimiter_idx];
             let contextual_message_hex = &remaining[delimiter_idx + 1..];
-            Some(SealedOperation::ContextualMessage(
-                SealedContextualMessage {
+            Some(SealedOperation::ContextualMessageV1(
+                SealedContextualMessageV1 {
                     alias,
                     sealed_hex: contextual_message_hex,
                 },

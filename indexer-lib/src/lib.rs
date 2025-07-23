@@ -2,10 +2,25 @@ use kaspa_rpc_core::RpcBlock;
 use std::ops::Deref;
 use std::slice;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+
+pub static APP_IS_RUNNING: AtomicBool = AtomicBool::new(true);
 
 pub mod fifo_set;
 pub mod historical_syncer;
 pub mod subscriber;
+
+pub mod database;
+pub mod metrics;
+
+pub mod acceptance_worker;
+pub mod block_worker;
+
+pub mod selected_chain_syncer;
+
+pub mod scan_worker;
+
+pub mod resolver;
 
 pub enum BlockOrMany {
     Many(Vec<RpcBlock>),
