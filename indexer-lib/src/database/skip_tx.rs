@@ -2,31 +2,15 @@ use anyhow::Result;
 use fjall::{PartitionCreateOptions, ReadTransaction, WriteTransaction};
 use kaspa_rpc_core::RpcTransactionId;
 
-/// FIFO partition for marking transactions to skip (non-handshake transactions)
-///
-/// Uses FIFO compaction strategy because:
-/// - Skip decisions are temporary and don't need long-term storage
-/// - Older skip entries become irrelevant as blockchain progresses
-/// - Self-balancing: automatically removes old entries when size limit reached
-/// - No manual cleanup needed.
 #[derive(Clone)]
 pub struct SkipTxPartition(fjall::TxPartition);
 
 impl SkipTxPartition {
     pub fn new(keyspace: &fjall::TxKeyspace) -> Result<Self> {
-        Ok(Self(
-            keyspace.open_partition(
-                "skip_tx",
-                PartitionCreateOptions::default()
-                    .block_size(32 * 1024)
-                    .compaction_strategy(fjall::compaction::Strategy::Fifo(
-                        fjall::compaction::Fifo {
-                            limit: 32 * 1024 * 1024,
-                            ttl_seconds: None,
-                        },
-                    )),
-            )?,
-        ))
+        Ok(Self(keyspace.open_partition(
+            "skip_tx",
+            PartitionCreateOptions::default().block_size(32 * 1024),
+        )?))
     }
 
     /// Mark a transaction as one to skip

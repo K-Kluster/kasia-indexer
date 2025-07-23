@@ -1,5 +1,5 @@
 use crate::database::LikeTxIds;
-use anyhow::{Result};
+use anyhow::Result;
 use fjall::{PartitionCreateOptions, ReadTransaction, UserValue, WriteTransaction};
 use kaspa_rpc_core::{RpcHash, RpcTransactionId};
 
@@ -14,13 +14,6 @@ pub enum UnknownTxUpdateAction {
     DoNothing,
 }
 
-/// FIFO partition for storing transactions with unknown acceptance status
-/// Key: accepting_block_hash (32 bytes), Value: flattened array of tx_ids (32 bytes each)
-///
-/// Uses FIFO compaction strategy because:
-/// - Unknown status is temporary - will be resolved when block/acceptance notifications arrive
-/// - Older unknown transactions become irrelevant as blockchain progresses
-/// - Self-balancing: automatically removes old entries when size limit reached
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnknownTxInfo {
     pub tx_id: RpcTransactionId,
@@ -32,19 +25,10 @@ pub struct UnknownTxPartition(fjall::TxPartition);
 
 impl UnknownTxPartition {
     pub fn new(keyspace: &fjall::TxKeyspace) -> Result<Self> {
-        Ok(Self(
-            keyspace.open_partition(
-                "unknown_tx",
-                PartitionCreateOptions::default()
-                    .block_size(64 * 1024)
-                    .compaction_strategy(fjall::compaction::Strategy::Fifo(
-                        fjall::compaction::Fifo {
-                            limit: 64 * 1024 * 1024,
-                            ttl_seconds: None,
-                        },
-                    )),
-            )?,
-        ))
+        Ok(Self(keyspace.open_partition(
+            "unknown_tx",
+            PartitionCreateOptions::default().block_size(64 * 1024),
+        )?))
     }
 
     /// Insert unknown transactions for an accepting block hash (batch operation)

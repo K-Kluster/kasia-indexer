@@ -259,7 +259,6 @@ pub enum DaaResolutionPartitionType {
 
 impl UnknownAcceptingDaaPartition {
     pub fn new(keyspace: &fjall::TxKeyspace) -> Result<Self> {
-        // todo cannot be fifo partition, it would lead to 36 gb bound
         Ok(Self(
             keyspace.open_partition(
                 "unknown_accepting_daa",

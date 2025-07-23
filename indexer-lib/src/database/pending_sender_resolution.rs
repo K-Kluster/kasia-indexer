@@ -9,14 +9,6 @@ use bytemuck::{AnyBitPattern, NoUninit};
 use fjall::{PartitionCreateOptions, ReadTransaction, UserKey, WriteTransaction};
 use kaspa_rpc_core::RpcTransactionId;
 
-/// FIFO partition for tracking transactions that need sender address/payload resolution
-/// Key: accepting_daa_score + tx_id + partition_type
-/// Value: key data for the partition that needs sender resolution
-///
-/// Uses FIFO compaction strategy because:
-/// - Pending resolutions are temporary - will be processed and removed
-/// - Older entries become irrelevant as blockchain progresses
-/// - Self-balancing: automatically removes old entries when size limit reached
 #[derive(Clone)]
 pub struct PendingSenderResolutionPartition(fjall::TxPartition);
 
@@ -40,19 +32,10 @@ pub struct PendingSenderResolution<T: AsRef<[u8]> + Clone = UserKey> {
 
 impl PendingSenderResolutionPartition {
     pub fn new(keyspace: &fjall::TxKeyspace) -> Result<Self> {
-        Ok(Self(
-            keyspace.open_partition(
-                "pending_sender_resolution",
-                PartitionCreateOptions::default()
-                    .block_size(64 * 1024)
-                    .compaction_strategy(fjall::compaction::Strategy::Fifo(
-                        fjall::compaction::Fifo {
-                            limit: 256 * 1024 * 1024,
-                            ttl_seconds: None,
-                        },
-                    )),
-            )?,
-        ))
+        Ok(Self(keyspace.open_partition(
+            "pending_sender_resolution",
+            PartitionCreateOptions::default().block_size(64 * 1024),
+        )?))
     }
     pub fn len(&self) -> Result<usize> {
         Ok(self.0.inner().len()?)
