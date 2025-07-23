@@ -98,6 +98,9 @@ pub struct ScanWorker {
     metrics_snapshot_interval: Duration,
     #[builder(default = Instant::now())]
     last_metrics_snapshot_time: Instant,
+
+    #[builder(default = 0)]
+    requests_in_progress: u64,
 }
 
 impl ScanWorker {
@@ -124,14 +127,13 @@ impl ScanWorker {
         Ok(())
     }
 
-    // pub fn tick_work(&mut self) -> anyhow::Result<()> {
-    //     // TODO DONT REQUEST ALREADY REQUESTED. SIMPLY CALCULATE HOW MANY THINGS WE WAITING FOR, DONT PERFORM ANY OP UNTIL WE GET ENOUGH RESULTS
-    //     self.resolve_unknown_tx()?;
-    //     self.unknown_daa()?;
-    //     self.unknown_sender()?;
-    //     self.update_metrics()?;
-    //     Ok(())
-    // }
+    pub fn tick_work(&mut self) -> anyhow::Result<()> {
+        self.resolve_unknown_tx()?;
+        self.unknown_daa()?;
+        self.unknown_sender()?;
+        self.update_metrics()?;
+        Ok(())
+    }
 
     fn update_metrics(&mut self) -> anyhow::Result<()> {
         self.metrics
@@ -161,13 +163,18 @@ impl ScanWorker {
 
         if self.last_metrics_snapshot_time.elapsed() > self.metrics_snapshot_interval {
             info!("{}", self.metrics.snapshot());
+            info!("requests in progress: {}", self.requests_in_progress);
             self.last_metrics_snapshot_time = Instant::now();
         }
 
         Ok(())
     }
 
-    pub fn handle_daa_resolution(&self, r: Result<Box<RpcHeader>, RpcHash>) -> anyhow::Result<()> {
+    pub fn handle_daa_resolution(
+        &mut self,
+        r: Result<Box<RpcHeader>, RpcHash>,
+    ) -> anyhow::Result<()> {
+        self.requests_in_progress -= 1;
         let _lock = self.reorg_lock.lock();
         let mut wtx = self.tx_keyspace.write_tx()?;
         match r {
@@ -253,9 +260,10 @@ impl ScanWorker {
     }
 
     pub fn handle_sender_resolution(
-        &self,
+        &mut self,
         r: Result<(RpcAddress, SenderByTxIdAndDaa), SenderByTxIdAndDaa>,
     ) -> anyhow::Result<()> {
+        self.requests_in_progress -= 1;
         let _lock = self.reorg_lock.lock();
         let mut wtx = self.tx_keyspace.write_tx()?;
         let rtx = self.tx_keyspace.read_tx();
@@ -473,7 +481,7 @@ impl ScanWorker {
         Ok(())
     }
 
-    fn unknown_daa(&self) -> anyhow::Result<()> {
+    fn unknown_daa(&mut self) -> anyhow::Result<()> {
         let _lock = self.reorg_lock.lock();
         let rtx = self.tx_keyspace.read_tx();
         let mut wtx = self.tx_keyspace.write_tx()?;
@@ -492,12 +500,8 @@ impl ScanWorker {
                     debug!(block_hash = %block, "DAA score still not available for block");
                     let _ = self
                         .resolver_request_block_tx
-                        .send_blocking(block)
-                        .inspect_err(|err| {
-                            if APP_IS_RUNNING.load(Ordering::Relaxed) {
-                                error!("failed to send request to resolve: {}", err)
-                            }
-                        });
+                        .try_send(block)
+                        .inspect(|_| self.requests_in_progress += 1);
                 }
                 Some(daa) => {
                     debug!(block_hash = %block, daa_score = %daa, "DAA score resolved for block");
@@ -536,7 +540,7 @@ impl ScanWorker {
         Ok(())
     }
 
-    fn unknown_sender(&self) -> anyhow::Result<()> {
+    fn unknown_sender(&mut self) -> anyhow::Result<()> {
         let rtx = self.tx_keyspace.read_tx();
         let mut count = 0;
         for pending in self
@@ -549,11 +553,13 @@ impl ScanWorker {
                 ..
             } = pending?;
             count += 1;
-            self.resolver_request_sender_tx
-                .send_blocking(SenderByTxIdAndDaa {
+            _ = self
+                .resolver_request_sender_tx
+                .try_send(SenderByTxIdAndDaa {
                     tx_id: RpcTransactionId::from_bytes(tx_id),
                     daa_score: u64::from_be_bytes(accepting_daa_score),
-                })?
+                })
+                .inspect(|_| self.requests_in_progress += 1);
         }
         self.metrics.set_unknown_sender_entries(count);
         Ok(())

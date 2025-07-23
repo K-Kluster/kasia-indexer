@@ -146,13 +146,13 @@ async fn main() -> anyhow::Result<()> {
         .build();
 
     let (resolver_block_request_tx, resolver_block_request_rx) =
-        // workflow_core::channel::bounded(255);
-    workflow_core::channel::unbounded();
+        workflow_core::channel::bounded(16384);
+    // workflow_core::channel::unbounded();
     let (resolver_sender_request_tx, resolver_sender_request_rx) =
-        // workflow_core::channel::bounded(4096);
-    workflow_core::channel::unbounded();
-    // let (resolver_response_tx, resolver_response_rx) = workflow_core::channel::bounded(4096);
-    let (resolver_response_tx, resolver_response_rx) = workflow_core::channel::unbounded();
+        workflow_core::channel::bounded(16384);
+    // workflow_core::channel::unbounded();
+    let (resolver_response_tx, resolver_response_rx) = workflow_core::channel::bounded(32768);
+    // let (resolver_response_tx, resolver_response_rx) = workflow_core::channel::unbounded();
     let (shutdown_resolver_tx, shutdown_resolver_rx) = tokio::sync::oneshot::channel();
 
     let mut resolver = Resolver::new(
@@ -222,7 +222,7 @@ async fn main() -> anyhow::Result<()> {
         shutdown_ticker_rx,
         scan_worker_job_done_rx,
         resolver_response_tx.clone(),
-        Duration::from_secs(30),
+        Duration::from_secs(10),
     ));
 
     // Spawn workers
