@@ -283,59 +283,9 @@ impl PendingSenderResolutionPartition {
 
         Ok(rtx.prefix(&self.0, prefix).next().is_some())
     }
+    
 
-    /// Mark multiple handshake transactions as needing sender resolution
-    pub fn mark_handshakes_pending_batch<'a, I>(
-        &self,
-        wtx: &mut WriteTransaction,
-        accepting_daa_score: u64,
-        entries: I,
-    ) -> Result<()>
-    where
-        I: Iterator<Item = (RpcTransactionId, &'a HandshakeKeyForResolution)>,
-    {
-        for (tx_id, handshake_key) in entries {
-            self.mark_handshake_pending(wtx, accepting_daa_score, tx_id.as_bytes(), handshake_key)?;
-        }
-        Ok(())
-    }
-
-    /// Mark multiple contextual message transactions as needing sender resolution
-    pub fn mark_contextual_messages_pending_batch<'a, I>(
-        &self,
-        wtx: &mut WriteTransaction,
-        accepting_daa_score: u64,
-        entries: I,
-    ) -> Result<()>
-    where
-        I: Iterator<Item = (RpcTransactionId, &'a ContextualMessageKeyForResolution)>,
-    {
-        for (tx_id, contextual_message_key) in entries {
-            self.mark_contextual_message_pending(
-                wtx,
-                accepting_daa_score,
-                tx_id.as_bytes(),
-                contextual_message_key,
-            )?;
-        }
-        Ok(())
-    }
-
-    /// Mark multiple payment transactions as needing sender resolution
-    pub fn mark_payments_pending_batch<'a, I>(
-        &self,
-        wtx: &mut WriteTransaction,
-        accepting_daa_score: u64,
-        entries: I,
-    ) -> Result<()>
-    where
-        I: Iterator<Item = (RpcTransactionId, &'a PaymentKeyForResolution)>,
-    {
-        for (tx_id, payment_key) in entries {
-            self.mark_payment_pending(wtx, accepting_daa_score, tx_id.as_bytes(), payment_key)?;
-        }
-        Ok(())
-    }
+    // todo use rtx for fetch ??
 
     /// Decrement attempt count for all entries with the given DAA score and transaction ID, removing entries that reach 0 attempts
     /// Returns a vector of (PartitionId, like_key) pairs that were removed due to reaching 0 attempts
@@ -350,13 +300,13 @@ impl PendingSenderResolutionPartition {
             tx_id: *tx_id.as_ref(),
             partition_type: 0,
         };
-
+    
         // Use prefix up to tx_id (8 + 32 = 40 bytes)
         let prefix = &bytemuck::bytes_of(&prefix_key)[..40];
-
+    
         let mut removed_entries = Vec::new();
         let mut keys_to_process = Vec::new();
-
+    
         // First collect all keys for this transaction
         for item in wtx.prefix(&self.0, prefix) {
             let (key_bytes, _) = item?;
@@ -366,7 +316,7 @@ impl PendingSenderResolutionPartition {
                 keys_to_process.push(key);
             }
         }
-
+    
         // Process each key individually using fetch_update
         for key in keys_to_process {
             let partition_type = match key.partition_type {
@@ -377,9 +327,9 @@ impl PendingSenderResolutionPartition {
                 x if x == PartitionId::PaymentBySender as u8 => PartitionId::PaymentBySender,
                 _ => continue, // Skip invalid partition types
             };
-
+    
             let mut removed_entry = None;
-
+    
             wtx.fetch_update(&self.0, bytemuck::bytes_of(&key), |current_value| {
                 if let Some(value_bytes) = current_value {
                     // Extract the current key data and create SenderResolutionLikeKey
@@ -397,7 +347,7 @@ impl PendingSenderResolutionPartition {
                         ),
                         _ => return None, // Invalid partition type
                     };
-
+    
                     // Access the attempt_count and decrement it
                     let new_attempt_count = match &current_like_key {
                         SenderResolutionLikeKey::HandshakeKey(key) => {
@@ -410,7 +360,7 @@ impl PendingSenderResolutionPartition {
                             key.attempt_count.saturating_sub(1)
                         }
                     };
-
+    
                     if new_attempt_count == 0 {
                         // Remove the entry by returning None
                         removed_entry = Some((partition_type, current_like_key));
@@ -447,12 +397,12 @@ impl PendingSenderResolutionPartition {
                     None
                 }
             })?;
-
+    
             if let Some(removed) = removed_entry {
                 removed_entries.push(removed);
             }
         }
-
+    
         Ok(removed_entries)
     }
 }

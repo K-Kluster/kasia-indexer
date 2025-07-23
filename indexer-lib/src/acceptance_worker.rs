@@ -169,6 +169,8 @@ impl AcceptanceWorker {
         accepting_block_hash: &RpcHash,
         tx_id_s: &[RpcTransactionId],
     ) -> anyhow::Result<()> {
+        let _lock = self.reorg_log.lock(); // rename lock
+
         let accepting_daa = self
             .block_compact_header_partition
             .get_daa_score_rtx(rtx, accepting_block_hash)?;
