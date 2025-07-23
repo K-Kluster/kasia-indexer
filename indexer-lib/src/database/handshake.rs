@@ -197,6 +197,16 @@ impl HandshakeByReceiverPartition {
 pub struct TxIdToHandshakePartition(fjall::TxPartition);
 
 impl TxIdToHandshakePartition {
+    pub fn len(&self) -> anyhow::Result<usize> {
+        Ok(self.0.inner().len()?)
+    }
+
+    pub fn is_empty(&self) -> anyhow::Result<bool> {
+        Ok(self.0.inner().is_empty()?)
+    }
+}
+
+impl TxIdToHandshakePartition {
     pub fn new(keyspace: &fjall::TxKeyspace) -> anyhow::Result<Self> {
         Ok(Self(keyspace.open_partition(
             "tx-id-to-handshake",

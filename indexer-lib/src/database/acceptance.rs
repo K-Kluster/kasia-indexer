@@ -193,13 +193,22 @@ impl TxIDToAcceptancePartition {
     }
 
     /// Insert a payment ForResolution key
-    pub fn resolve(&self, wtx: &mut WriteTransaction, tx_id: [u8; 32]) -> Result<()> {
-        let keys = wtx
-            .prefix(&self.0, tx_id)
-            .map(|r| r.map(|kv| kv.0))
-            .collect::<Result<Vec<_>, _>>()?;
-        for k in keys {
-            wtx.update_fetch(&self.0, k, |_old| Some([].into()))?;
+    pub fn raw_keys_by_txid(
+        &self,
+        rtx: &ReadTransaction,
+        tx_id: [u8; 32],
+    ) -> impl Iterator<Item = Result<UserKey>> {
+        rtx.prefix(&self.0, tx_id)
+            .map(|r| r.map(|kv| kv.0).map_err(Into::into))
+    }
+
+    pub fn resolve_by_raw_keys<I: Iterator<Item = Result<UserKey>>>(
+        &self,
+        wtx: &mut WriteTransaction,
+        iter: I,
+    ) -> Result<()> {
+        for k in iter {
+            wtx.update_fetch(&self.0, k?, |_old| Some([].into()))?;
         }
         Ok(())
     }

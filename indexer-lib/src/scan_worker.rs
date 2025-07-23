@@ -254,12 +254,16 @@ impl ScanWorker {
     ) -> anyhow::Result<()> {
         let _lock = self.reorg_lock.lock();
         let mut wtx = self.tx_keyspace.write_tx()?;
+        let rtx = self.tx_keyspace.read_tx();
         match r {
             Ok((address, SenderByTxIdAndDaa { tx_id, daa_score })) => {
                 self.metrics.increment_senders_resolved();
                 let sender = (&address).try_into()?;
-                self.tx_id_to_acceptance_partition
-                    .resolve(&mut wtx, tx_id.as_bytes())?;
+                self.tx_id_to_acceptance_partition.resolve_by_raw_keys(
+                    &mut wtx,
+                    self.tx_id_to_acceptance_partition
+                        .raw_keys_by_txid(&rtx, tx_id.as_bytes()),
+                )?;
                 trace!(%tx_id, %daa_score, "Successfully resolved sender for transaction");
                 for (_partition_id, key) in self
                     .pending_sender_resolution_partition
