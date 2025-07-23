@@ -385,6 +385,7 @@ impl ScanWorker {
                             );
                             extended_daa_requests.push_handshake(*tx_id, &hk);
                             found_resolution = true;
+                            processed_any = true;
                         }
                         AcceptingBlockResolutionData::ContextualMessageKey(cmk) => {
                             assert_eq!(
@@ -418,6 +419,7 @@ impl ScanWorker {
                             );
 
                             extended_daa_requests.push_payment(*tx_id, &pmk);
+                            found_resolution = true;
                             processed_any = true;
                         }
                         AcceptingBlockResolutionData::None => {
