@@ -361,6 +361,8 @@ impl ScanWorker {
         let rtx = self.tx_keyspace.read_tx();
         let mut wtx = self.tx_keyspace.write_tx()?;
 
+        let mut total_unknown_tx_count = 0;
+
         // Process unknown transactions by accepting block hash (following new pattern)
         for unknown_block_result in self.unknown_tx_partition.get_all_unknown(&rtx) {
             let (accepting_block_hash, like_tx_ids) = unknown_block_result?;
@@ -448,6 +450,7 @@ impl ScanWorker {
             }
             // Update the entry for this accepting block hash using the new explicit enum
             if processed_any {
+                let remaining_count = remaining_tx_ids.len();
                 self.unknown_tx_partition.update_by_accepting_block_hash(
                     &mut wtx,
                     &accepting_block_hash,
@@ -464,6 +467,10 @@ impl ScanWorker {
                         }
                     },
                 )?;
+                total_unknown_tx_count += remaining_count as u64;
+            } else {
+                // If no processing occurred, count all existing transactions as unknown
+                total_unknown_tx_count += like_tx_ids.as_tx_ids().len() as u64;
             }
             if !extended_daa_requests.is_empty() {
                 debug!(count = %extended_daa_requests.len(), %accepting_block_hash, "Extending DAA requests");
@@ -477,6 +484,8 @@ impl ScanWorker {
         }
         wtx.commit()?
             .context("failed to commit, conflict resolve_unknown_tx")?;
+
+        self.metrics.set_unknown_tx_entries(total_unknown_tx_count);
         Ok(())
     }
 

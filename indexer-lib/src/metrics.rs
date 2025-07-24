@@ -28,6 +28,8 @@ pub struct IndexerMetricsSnapshot {
     pub unknown_daa_entries: u64,
     /// Number of unknown sender entries
     pub unknown_sender_entries: u64,
+    /// Number of unknown transaction entries
+    pub unknown_tx_entries: u64,
     pub resolved_daa: u64,
     pub resolved_senders: u64,
 }
@@ -57,6 +59,7 @@ impl Display for IndexerMetricsSnapshot {
             "  Unknown sender entries: {}",
             self.unknown_sender_entries
         )?;
+        writeln!(f, "  Unknown tx entries: {}", self.unknown_tx_entries)?;
         writeln!(f, "  Resolved DAA entries: {}", self.resolved_daa)?;
         writeln!(f, "  Resolved senders: {}", self.resolved_senders)
     }
@@ -85,6 +88,8 @@ pub struct IndexerMetrics {
     pub unknown_daa_entries: AtomicU64,
     /// Number of unknown sender entries
     pub unknown_sender_entries: AtomicU64,
+    /// Number of unknown transaction entries
+    pub unknown_tx_entries: AtomicU64,
     pub resolved_daa: AtomicU64,
     pub resolved_sender: AtomicU64,
 }
@@ -103,6 +108,7 @@ impl IndexerMetrics {
             latest_accepting_block: ArcSwap::new(Arc::new(RpcHash::default())),
             unknown_daa_entries: AtomicU64::new(0),
             unknown_sender_entries: AtomicU64::new(0),
+            unknown_tx_entries: AtomicU64::new(0),
             resolved_daa: Default::default(),
             resolved_sender: Default::default(),
         }
@@ -121,6 +127,7 @@ impl IndexerMetrics {
             latest_accepting_block: ArcSwap::new(Arc::new(snapshot.latest_accepting_block)),
             unknown_daa_entries: AtomicU64::new(snapshot.unknown_daa_entries),
             unknown_sender_entries: AtomicU64::new(snapshot.unknown_sender_entries),
+            unknown_tx_entries: AtomicU64::new(snapshot.unknown_tx_entries),
             resolved_daa: AtomicU64::new(snapshot.resolved_daa),
             resolved_sender: AtomicU64::new(snapshot.resolved_senders),
         }
@@ -139,6 +146,7 @@ impl IndexerMetrics {
             latest_accepting_block: *self.latest_accepting_block.load().as_ref(),
             unknown_daa_entries: self.unknown_daa_entries.load(Ordering::Relaxed),
             unknown_sender_entries: self.unknown_sender_entries.load(Ordering::Relaxed),
+            unknown_tx_entries: self.unknown_tx_entries.load(Ordering::Relaxed),
             resolved_daa: self.resolved_daa.load(Ordering::Relaxed),
             resolved_senders: self.resolved_sender.load(Ordering::Relaxed),
         }
@@ -192,6 +200,11 @@ impl IndexerMetrics {
     /// Set unknown sender entries count
     pub fn set_unknown_sender_entries(&self, count: u64) {
         self.unknown_sender_entries.store(count, Ordering::Relaxed);
+    }
+
+    /// Set unknown tx entries count
+    pub fn set_unknown_tx_entries(&self, count: u64) {
+        self.unknown_tx_entries.store(count, Ordering::Relaxed);
     }
 
     /// Get current handshakes by sender count
