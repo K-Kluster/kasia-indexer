@@ -1,24 +1,20 @@
-use crate::database::block_compact_header::BlockCompactHeaderPartition;
-use crate::{
-    BlockOrMany,
-    database::{
-        acceptance::TxIDToAcceptancePartition,
-        contextual_message_by_sender::ContextualMessageBySenderPartition,
-        handshake::{
-            AddressPayload, HandshakeByReceiverPartition, HandshakeKeyByReceiver,
-            TxIdToHandshakePartition,
-        },
-        metadata::MetadataPartition,
-        payment::{PaymentByReceiverPartition, PaymentKeyByReceiver, TxIdToPaymentPartition},
-        resolution_keys::{
-            ContextualMessageKeyForResolution, HandshakeKeyForResolution, PaymentKeyForResolution,
-        },
-        skip_tx::SkipTxPartition,
-    },
-    fifo_set::FifoSet,
-    historical_syncer::Cursor,
-    metrics::SharedMetrics,
+use crate::BlockOrMany;
+use crate::database::headers::BlockCompactHeaderPartition;
+use crate::database::messages::{
+    AddressPayload, ContextualMessageBySenderPartition, HandshakeByReceiverPartition,
+    HandshakeKeyByReceiver, PaymentByReceiverPartition, PaymentKeyByReceiver,
+    TxIdToHandshakePartition, TxIdToPaymentPartition,
 };
+use crate::database::metadata::MetadataPartition;
+use crate::database::processing::{
+    SkipTxByBlockPartition, SkipTxPartition, TxIDToAcceptancePartition,
+};
+use crate::database::resolution_keys::{
+    ContextualMessageKeyForResolution, HandshakeKeyForResolution, PaymentKeyForResolution,
+};
+use crate::fifo_set::FifoSet;
+use crate::historical_syncer::Cursor;
+use crate::metrics::SharedMetrics;
 use fjall::{TxKeyspace, WriteTransaction};
 use kaspa_consensus_core::tx::{Transaction, TransactionId};
 use kaspa_rpc_core::{RpcBlock, RpcHash, RpcTransaction};
@@ -29,7 +25,7 @@ use protocol::operation::{
 use tracing::{debug, info, trace};
 
 #[derive(bon::Builder)]
-pub struct BlockWorker {
+pub struct BlockProcessor {
     processed_blocks: FifoSet<RpcHash>,
     processed_txs: FifoSet<TransactionId>,
     intake: flume::Receiver<BlockOrMany>,
@@ -50,11 +46,12 @@ pub struct BlockWorker {
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
 
     skip_tx_partition: SkipTxPartition,
+    skip_tx_by_block_partition: SkipTxByBlockPartition,
     block_compact_header_partition: BlockCompactHeaderPartition,
     metrics: SharedMetrics,
 }
 
-impl BlockWorker {
+impl BlockProcessor {
     pub fn process(&mut self) -> anyhow::Result<()> {
         info!("Block worker started");
         loop {
@@ -99,8 +96,23 @@ impl BlockWorker {
             )?;
             let mut wtx = self.tx_keyspace.write_tx()?;
             debug!(%hash, "Processing block with {} transactions", block.transactions.len());
+
+            let mut skipped_tx_ids = Vec::with_capacity(block.transactions.len());
             for tx in &block.transactions {
-                self.handle_transaction(&mut wtx, block, tx)?;
+                if let Some(skipped_tx_id) = self.handle_transaction(&mut wtx, block, tx)? {
+                    skipped_tx_ids.push(skipped_tx_id);
+                }
+            }
+
+            // Add skipped transactions to the block-organized partition
+            if !skipped_tx_ids.is_empty() {
+                debug!(%hash, skipped_count = skipped_tx_ids.len(), "Adding skipped transactions to block partition");
+                self.skip_tx_by_block_partition.add_skip_for_block(
+                    &mut wtx,
+                    block.header.daa_score,
+                    *block.header.hash.as_ref(),
+                    &skipped_tx_ids,
+                );
             }
 
             self.metadata_partition.set_latest_block_cursor(
@@ -123,37 +135,41 @@ impl BlockWorker {
         wtx: &mut WriteTransaction,
         block: &RpcBlock,
         tx: &RpcTransaction,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Option<[u8; 32]>> {
         let tx_id = match &tx.verbose_data {
             Some(data) => data.transaction_id,
             None => Transaction::try_from(tx.clone())?.id(),
         };
         if self.processed_txs.contains(&tx_id) {
             debug!(%tx_id, "Skipping already processed transaction");
-            return Ok(());
+            return Ok(None);
         }
 
         trace!(%tx_id, "Processing transaction");
-        match parse_sealed_operation(&tx.payload).inspect(|op| {
+        let skipped_tx_id = match parse_sealed_operation(&tx.payload).inspect(|op| {
             trace!(%tx_id, kind = op.op_type_name(), "Parsed sealed operation");
         }) {
             Some(SealedOperation::SealedMessageOrSealedHandshakeVNone(op)) => {
                 self.handle_handshake(wtx, block, tx, &tx_id, op)?;
+                None
             }
             Some(SealedOperation::ContextualMessageV1(op)) => {
                 self.handle_contextual_message(wtx, block, &tx_id, op)?;
+                None
             }
             Some(SealedOperation::PaymentV1(op)) => {
                 self.handle_payment(wtx, block, tx, &tx_id, op)?;
+                None
             }
             None => {
                 debug!(%tx_id, "No valid sealed operation found, skipping");
                 self.skip_tx_partition.mark_skip(wtx, tx_id.as_bytes());
+                Some(tx_id.as_bytes())
             }
-        }
+        };
         self.processed_txs.insert(tx_id);
 
-        Ok(())
+        Ok(skipped_tx_id)
     }
     fn handle_handshake(
         &mut self,

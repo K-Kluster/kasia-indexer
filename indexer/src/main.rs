@@ -1,17 +1,25 @@
 use dotenv::dotenv;
 use fjall::Config;
-use indexer_lib::database::block_gaps::BlockGap;
+use indexer_lib::database::headers::{BlockCompactHeaderPartition, BlockGap, BlockGapsPartition};
+use indexer_lib::database::messages::{
+    ContextualMessageBySenderPartition, HandshakeByReceiverPartition, HandshakeBySenderPartition,
+    PaymentByReceiverPartition, PaymentBySenderPartition, TxIdToHandshakePartition,
+    TxIdToPaymentPartition,
+};
+use indexer_lib::database::processing::{
+    AcceptingBlockToTxIDPartition, PendingSenderResolutionPartition, SkipTxByBlockPartition,
+    SkipTxPartition, TxIDToAcceptancePartition, UnknownAcceptingDaaPartition, UnknownTxPartition,
+};
 use indexer_lib::fifo_set::FifoSet;
 use indexer_lib::historical_syncer::{Cursor, HistoricalDataSyncer};
 use indexer_lib::metrics::IndexerMetricsSnapshot;
-use indexer_lib::scan_worker::Notification;
+use indexer_lib::periodic_processor::{run_ticker, Notification, PeriodicProcessor};
+use indexer_lib::virtual_chain_processor::VirtualChainProcessor;
 use indexer_lib::{
-    acceptance_worker::{self},
-    block_worker::BlockWorker,
+    block_processor::BlockProcessor,
     database::{self},
     metrics::create_shared_metrics_from_snapshot,
     resolver::Resolver,
-    scan_worker::{self, run_ticker},
     selected_chain_syncer::SelectedChainSyncer,
     subscriber::Subscriber,
     APP_IS_RUNNING,
@@ -52,34 +60,22 @@ async fn main() -> anyhow::Result<()> {
         metadata_partition.0.inner().major_compact()?;
     }
 
-    let handshake_by_receiver_partition =
-        database::handshake::HandshakeByReceiverPartition::new(&tx_keyspace)?;
-    let tx_id_to_handshake_partition =
-        database::handshake::TxIdToHandshakePartition::new(&tx_keyspace)?;
-    let contextual_message_partition =
-        database::contextual_message_by_sender::ContextualMessageBySenderPartition::new(
-            &tx_keyspace,
-        )?;
-    let payment_by_receiver_partition =
-        database::payment::PaymentByReceiverPartition::new(&tx_keyspace)?;
-    let tx_id_to_payment_partition = database::payment::TxIdToPaymentPartition::new(&tx_keyspace)?;
-    let tx_id_to_acceptance_partition =
-        database::acceptance::TxIDToAcceptancePartition::new(&tx_keyspace)?;
-    let skip_tx_partition = database::skip_tx::SkipTxPartition::new(&tx_keyspace)?;
-    let block_compact_header_partition =
-        database::block_compact_header::BlockCompactHeaderPartition::new(&tx_keyspace)?;
-    let acceptance_to_tx_id_partition =
-        database::acceptance::AcceptingBlockToTxIDPartition::new(&tx_keyspace)?;
-    let unknown_tx_partition = database::unknown_tx::UnknownTxPartition::new(&tx_keyspace)?;
-    let unknown_accepting_daa_partition =
-        database::unknown_accepting_daa::UnknownAcceptingDaaPartition::new(&tx_keyspace)?;
-    let pending_sender_resolution_partition =
-        database::pending_sender_resolution::PendingSenderResolutionPartition::new(&tx_keyspace)?;
-    let handshake_by_sender_partition =
-        database::handshake::HandshakeBySenderPartition::new(&tx_keyspace)?;
-    let payment_by_sender_partition =
-        database::payment::PaymentBySenderPartition::new(&tx_keyspace)?;
-    let block_gaps_partition = database::block_gaps::BlockGapsPartition::new(&tx_keyspace)?;
+    let handshake_by_receiver_partition = HandshakeByReceiverPartition::new(&tx_keyspace)?;
+    let tx_id_to_handshake_partition = TxIdToHandshakePartition::new(&tx_keyspace)?;
+    let contextual_message_partition = ContextualMessageBySenderPartition::new(&tx_keyspace)?;
+    let payment_by_receiver_partition = PaymentByReceiverPartition::new(&tx_keyspace)?;
+    let tx_id_to_payment_partition = TxIdToPaymentPartition::new(&tx_keyspace)?;
+    let tx_id_to_acceptance_partition = TxIDToAcceptancePartition::new(&tx_keyspace)?;
+    let skip_tx_partition = SkipTxPartition::new(&tx_keyspace)?;
+    let skip_tx_by_block_partition = SkipTxByBlockPartition::new(&tx_keyspace)?;
+    let block_compact_header_partition = BlockCompactHeaderPartition::new(&tx_keyspace)?;
+    let acceptance_to_tx_id_partition = AcceptingBlockToTxIDPartition::new(&tx_keyspace)?;
+    let unknown_tx_partition = UnknownTxPartition::new(&tx_keyspace)?;
+    let unknown_accepting_daa_partition = UnknownAcceptingDaaPartition::new(&tx_keyspace)?;
+    let pending_sender_resolution_partition = PendingSenderResolutionPartition::new(&tx_keyspace)?;
+    let handshake_by_sender_partition = HandshakeBySenderPartition::new(&tx_keyspace)?;
+    let payment_by_sender_partition = PaymentBySenderPartition::new(&tx_keyspace)?;
+    let block_gaps_partition = BlockGapsPartition::new(&tx_keyspace)?;
 
     let metrics = create_shared_metrics_from_snapshot(IndexerMetricsSnapshot {
         handshakes_by_sender: handshake_by_sender_partition.approximate_len() as u64,
@@ -113,7 +109,7 @@ async fn main() -> anyhow::Result<()> {
 
     let rpc_client = create_rpc_client()?;
 
-    let mut block_worker = BlockWorker::builder()
+    let mut block_worker = BlockProcessor::builder()
         .processed_blocks(FifoSet::new(256))
         .intake(block_intake_rx)
         .shutdown(shutdown_block_worker_rx)
@@ -126,6 +122,7 @@ async fn main() -> anyhow::Result<()> {
         .tx_id_to_payment_partition(tx_id_to_payment_partition.clone())
         .tx_id_to_acceptance_partition(tx_id_to_acceptance_partition.clone())
         .skip_tx_partition(skip_tx_partition.clone())
+        .skip_tx_by_block_partition(skip_tx_by_block_partition.clone())
         .block_compact_header_partition(block_compact_header_partition.clone())
         .metrics(metrics.clone())
         .processed_txs(FifoSet::new(
@@ -133,7 +130,7 @@ async fn main() -> anyhow::Result<()> {
         ))
         .build();
 
-    let mut acceptance_worker = acceptance_worker::AcceptanceWorker::builder()
+    let mut acceptance_worker = VirtualChainProcessor::builder()
         .daa_resolution_attempt_count(5)
         .reorg_log(reorg_lock.clone())
         .vcc_rx(vcc_intake_rx)
@@ -171,7 +168,7 @@ async fn main() -> anyhow::Result<()> {
 
     let (scan_worker_job_done_tx, scan_worker_job_done_rx) = workflow_core::channel::bounded(1);
 
-    let mut scan_worker = scan_worker::ScanWorker::builder()
+    let mut scan_worker = PeriodicProcessor::builder()
         .tick_and_resolution_rx(resolver_response_rx)
         .resolver_request_block_tx(resolver_block_request_tx)
         .resolver_request_sender_tx(resolver_sender_request_tx)
@@ -181,6 +178,7 @@ async fn main() -> anyhow::Result<()> {
         .tx_id_to_acceptance_partition(tx_id_to_acceptance_partition.clone())
         .unknown_tx_partition(unknown_tx_partition.clone())
         .skip_tx_partition(skip_tx_partition.clone())
+        .skip_tx_by_block_partition(skip_tx_by_block_partition.clone())
         .unknown_accepting_daa_partition(unknown_accepting_daa_partition.clone())
         .block_compact_header_partition(block_compact_header_partition.clone())
         .daa_resolution_attempt_count(5)

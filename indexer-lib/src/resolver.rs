@@ -30,7 +30,7 @@ pub struct Resolver {
     block_request_rx: Receiver<RpcHash>,
     sender_request_rx: Receiver<SenderByTxIdAndDaa>,
     kaspa_rpc_client: KaspaRpcClient,
-    response_tx: Sender<crate::scan_worker::Notification>,
+    response_tx: Sender<crate::periodic_processor::Notification>,
     block_requests_cache: FifoSet<RpcHash>,
     sender_request_cache: FifoSet<SenderByTxIdAndDaa>,
     requests_in_progress: Arc<AtomicU64>,
@@ -41,7 +41,7 @@ impl Resolver {
         shutdown_rx: tokio::sync::oneshot::Receiver<()>,
         block_request_rx: Receiver<RpcHash>,
         sender_request_rx: Receiver<SenderByTxIdAndDaa>,
-        response_tx: Sender<crate::scan_worker::Notification>,
+        response_tx: Sender<crate::periodic_processor::Notification>,
         kaspa_rpc_client: KaspaRpcClient,
         requests_in_progress: Arc<AtomicU64>,
     ) -> Self {
@@ -89,7 +89,7 @@ impl Resolver {
                     match get_block_with_retries(&self.kaspa_rpc_client, hash).await {
                         Ok(block) => {
                             self.response_tx
-                                .send(crate::scan_worker::Notification::ResolverResponse(
+                                .send(crate::periodic_processor::Notification::ResolverResponse(
                                     ResolverResponse::Block(Ok(Box::new(block.header))),
                                 ))
                                 .await?;
@@ -98,7 +98,7 @@ impl Resolver {
                         Err(err) => {
                             error!(%err, "Failed to get block for hash: {hash}");
                             self.response_tx
-                                .send(crate::scan_worker::Notification::ResolverResponse(
+                                .send(crate::periodic_processor::Notification::ResolverResponse(
                                     ResolverResponse::Block(Err(hash)),
                                 ))
                                 .await?;
@@ -125,7 +125,7 @@ impl Resolver {
                     {
                         Ok(sender) => {
                             self.response_tx
-                                .send(crate::scan_worker::Notification::ResolverResponse(
+                                .send(crate::periodic_processor::Notification::ResolverResponse(
                                     ResolverResponse::Sender(Ok((
                                         sender,
                                         SenderByTxIdAndDaa { tx_id, daa_score },
@@ -137,7 +137,7 @@ impl Resolver {
                         Err(err) => {
                             error!(%err, "Failed to get sender for tx id: {tx_id} and daa score: {daa_score}");
                             self.response_tx
-                                .send(crate::scan_worker::Notification::ResolverResponse(
+                                .send(crate::periodic_processor::Notification::ResolverResponse(
                                     ResolverResponse::Sender(Err(SenderByTxIdAndDaa {
                                         tx_id,
                                         daa_score,

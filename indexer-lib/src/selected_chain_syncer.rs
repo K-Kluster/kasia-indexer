@@ -1,8 +1,8 @@
 use crate::APP_IS_RUNNING;
-use crate::acceptance_worker::VirtualChainChangedNotificationAndBlueWork;
-use crate::database::block_compact_header::BlockCompactHeaderPartition;
+use crate::database::headers::BlockCompactHeaderPartition;
 use crate::database::metadata::MetadataPartition;
 use crate::historical_syncer::Cursor;
+use crate::virtual_chain_processor::VirtualChainChangedNotificationAndBlueWork;
 use anyhow::{Context, bail};
 use kaspa_consensus_core::BlueWorkType;
 use kaspa_rpc_core::VirtualChainChangedNotification;

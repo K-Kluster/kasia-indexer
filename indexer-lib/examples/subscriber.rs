@@ -1,8 +1,7 @@
 use fjall::{Config, TxKeyspace};
-use indexer_lib::{
-    BlockOrMany, database::block_gaps::BlockGapsPartition, selected_chain_syncer::Intake,
-    subscriber::Subscriber,
-};
+use indexer_lib::database::headers::BlockGapsPartition;
+use indexer_lib::selected_chain_syncer::Intake;
+use indexer_lib::{BlockOrMany, subscriber::Subscriber};
 use kaspa_wrpc_client::{
     KaspaRpcClient, Resolver, WrpcEncoding,
     client::{ConnectOptions, ConnectStrategy},

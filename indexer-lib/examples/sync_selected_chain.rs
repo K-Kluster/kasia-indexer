@@ -1,11 +1,9 @@
 use fjall::{Config, TxKeyspace};
-use indexer_lib::acceptance_worker::VirtualChainChangedNotificationAndBlueWork;
+use indexer_lib::database::headers::{BlockCompactHeaderPartition, BlockGapsPartition};
+use indexer_lib::virtual_chain_processor::VirtualChainChangedNotificationAndBlueWork;
 use indexer_lib::{
     BlockOrMany,
-    database::{
-        block_compact_header::BlockCompactHeaderPartition, block_gaps::BlockGapsPartition,
-        metadata::MetadataPartition,
-    },
+    database::metadata::MetadataPartition,
     selected_chain_syncer::{Intake, SelectedChainSyncer},
     subscriber::Subscriber,
 };

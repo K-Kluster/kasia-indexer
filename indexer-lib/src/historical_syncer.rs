@@ -1,4 +1,4 @@
-use crate::database::block_gaps::{BlockGap, BlockGapsPartition};
+use crate::database::headers::{BlockGap, BlockGapsPartition};
 use crate::{APP_IS_RUNNING, BlockOrMany};
 use anyhow::bail;
 use itertools::FoldWhile::{Continue, Done};
@@ -259,8 +259,8 @@ impl HistoricalDataSyncer {
                             );
                             return Done(SyncTargetStatus::TargetFoundViaAnticone);
                         }
-                        // Add to anticone candidates if blue work qualifies
-                        if block.header.blue_work >= self.target_cursor.blue_work {
+                        // Add to anticone candidates if blue work qualifies.
+                        if block.header.blue_work >= self.target_cursor.blue_work && !verbose_data.is_chain_block /* selected block with higher blue work precedes target block unless target block is selected */ {
                             let candidate = Cursor::new(block.header.blue_work, block.header.hash);
                             trace!("Adding anticone candidate: {:?}", candidate);
                             self.anticone_candidates.push(candidate);

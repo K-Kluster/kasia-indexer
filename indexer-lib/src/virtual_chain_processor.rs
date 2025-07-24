@@ -1,14 +1,16 @@
 use crate::database::PartitionId;
-use crate::database::acceptance::{
+use crate::database::headers::block_compact_headers::BlockCompactHeaderPartition;
+use crate::database::metadata::MetadataPartition;
+use crate::database::processing::acceptance::{
     AcceptanceTxKey, AcceptingBlockResolutionData, AcceptingBlockToTxIDPartition,
     TxIDToAcceptancePartition,
 };
-use crate::database::block_compact_header::BlockCompactHeaderPartition;
-use crate::database::metadata::MetadataPartition;
-use crate::database::pending_sender_resolution::PendingSenderResolutionPartition;
-use crate::database::skip_tx::SkipTxPartition;
-use crate::database::unknown_accepting_daa::{ResolutionEntries, UnknownAcceptingDaaPartition};
-use crate::database::unknown_tx::UnknownTxPartition;
+use crate::database::processing::pending_sender_resolution::PendingSenderResolutionPartition;
+use crate::database::processing::skipped_transactions::SkipTxPartition;
+use crate::database::processing::unknown_daa_scores::{
+    ResolutionEntries, UnknownAcceptingDaaPartition,
+};
+use crate::database::processing::unknown_transactions::UnknownTxPartition;
 use crate::historical_syncer::Cursor;
 use fjall::{ReadTransaction, TxKeyspace, WriteTransaction};
 use itertools::process_results;
@@ -26,7 +28,7 @@ pub struct VirtualChainChangedNotificationAndBlueWork {
 }
 
 #[derive(bon::Builder)]
-pub struct AcceptanceWorker {
+pub struct VirtualChainProcessor {
     daa_resolution_attempt_count: u8,
     reorg_log: Arc<Mutex<()>>, // during reorg we should not merge unknown tx into other partitions
     vcc_rx: flume::Receiver<VirtualChainChangedNotificationAndBlueWork>,
@@ -45,7 +47,7 @@ pub struct AcceptanceWorker {
     pending_sender_resolution_partition: PendingSenderResolutionPartition,
 }
 
-impl AcceptanceWorker {
+impl VirtualChainProcessor {
     pub fn process(&mut self) -> anyhow::Result<()> {
         info!("Acceptance worker started");
         loop {

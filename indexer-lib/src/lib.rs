@@ -13,12 +13,11 @@ pub mod subscriber;
 pub mod database;
 pub mod metrics;
 
-pub mod acceptance_worker;
-pub mod block_worker;
+pub mod block_processor;
+pub mod periodic_processor;
+pub mod virtual_chain_processor;
 
 pub mod selected_chain_syncer;
-
-pub mod scan_worker;
 
 pub mod resolver;
 
