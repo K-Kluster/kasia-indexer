@@ -88,6 +88,13 @@ impl HandshakeBySenderPartition {
     pub fn approximate_len(&self) -> usize {
         self.0.approximate_len()
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = anyhow::Result<HandshakeKeyBySender>> {
+        self.0.inner().keys().map(|r| {
+            r.map_err(anyhow::Error::from)
+                .map(|k| *bytemuck::from_bytes(k.as_ref()))
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, AnyBitPattern, NoUninit, PartialEq, Eq)]
@@ -190,6 +197,19 @@ impl HandshakeByReceiverPartition {
             bytemuck::bytes_of(key),
             bytemuck::bytes_of(&sender),
         );
+    }
+
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = anyhow::Result<(HandshakeKeyByReceiver, AddressPayload)>> {
+        self.0.inner().iter().map(|r| {
+            r.map_err(anyhow::Error::from).map(|(k, v)| {
+                (
+                    *bytemuck::from_bytes(k.as_ref()),
+                    *bytemuck::from_bytes(v.as_ref()),
+                )
+            })
+        })
     }
 }
 

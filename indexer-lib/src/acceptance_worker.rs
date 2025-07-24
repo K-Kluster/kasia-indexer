@@ -1,6 +1,7 @@
 use crate::database::PartitionId;
 use crate::database::acceptance::{
-    AcceptingBlockResolutionData, AcceptingBlockToTxIDPartition, TxIDToAcceptancePartition,
+    AcceptanceTxKey, AcceptingBlockResolutionData, AcceptingBlockToTxIDPartition,
+    TxIDToAcceptancePartition,
 };
 use crate::database::block_compact_header::BlockCompactHeaderPartition;
 use crate::database::metadata::MetadataPartition;
@@ -146,8 +147,20 @@ impl AcceptanceWorker {
         debug!(block_hash = %removed_block_hash, tx_count = %tx_id_s.as_tx_ids().len(), "Processing block removal");
         for tx_id in tx_id_s.as_tx_ids() {
             for r in self.tx_id_to_acceptance_partition.get_by_tx_id(rtx, tx_id) {
-                let (key, _value) = r?;
-                self.tx_id_to_acceptance_partition.remove(wtx, key);
+                let (key, value) = r?;
+                let partition_id = key.partition_id;
+                self.tx_id_to_acceptance_partition.remove(wtx, key.clone());
+                self.tx_id_to_acceptance_partition.insert_wtx(
+                    wtx,
+                    &AcceptanceTxKey {
+                        tx_id: *tx_id,
+                        accepted_at_daa: Default::default(),
+                        accepted_by_block_hash: Default::default(),
+                        partition_id,
+                    },
+                    value,
+                );
+
                 self.unknown_accepting_daa_partition
                     .remove_by_accepting_block_hash(wtx, *removed_block_hash)?;
                 self.unknown_tx_partition

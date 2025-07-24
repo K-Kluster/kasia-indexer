@@ -11,6 +11,7 @@ use fjall::{
     WriteTransaction,
 };
 use kaspa_rpc_core::RpcHash;
+use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 
@@ -91,6 +92,12 @@ pub struct AcceptanceTxKey {
 pub struct LikeAcceptanceTxKey<T: AsRef<[u8]> = UserKey> {
     bts: T,
     phantom_data: PhantomData<AcceptanceTxKey>,
+}
+
+impl<T: AsRef<[u8]>> Debug for LikeAcceptanceTxKey<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.deref().fmt(f)
+    }
 }
 
 impl<T: AsRef<[u8]>> LikeAcceptanceTxKey<T> {
@@ -190,6 +197,24 @@ impl TxIDToAcceptancePartition {
             bytemuck::bytes_of(&key),
             bytemuck::bytes_of(payment_key),
         );
+    }
+
+    pub fn insert_wtx(
+        &self,
+        wtx: &mut WriteTransaction,
+        key: &AcceptanceTxKey,
+        value: AcceptingBlockResolutionData,
+    ) {
+        wtx.insert(
+            &self.0,
+            bytemuck::bytes_of(key),
+            match value {
+                AcceptingBlockResolutionData::None => UserValue::from([]),
+                AcceptingBlockResolutionData::HandshakeKey(hk) => hk.inner(),
+                AcceptingBlockResolutionData::ContextualMessageKey(cmk) => cmk.inner(),
+                AcceptingBlockResolutionData::PaymentKey(pmk) => pmk.inner(),
+            },
+        )
     }
 
     /// Insert a payment ForResolution key
