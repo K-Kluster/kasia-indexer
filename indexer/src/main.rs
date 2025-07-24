@@ -98,6 +98,7 @@ async fn main() -> anyhow::Result<()> {
             .hash,
         unknown_daa_entries: unknown_accepting_daa_partition.len()? as u64,
         unknown_sender_entries: pending_sender_resolution_partition.len()? as u64,
+        unknown_tx_entries: 0,
         resolved_daa: 0,
         resolved_senders: 0,
     });
