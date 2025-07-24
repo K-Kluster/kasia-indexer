@@ -27,7 +27,7 @@ use fjall::TxKeyspace;
 use kaspa_rpc_core::{RpcAddress, RpcHash, RpcHeader, RpcTransactionId};
 use parking_lot::Mutex;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use std::time::Instant;
 use tracing::{debug, error, info, trace, warn};
@@ -98,9 +98,7 @@ pub struct ScanWorker {
     metrics_snapshot_interval: Duration,
     #[builder(default = Instant::now())]
     last_metrics_snapshot_time: Instant,
-
-    #[builder(default = 0)]
-    requests_in_progress: u64,
+    resolver_requests_in_progress: Arc<AtomicU64>,
 }
 
 impl ScanWorker {
@@ -163,7 +161,10 @@ impl ScanWorker {
 
         if self.last_metrics_snapshot_time.elapsed() > self.metrics_snapshot_interval {
             info!("{}", self.metrics.snapshot());
-            info!("requests in progress: {}", self.requests_in_progress);
+            info!(
+                "requests in progress: {}",
+                self.resolver_requests_in_progress.load(Ordering::Relaxed)
+            );
             self.last_metrics_snapshot_time = Instant::now();
         }
 
@@ -174,7 +175,6 @@ impl ScanWorker {
         &mut self,
         r: Result<Box<RpcHeader>, RpcHash>,
     ) -> anyhow::Result<()> {
-        self.requests_in_progress -= 1;
         let _lock = self.reorg_lock.lock();
         let mut wtx = self.tx_keyspace.write_tx()?;
         match r {
@@ -263,7 +263,6 @@ impl ScanWorker {
         &mut self,
         r: Result<(RpcAddress, SenderByTxIdAndDaa), SenderByTxIdAndDaa>,
     ) -> anyhow::Result<()> {
-        self.requests_in_progress -= 1;
         let _lock = self.reorg_lock.lock();
         let mut wtx = self.tx_keyspace.write_tx()?;
         let rtx = self.tx_keyspace.read_tx();
@@ -498,10 +497,10 @@ impl ScanWorker {
             {
                 None => {
                     debug!(block_hash = %block, "DAA score still not available for block");
-                    let _ = self
-                        .resolver_request_block_tx
-                        .try_send(block)
-                        .inspect(|_| self.requests_in_progress += 1);
+                    let _ = self.resolver_request_block_tx.try_send(block).inspect(|_| {
+                        self.resolver_requests_in_progress
+                            .fetch_add(1, Ordering::Relaxed);
+                    });
                 }
                 Some(daa) => {
                     debug!(block_hash = %block, daa_score = %daa, "DAA score resolved for block");
@@ -559,7 +558,10 @@ impl ScanWorker {
                     tx_id: RpcTransactionId::from_bytes(tx_id),
                     daa_score: u64::from_be_bytes(accepting_daa_score),
                 })
-                .inspect(|_| self.requests_in_progress += 1);
+                .inspect(|_| {
+                    self.resolver_requests_in_progress
+                        .fetch_add(1, Ordering::Relaxed);
+                });
         }
         self.metrics.set_unknown_sender_entries(count);
         Ok(())

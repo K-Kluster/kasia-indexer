@@ -22,6 +22,7 @@ use kaspa_wrpc_client::{KaspaRpcClient, WrpcEncoding};
 use parking_lot::Mutex;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Duration;
 use time::macros::format_description;
@@ -157,12 +158,14 @@ async fn main() -> anyhow::Result<()> {
     // let (resolver_response_tx, resolver_response_rx) = workflow_core::channel::unbounded();
     let (shutdown_resolver_tx, shutdown_resolver_rx) = tokio::sync::oneshot::channel();
 
+    let requests_in_progress = Arc::new(AtomicU64::new(0));
     let mut resolver = Resolver::new(
         shutdown_resolver_rx,
         resolver_block_request_rx,
         resolver_sender_request_rx,
         resolver_response_tx.clone(),
         rpc_client.clone(),
+        requests_in_progress.clone(),
     );
 
     let (scan_worker_job_done_tx, scan_worker_job_done_rx) = workflow_core::channel::bounded(1);
@@ -191,6 +194,7 @@ async fn main() -> anyhow::Result<()> {
         .metrics(metrics)
         .metrics_snapshot_interval(Duration::from_secs(10))
         .metadata_partition(metadata_partition.clone())
+        .resolver_requests_in_progress(requests_in_progress)
         .build();
 
     let (selected_chain_intake_tx, selected_chain_intake_rx) = tokio::sync::mpsc::channel(4096);

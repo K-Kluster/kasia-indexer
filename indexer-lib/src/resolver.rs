@@ -7,6 +7,8 @@ use kaspa_rpc_core::{
     GetBlockRequest, GetBlockResponse, RpcAddress, RpcBlock, RpcHash, RpcHeader, RpcTransactionId,
 };
 use kaspa_wrpc_client::KaspaRpcClient;
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use tracing::{debug, error, info};
 use workflow_core::channel::{Receiver, Sender};
 use workflow_serializer::serializer::Serializable;
@@ -31,6 +33,7 @@ pub struct Resolver {
     response_tx: Sender<crate::scan_worker::Notification>,
     block_requests_cache: FifoSet<RpcHash>,
     sender_request_cache: FifoSet<SenderByTxIdAndDaa>,
+    requests_in_progress: Arc<AtomicU64>,
 }
 
 impl Resolver {
@@ -40,6 +43,7 @@ impl Resolver {
         sender_request_rx: Receiver<SenderByTxIdAndDaa>,
         response_tx: Sender<crate::scan_worker::Notification>,
         kaspa_rpc_client: KaspaRpcClient,
+        requests_in_progress: Arc<AtomicU64>,
     ) -> Self {
         Self {
             block_requests_cache: FifoSet::new(
@@ -65,6 +69,7 @@ impl Resolver {
             sender_request_rx,
             kaspa_rpc_client,
             response_tx,
+            requests_in_progress,
         }
     }
 
@@ -75,6 +80,8 @@ impl Resolver {
                 Input::BlockRequest(hash) => {
                     if self.block_requests_cache.contains(&hash) {
                         debug!("Block request cache hit, request is skipped");
+                        self.requests_in_progress
+                            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                         continue;
                     } else {
                         debug!(%hash, "Received block resolution request");
@@ -97,10 +104,14 @@ impl Resolver {
                                 .await?;
                         }
                     }
+                    self.requests_in_progress
+                        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                 }
                 Input::SenderRequest(i @ SenderByTxIdAndDaa { tx_id, daa_score }) => {
                     if self.sender_request_cache.contains(&i) {
                         debug!(%tx_id, %daa_score, "Sender request skipped since it's already processed before");
+                        self.requests_in_progress
+                            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                         continue;
                     } else {
                         debug!(%tx_id, %daa_score, "Received sender resolution request");
@@ -135,6 +146,8 @@ impl Resolver {
                                 .await?;
                         }
                     }
+                    self.requests_in_progress
+                        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                 }
                 Input::Shutdown => {
                     info!("Resolver received shutdown signal, stopping.");
