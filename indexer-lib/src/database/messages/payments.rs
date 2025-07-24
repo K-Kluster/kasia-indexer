@@ -1,4 +1,4 @@
-use crate::database::handshake::AddressPayload;
+use crate::database::messages::AddressPayload;
 use anyhow::bail;
 use bytemuck::{AnyBitPattern, NoUninit};
 use fjall::{PartitionCreateOptions, WriteTransaction};

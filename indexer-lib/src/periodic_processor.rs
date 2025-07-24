@@ -1,25 +1,19 @@
 use crate::APP_IS_RUNNING;
 use crate::database::PartitionId;
-use crate::database::acceptance::{AcceptingBlockResolutionData, TxIDToAcceptancePartition};
-use crate::database::block_compact_header::BlockCompactHeaderPartition;
-use crate::database::contextual_message_by_sender::ContextualMessageBySenderPartition;
-use crate::database::handshake::TxIdToHandshakePartition;
-use crate::database::handshake::{
-    HandshakeByReceiverPartition, HandshakeBySenderPartition, HandshakeKeyByReceiver,
-    HandshakeKeyBySender,
+use crate::database::headers::BlockCompactHeaderPartition;
+use crate::database::messages::{
+    ContextualMessageBySenderPartition, HandshakeByReceiverPartition, HandshakeBySenderPartition,
+    HandshakeKeyByReceiver, HandshakeKeyBySender, PaymentByReceiverPartition,
+    PaymentBySenderPartition, PaymentKeyByReceiver, PaymentKeyBySender, TxIdToHandshakePartition,
+    TxIdToPaymentPartition,
 };
 use crate::database::metadata::MetadataPartition;
-use crate::database::payment::TxIdToPaymentPartition;
-use crate::database::payment::{
-    PaymentByReceiverPartition, PaymentBySenderPartition, PaymentKeyByReceiver, PaymentKeyBySender,
-};
-use crate::database::pending_sender_resolution::{
-    PendingResolutionKey, PendingSenderResolutionPartition,
+use crate::database::processing::{
+    AcceptingBlockResolutionData, PendingResolutionKey, PendingSenderResolutionPartition,
+    ResolutionEntries, SkipTxByBlockPartition, SkipTxPartition, TxIDToAcceptancePartition,
+    UnknownAcceptingDaaPartition, UnknownTxPartition, UnknownTxUpdateAction,
 };
 use crate::database::resolution_keys::{DaaResolutionLikeKey, SenderResolutionLikeKey};
-use crate::database::skip_tx::SkipTxPartition;
-use crate::database::unknown_accepting_daa::{ResolutionEntries, UnknownAcceptingDaaPartition};
-use crate::database::unknown_tx::{UnknownTxPartition, UnknownTxUpdateAction};
 use crate::metrics::SharedMetrics;
 use crate::resolver::{ResolverResponse, SenderByTxIdAndDaa};
 use anyhow::Context;
@@ -70,7 +64,7 @@ pub async fn run_ticker(
 }
 
 #[derive(bon::Builder)]
-pub struct ScanWorker {
+pub struct PeriodicProcessor {
     tick_and_resolution_rx: Receiver<Notification>,
     job_done_tx: Sender<()>,
     resolver_request_sender_tx: Sender<SenderByTxIdAndDaa>,
@@ -81,6 +75,7 @@ pub struct ScanWorker {
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
     unknown_tx_partition: UnknownTxPartition,
     skip_tx_partition: SkipTxPartition,
+    skip_tx_by_block_partition: SkipTxByBlockPartition,
     unknown_accepting_daa_partition: UnknownAcceptingDaaPartition,
     block_compact_header_partition: BlockCompactHeaderPartition,
     daa_resolution_attempt_count: u8,
@@ -99,9 +94,11 @@ pub struct ScanWorker {
     #[builder(default = Instant::now())]
     last_metrics_snapshot_time: Instant,
     resolver_requests_in_progress: Arc<AtomicU64>,
+    /// Cached latest accepting block hash for pruning when header isn't available yet
+    cached_latest_accepting_block: Option<kaspa_rpc_core::RpcHash>,
 }
 
-impl ScanWorker {
+impl PeriodicProcessor {
     pub fn worker(&mut self) -> anyhow::Result<()> {
         while APP_IS_RUNNING.load(Ordering::Relaxed) {
             match self.tick_and_resolution_rx.recv_blocking()? {
@@ -129,6 +126,7 @@ impl ScanWorker {
         self.resolve_unknown_tx()?;
         self.unknown_daa()?;
         self.unknown_sender()?;
+        self.prune_skip_transactions()?;
         self.update_metrics()?;
         Ok(())
     }
@@ -573,6 +571,106 @@ impl ScanWorker {
                 });
         }
         self.metrics.set_unknown_sender_entries(count);
+        Ok(())
+    }
+
+    /// Prune skipped transactions based on DAA score threshold.
+    /// Uses 3x finality depth (1.296M blocks ≈ 36 hours) to prevent unbounded growth
+    /// while maintaining all data needed for historical/real-time sync coordination.
+    /// Caches latest accepting block for cases where header isn't available during sync.
+    fn prune_skip_transactions(&mut self) -> anyhow::Result<()> {
+        // Get latest accepting block cursor
+        let Some(latest_cursor) = self
+            .metadata_partition
+            .get_latest_accepting_block_cursor()?
+        else {
+            // No latest accepting block yet, nothing to prune
+            return Ok(());
+        };
+
+        // Try to get DAA score from block compact header partition
+        let current_daa = match self
+            .block_compact_header_partition
+            .get_daa_score(latest_cursor.hash)?
+        {
+            Some(daa) => {
+                // Update cache only after successfully getting header
+                self.cached_latest_accepting_block = Some(latest_cursor.hash);
+                daa
+            }
+            None => {
+                // If current header not available, try using cached block from previous tick
+                if let Some(cached_hash) = self.cached_latest_accepting_block {
+                    match self
+                        .block_compact_header_partition
+                        .get_daa_score(cached_hash)?
+                    {
+                        Some(daa) => {
+                            debug!(cached_hash = %cached_hash, "Using cached block hash for pruning");
+                            daa
+                        }
+                        None => {
+                            debug!(
+                                "DAA score not available for both current and cached blocks, skipping pruning"
+                            );
+                            return Ok(());
+                        }
+                    }
+                } else {
+                    debug!("DAA score not available and no cached block, skipping pruning");
+                    return Ok(());
+                }
+            }
+        };
+
+        // Finality depth is 432K blocks (12 hours), use 3x for pruning (36 hours)
+        // This provides 1.5x the pruning period to handle sync scenarios
+        const FINALITY_DEPTH: u64 = 432_000;
+        const PRUNING_DEPTH: u64 = FINALITY_DEPTH * 3; // 1.296M blocks ≈ 36 hours
+
+        let prune_before_daa = current_daa.saturating_sub(PRUNING_DEPTH);
+        let prune_before_daa_bytes = prune_before_daa.to_be_bytes();
+
+        debug!(current_daa = %current_daa, prune_before_daa = %prune_before_daa, "Starting skip transaction pruning");
+
+        let rtx = self.tx_keyspace.read_tx();
+        let mut wtx = self.tx_keyspace.write_tx()?;
+
+        let mut pruned_count = 0;
+        let mut pruned_blocks = 0;
+
+        // Delete entries during iteration to avoid allocations
+        for entry_result in self
+            .skip_tx_by_block_partition
+            .get_entries_to_prune(&rtx, prune_before_daa_bytes)
+        {
+            let (raw_key, tx_ids_view) = entry_result.context("Failed to get entry to prune")?;
+
+            // Remove individual skip transactions from the main skip partition
+            for tx_id in tx_ids_view.as_tx_ids() {
+                self.skip_tx_partition.remove_skip(&mut wtx, *tx_id);
+            }
+
+            pruned_count += tx_ids_view.as_tx_ids().len();
+            pruned_blocks += 1;
+
+            // Remove the block entry from the skip-by-block partition
+            self.skip_tx_by_block_partition
+                .remove_by_raw_key(&mut wtx, raw_key);
+        }
+
+        if pruned_count > 0 {
+            info!(
+                pruned_blocks = %pruned_blocks,
+                pruned_tx_count = %pruned_count,
+                prune_before_daa = %prune_before_daa,
+                "Pruned old skipped transactions"
+            );
+        }
+
+        wtx.commit()?
+            .context("failed to commit, conflict prune_skip_transactions")?;
+
         Ok(())
     }
 }

@@ -1,8 +1,39 @@
-# Introduction
+# Kasia Messenger Indexer
 
-A Proof-of-Conecept lightweight and well-optimized indexer tailored to a specific protocol (Kasia in this context). Can be modified to support a totally different protocol.
+A lightweight, specialized indexer for the Kasia messenger application built on Kaspa BlockDAG. This indexer only processes and stores messaging-related transaction data, making it highly efficient and resource-optimized for messenger-specific use cases.
 
-Disclaimer: this project is still in work-in-progress, don't use it for production usage.
+## ⚠️ Development Status
+
+**This project is currently in active development and is NOT ready for production use.**
+
+
+## Features
+
+- **Real-time BlockDAG Indexing**: Efficiently processes Kaspa blocks and transactions
+- **Scalable Architecture**: Modular design with separate processing pipelines
+- **Gap Detection & Recovery**: Automatic handling of missing blocks and chain reorganizations
+- **Metrics & Monitoring**: Built-in metrics collection for operational visibility
+
+## Architecture
+
+The indexer consists of several key components:
+
+### Core Modules
+- **Block Processor**: Extracts and parses encrypted messages from transaction data
+- **Virtual Chain Processor**: Handles Virtual Chain Changed (VCC) notifications and transaction acceptance
+- **Periodic Processor**: Manages resolution of unknown transactions and DAA scores
+- **Historical Syncer**: Syncs historical blockchain data from a specified starting point
+- **Chain Subscriber**: Real-time subscription to new blocks and chain updates
+
+### Database Organization
+- **Headers**: Block compact headers and gap tracking
+- **Messages**: Protocol message storage (handshakes, payments, contextual messages)
+- **Processing**: Transaction processing state and resolution workflows
+
+### Message Types
+- **Handshakes**: Initial connection establishment between parties
+- **Payments**: Payment transactions with optional attached messages  
+- **Contextual Messages**: Application-specific encrypted messages
 
 Useful commands:
 

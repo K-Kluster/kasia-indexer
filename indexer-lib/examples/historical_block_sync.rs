@@ -1,18 +1,17 @@
 use fjall::{Config, TxKeyspace};
+use indexer_lib::database::headers::{BlockCompactHeaderPartition, BlockGapsPartition};
+use indexer_lib::database::messages::{
+    ContextualMessageBySenderPartition, HandshakeByReceiverPartition, PaymentByReceiverPartition,
+    TxIdToHandshakePartition, TxIdToPaymentPartition,
+};
+use indexer_lib::database::metadata::MetadataPartition;
+use indexer_lib::database::processing::{
+    SkipTxByBlockPartition, SkipTxPartition, TxIDToAcceptancePartition,
+};
 use indexer_lib::metrics::create_shared_metrics;
 use indexer_lib::{
     BlockOrMany,
-    block_worker::BlockWorker,
-    database::{
-        acceptance::TxIDToAcceptancePartition,
-        block_compact_header::BlockCompactHeaderPartition,
-        block_gaps::BlockGapsPartition,
-        contextual_message_by_sender::ContextualMessageBySenderPartition,
-        handshake::{HandshakeByReceiverPartition, TxIdToHandshakePartition},
-        metadata::MetadataPartition,
-        payment::{PaymentByReceiverPartition, TxIdToPaymentPartition},
-        skip_tx::SkipTxPartition,
-    },
+    block_processor::BlockProcessor,
     fifo_set::FifoSet,
     historical_syncer::{Cursor, HistoricalDataSyncer},
 };
@@ -84,7 +83,7 @@ async fn run_syncer() -> anyhow::Result<()> {
     let block_gaps = BlockGapsPartition::new(&tx_keyspace)?;
 
     let (worker_shutdown_tx, worker_shutdown_rx) = flume::unbounded();
-    let mut worker = BlockWorker::builder()
+    let mut worker = BlockProcessor::builder()
         .processed_blocks(FifoSet::new(256))
         .intake(block_rx)
         .shutdown(worker_shutdown_rx)
@@ -102,6 +101,7 @@ async fn run_syncer() -> anyhow::Result<()> {
         .processed_txs(FifoSet::new(
             300/*txs per block*/ * 255, /*max mergeset size*/
         ))
+        .skip_tx_by_block_partition(SkipTxByBlockPartition::new(&tx_keyspace)?)
         .build();
 
     info!("Starting syncer and block processor tasks");

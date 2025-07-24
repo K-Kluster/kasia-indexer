@@ -1,5 +1,5 @@
 use crate::BlockOrMany;
-use crate::database::block_gaps::{BlockGap, BlockGapsPartition};
+use crate::database::headers::{BlockGap, BlockGapsPartition};
 use crate::historical_syncer::{Cursor, HistoricalDataSyncer};
 use crate::selected_chain_syncer::Intake;
 use anyhow::Context;

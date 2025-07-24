@@ -409,7 +409,7 @@ impl PendingSenderResolutionPartition {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::handshake::AddressPayload;
+    use crate::database::messages::AddressPayload;
 
     #[test]
     fn test_pending_resolution_key_serialization() {

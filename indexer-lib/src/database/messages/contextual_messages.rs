@@ -1,4 +1,4 @@
-use crate::database::handshake::AddressPayload;
+use crate::database::messages::AddressPayload;
 use anyhow::{Result, bail};
 use bytemuck::{AnyBitPattern, NoUninit};
 use fjall::{PartitionCreateOptions, ReadTransaction, UserKey, WriteTransaction};
@@ -217,6 +217,7 @@ impl ContextualMessageBySenderPartition {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::database::messages::AddressPayload;
 
     #[test]
     fn test_contextual_message_key_serialization() {

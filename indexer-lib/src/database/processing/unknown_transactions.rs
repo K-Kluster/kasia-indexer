@@ -94,7 +94,7 @@ impl UnknownTxPartition {
                     }
                 }
                 UnknownTxUpdateAction::Delete => None,
-                UnknownTxUpdateAction::DoNothing => Some(like_tx_ids.inner().clone()),
+                UnknownTxUpdateAction::DoNothing => Some(like_tx_ids.into_inner().clone()),
             }
         })?;
         Ok(old.map(LikeTxIds::new))

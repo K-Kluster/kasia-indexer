@@ -1,4 +1,4 @@
-use crate::database::block_gaps::{BlockGap, BlockGapsPartition};
+use crate::database::headers::{BlockGap, BlockGapsPartition};
 use crate::{APP_IS_RUNNING, BlockOrMany};
 use anyhow::bail;
 use itertools::FoldWhile::{Continue, Done};

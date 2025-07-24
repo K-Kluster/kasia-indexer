@@ -1,4 +1,4 @@
-use crate::database::handshake::AddressPayload;
+use crate::database::messages::AddressPayload;
 use bytemuck::{AnyBitPattern, NoUninit};
 use fjall::UserKey;
 use std::fmt::Debug;
