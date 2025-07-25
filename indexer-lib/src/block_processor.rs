@@ -209,7 +209,7 @@ impl BlockProcessor {
             receiver,
             version: 0,
             tx_id: tx_id.as_bytes(),
-            attempt_count: 0,
+            attempt_count: 10,
         };
         self.tx_id_to_acceptance_partition.insert_handshake_wtx(
             wtx,
@@ -250,7 +250,7 @@ impl BlockProcessor {
             block_hash: block.header.hash.as_bytes(),
             version: 1,
             tx_id: tx_id.as_bytes(),
-            attempt_count: 0,
+            attempt_count: 10,
         };
         self.tx_id_to_acceptance_partition
             .insert_contextual_message_wtx(wtx, tx_id.as_bytes(), &cmk_for_resolution, None, None);
@@ -294,7 +294,7 @@ impl BlockProcessor {
             receiver,
             version: 1,
             tx_id: tx_id.as_bytes(),
-            attempt_count: 0,
+            attempt_count: 10,
         };
         self.tx_id_to_acceptance_partition.insert_payment_wtx(
             wtx,
