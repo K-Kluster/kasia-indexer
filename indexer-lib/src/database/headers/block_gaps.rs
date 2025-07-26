@@ -1,3 +1,4 @@
+use crate::historical_syncer::Cursor;
 use anyhow::Result;
 use bytemuck::{AnyBitPattern, NoUninit};
 use fjall::{PartitionCreateOptions, ReadTransaction, WriteTransaction};
@@ -26,6 +27,30 @@ pub struct BlockGap {
     pub to_blue_work: Uint192,
     pub to_block_hash: RpcHash,
     pub to_daa_score: u64,
+}
+
+impl BlockGap {
+    pub fn from_cursors(
+        Cursor {
+            daa_score: from_daa_score,
+            blue_work: from_blue_work,
+            hash: from_block_hash,
+        }: Cursor,
+        Cursor {
+            daa_score: to_daa_score,
+            blue_work: to_blue_work,
+            hash: to_block_hash,
+        }: Cursor,
+    ) -> Self {
+        Self {
+            from_daa_score,
+            from_blue_work,
+            from_block_hash,
+            to_blue_work,
+            to_block_hash,
+            to_daa_score,
+        }
+    }
 }
 
 impl BlockGapsPartition {
@@ -90,11 +115,35 @@ impl BlockGapsPartition {
     }
 
     /// Get all block gaps that need to be filled
-    pub fn get_all_gaps(
+    pub fn get_all_gaps_rtx(
         &self,
         rtx: &ReadTransaction,
     ) -> impl DoubleEndedIterator<Item = Result<BlockGap>> + '_ {
         rtx.iter(&self.0).map(|item| {
+            let (key_bytes, _) = item?;
+            if key_bytes.len() == 128 {
+                // 8 + 24 + 32 + 24 + 32 +8
+                let key: BlockGapKey = *bytemuck::from_bytes(&key_bytes);
+
+                Ok(BlockGap {
+                    from_daa_score: u64::from_be_bytes(key.from_daa_score),
+                    from_blue_work: Uint192::from_be_bytes(key.from_blue_work),
+                    from_block_hash: RpcHash::from_slice(&key.from_block_hash),
+                    to_blue_work: Uint192::from_be_bytes(key.to_blue_work),
+                    to_block_hash: RpcHash::from_slice(&key.to_block_hash),
+                    to_daa_score: u64::from_be_bytes(key.to_daa_score),
+                })
+            } else {
+                Err(anyhow::anyhow!(
+                    "Invalid key length in block_gaps partition"
+                ))
+            }
+        })
+    }
+
+    /// Get all block gaps that need to be filled
+    pub fn get_all_gaps(&self) -> impl DoubleEndedIterator<Item = Result<BlockGap>> + '_ {
+        self.0.inner().iter().map(|item| {
             let (key_bytes, _) = item?;
             if key_bytes.len() == 128 {
                 // 8 + 24 + 32 + 24 + 32 +8

@@ -44,6 +44,8 @@ pub struct Subscriber {
     selected_chain_syncer: tokio::sync::mpsc::Sender<Intake>,
 
     virtual_daa: Arc<AtomicU64>,
+
+    had_first_connect: bool,
 }
 
 impl Subscriber {
@@ -69,6 +71,7 @@ impl Subscriber {
             block_gaps_partition,
             selected_chain_syncer,
             virtual_daa,
+            had_first_connect: false,
         }
     }
 
@@ -135,9 +138,68 @@ impl Subscriber {
         // now that we have successfully connected we
         // can register for notifications
         self.register_notification_listeners().await?;
-        let sink = self.rpc_client.get_sink().await?.sink;
-        let sink_header = self.rpc_client.get_block(sink, false).await?.header;
+        let info = self.rpc_client.get_block_dag_info().await?;
+        let sink_header = self.rpc_client.get_block(info.sink, false).await?.header;
+        if !self.had_first_connect {
+            let no_block_processed_before = self.last_block_cursor.is_none();
+            let gaps_partition = self.block_gaps_partition.clone();
+            if no_block_processed_before {
+                let pp_header = self
+                    .rpc_client
+                    .get_block(info.pruning_point_hash, false)
+                    .await?
+                    .header;
+                info!("No block processed before, adding gap from pruning point to sink");
+                self.last_block_cursor = Some(Cursor::new(
+                    pp_header.daa_score,
+                    pp_header.blue_work,
+                    info.pruning_point_hash,
+                ));
+            }
+            let gaps = task::spawn_blocking(move || -> anyhow::Result<_> {
+                gaps_partition.get_all_gaps().collect::<Result<Vec<_>, _>>()
+            })
+            .await??;
+            if !gaps.is_empty() {
+                info!(
+                    "Found {} gaps at startup, spawning historical syncers for gaps: {:?}",
+                    gaps.len(),
+                    gaps
+                );
+            }
+            gaps.into_iter().try_for_each(
+                |BlockGap {
+                     from_daa_score,
+                     from_blue_work,
+                     from_block_hash,
+                     to_blue_work,
+                     to_block_hash,
+                     to_daa_score,
+                 }|
+                 -> anyhow::Result<()> {
+                    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+                    self.historical_data_syncer_shutdown_tx.push(shutdown_tx);
+                    tokio::spawn({
+                        let rpc_client = self.rpc_client.clone();
+                        let block_handler = self.block_handler.clone();
+                        let gaps_partition = self.block_gaps_partition.clone();
+                        async move {
+                            HistoricalDataSyncer::new(
+                                rpc_client,
+                                Cursor::new(from_daa_score, from_blue_work, from_block_hash),
+                                Cursor::new(to_daa_score, to_blue_work, to_block_hash),
+                                block_handler,
+                                shutdown_rx,
+                                gaps_partition,
+                            );
+                        }
+                    });
+                    Ok(())
+                },
+            )?;
 
+            self.had_first_connect = true;
+        }
         if let Some(last) = self.last_block_cursor.take() {
             let gaps_partition = self.block_gaps_partition.clone();
             task::spawn_blocking(move || {
@@ -146,7 +208,7 @@ impl Subscriber {
                     from_blue_work: last.blue_work,
                     from_block_hash: last.hash,
                     to_blue_work: sink_header.blue_work,
-                    to_block_hash: sink,
+                    to_block_hash: info.sink,
                     to_daa_score: sink_header.daa_score,
                 })
             })
@@ -161,7 +223,7 @@ impl Subscriber {
                     HistoricalDataSyncer::new(
                         rpc_client,
                         last,
-                        Cursor::new(sink_header.daa_score, sink_header.blue_work, sink),
+                        Cursor::new(sink_header.daa_score, sink_header.blue_work, info.sink),
                         block_handler,
                         shutdown_rx,
                         gaps_partition,

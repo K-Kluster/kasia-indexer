@@ -61,7 +61,7 @@ async fn run_selected_chain_syncer() -> anyhow::Result<()> {
     // Create selected chain syncer
     let mut selected_chain_syncer = SelectedChainSyncer::new(
         client.clone(),
-        metadata_partition,
+        metadata_partition.clone(),
         block_compact_header_partition,
         intake_rx,
         historical_sync_done_rx,

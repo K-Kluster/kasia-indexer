@@ -154,6 +154,13 @@ impl HistoricalDataSyncer {
                     .inspect(|_| info!("Shutdown signal received, stopping sync"))
                     .inspect_err(|e|  warn!("Shutdown receiver error: {}", e))?;
 
+
+                    // it prevents overlapping gaps in case of shutdown during initial sync
+                    let new_gap = BlockGap::from_cursors(self.current_cursor, self.target_cursor);
+                    self.block_gaps_partition.add_gap(new_gap)?;
+                    let old_gap = BlockGap::from_cursors(self.from_cursor, self.target_cursor);
+                    self.block_gaps_partition.remove_gap(old_gap)?;
+
                     return Ok(())
                 }
                 response = fetch_next_batch() => response,
