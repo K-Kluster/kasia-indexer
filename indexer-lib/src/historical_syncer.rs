@@ -1,6 +1,5 @@
+use crate::BlockOrMany;
 use crate::database::headers::{BlockGap, BlockGapsPartition};
-use crate::{APP_IS_RUNNING, BlockOrMany};
-use anyhow::bail;
 use itertools::FoldWhile::{Continue, Done};
 use itertools::Itertools;
 use kaspa_math::Uint192;
@@ -127,9 +126,6 @@ impl HistoricalDataSyncer {
         info!("Starting historical data synchronization");
 
         loop {
-            if !APP_IS_RUNNING.load(std::sync::atomic::Ordering::Relaxed) {
-                bail!("App is stopped");
-            }
             let fetch_next_batch = async || {
                 loop {
                     let Ok(blocks) = self
@@ -151,15 +147,17 @@ impl HistoricalDataSyncer {
 
                 shutdown_result = &mut self.shutdown_rx => {
                     shutdown_result
-                    .inspect(|_| info!("Shutdown signal received, stopping sync"))
+                    .inspect(|_| info!("Shutdown signal received, stopping sync, overwriting current gap"))
                     .inspect_err(|e|  warn!("Shutdown receiver error: {}", e))?;
-
 
                     // it prevents overlapping gaps in case of shutdown during initial sync
                     let new_gap = BlockGap::from_cursors(self.current_cursor, self.target_cursor);
-                    self.block_gaps_partition.add_gap(new_gap)?;
                     let old_gap = BlockGap::from_cursors(self.from_cursor, self.target_cursor);
-                    self.block_gaps_partition.remove_gap(old_gap)?;
+
+                    if new_gap != old_gap {
+                        self.block_gaps_partition.add_gap(new_gap)?;
+                        self.block_gaps_partition.remove_gap(old_gap)?;
+                    }
 
                     return Ok(())
                 }

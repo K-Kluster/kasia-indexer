@@ -142,8 +142,11 @@ impl BlockGapsPartition {
     }
 
     /// Get all block gaps that need to be filled
-    pub fn get_all_gaps(&self) -> impl DoubleEndedIterator<Item = Result<BlockGap>> + '_ {
-        self.0.inner().iter().map(|item| {
+    pub fn get_all_gaps_since_daa(
+        &self,
+        since_daa: u64,
+    ) -> impl DoubleEndedIterator<Item = Result<BlockGap>> + '_ {
+        self.0.inner().range(since_daa.to_be_bytes()..).map(|item| {
             let (key_bytes, _) = item?;
             if key_bytes.len() == 128 {
                 // 8 + 24 + 32 + 24 + 32 +8

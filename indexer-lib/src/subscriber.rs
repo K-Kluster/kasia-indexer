@@ -1,4 +1,5 @@
 use crate::BlockOrMany;
+use crate::RK_PRUNING_DEPTH;
 use crate::database::headers::{BlockGap, BlockGapsPartition};
 use crate::historical_syncer::{Cursor, HistoricalDataSyncer};
 use crate::selected_chain_syncer::Intake;
@@ -157,7 +158,9 @@ impl Subscriber {
                 ));
             }
             let gaps = task::spawn_blocking(move || -> anyhow::Result<_> {
-                gaps_partition.get_all_gaps().collect::<Result<Vec<_>, _>>()
+                gaps_partition
+                    .get_all_gaps_since_daa(info.virtual_daa_score - RK_PRUNING_DEPTH)
+                    .collect::<Result<Vec<_>, _>>()
             })
             .await??;
             if !gaps.is_empty() {
@@ -200,7 +203,9 @@ impl Subscriber {
 
             self.had_first_connect = true;
         }
-        if let Some(last) = self.last_block_cursor.take() {
+        if let Some(last) = self.last_block_cursor.take()
+            && last.daa_score > info.virtual_daa_score + RK_PRUNING_DEPTH
+        {
             let gaps_partition = self.block_gaps_partition.clone();
             task::spawn_blocking(move || {
                 gaps_partition.add_gap(BlockGap {

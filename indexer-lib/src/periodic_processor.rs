@@ -1,4 +1,5 @@
 use crate::APP_IS_RUNNING;
+use crate::RK_PRUNING_DEPTH;
 use crate::database::PartitionId;
 use crate::database::headers::{BlockCompactHeaderPartition, DaaIndexPartition};
 use crate::database::messages::{
@@ -585,7 +586,6 @@ impl PeriodicProcessor {
     /// Prune skipped transactions based on DAA score threshold.
     fn prune_skip_transactions(&mut self) -> anyhow::Result<()> {
         let current_daa = self.virtual_daa.load(Ordering::Relaxed);
-        const RK_PRUNING_DEPTH: u64 = 1080000;
         const INDEXER_PRUNING_DEPTH: u64 = RK_PRUNING_DEPTH * 3 / 2;
         let prune_before_daa = current_daa.saturating_sub(INDEXER_PRUNING_DEPTH);
         let prune_before_daa_bytes = prune_before_daa.to_be_bytes();
@@ -636,7 +636,6 @@ impl PeriodicProcessor {
 
     fn prune_block_headers(&self) -> anyhow::Result<()> {
         let read_tx = self.tx_keyspace.read_tx();
-        const RK_PRUNING_DEPTH: u64 = 1080000;
         const INDEXER_PRUNING_DEPTH: u64 = RK_PRUNING_DEPTH * 3 / 2;
         for r in self.block_daa_index.iter_lt(
             &read_tx,
