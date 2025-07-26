@@ -7,7 +7,7 @@ use tracing::warn;
 
 /// Metadata partition for storing latest known cursors
 /// Key: enum of metadata types
-/// Value: cursor data (blue work + block hash)
+/// Value: cursor data (blue work + block hash + daa_score)
 #[derive(Clone)]
 pub struct MetadataPartition(pub fjall::TxPartition);
 
@@ -23,6 +23,7 @@ pub enum MetadataKey {
 pub struct CursorValue {
     pub blue_work: [u8; 24], // Uint192 serialized as 24 bytes
     pub block_hash: [u8; 32],
+    pub daa_score: [u8; 8],
 }
 
 impl MetadataPartition {
@@ -47,6 +48,7 @@ impl MetadataPartition {
         let value = CursorValue {
             blue_work: cursor.blue_work.to_be_bytes(),
             block_hash: *cursor.hash.as_ref(),
+            daa_score: cursor.daa_score.to_le_bytes(),
         };
         wtx.fetch_update(&self.0, key, |old_value| match old_value {
             None => Some(bytemuck::bytes_of(&value).into()),
@@ -65,12 +67,13 @@ impl MetadataPartition {
     pub fn get_latest_block_cursor_rtx(&self, rtx: &ReadTransaction) -> Result<Option<Cursor>> {
         let key = [MetadataKey::LatestBlockCursor as u8];
         if let Some(bytes) = rtx.get(&self.0, key)? {
-            if bytes.len() == 56 {
-                // 24 + 32
+            if bytes.len() == 64 {
+                // 24 + 32 + 8
                 let value: CursorValue = *bytemuck::from_bytes(&bytes);
                 Ok(Some(Cursor {
                     blue_work: kaspa_math::Uint192::from_be_bytes(value.blue_work),
                     hash: kaspa_rpc_core::RpcHash::from_slice(&value.block_hash),
+                    daa_score: u64::from_le_bytes(value.daa_score),
                 }))
             } else {
                 bail!("Invalid cursor value size")
@@ -84,12 +87,13 @@ impl MetadataPartition {
     pub fn get_latest_block_cursor(&self) -> Result<Option<Cursor>> {
         let key = [MetadataKey::LatestBlockCursor as u8];
         if let Some(bytes) = self.0.get(key)? {
-            if bytes.len() == 56 {
-                // 24 + 32
+            if bytes.len() == 64 {
+                // 24 + 32 + 8
                 let value: CursorValue = *bytemuck::from_bytes(&bytes);
                 Ok(Some(Cursor {
                     blue_work: kaspa_math::Uint192::from_be_bytes(value.blue_work),
                     hash: kaspa_rpc_core::RpcHash::from_slice(&value.block_hash),
+                    daa_score: u64::from_le_bytes(value.daa_score),
                 }))
             } else {
                 bail!("Invalid cursor value size")
@@ -109,6 +113,7 @@ impl MetadataPartition {
         let value = CursorValue {
             blue_work: cursor.blue_work.to_be_bytes(),
             block_hash: *cursor.hash.as_ref(),
+            daa_score: cursor.daa_score.to_le_bytes(),
         };
         wtx.insert(&self.0, key, bytemuck::bytes_of(&value));
         Ok(())
@@ -121,12 +126,13 @@ impl MetadataPartition {
     ) -> Result<Option<Cursor>> {
         let key = [MetadataKey::LatestAcceptingBlockCursor as u8];
         if let Some(bytes) = rtx.get(&self.0, key)? {
-            if bytes.len() == 56 {
-                // 24 + 32
+            if bytes.len() == 64 {
+                // 24 + 32 +8
                 let value: CursorValue = *bytemuck::from_bytes(&bytes);
                 Ok(Some(Cursor {
                     blue_work: kaspa_math::Uint192::from_be_bytes(value.blue_work),
                     hash: kaspa_rpc_core::RpcHash::from_slice(&value.block_hash),
+                    daa_score: u64::from_le_bytes(value.daa_score),
                 }))
             } else {
                 bail!("Invalid cursor value size")
@@ -139,12 +145,13 @@ impl MetadataPartition {
     pub fn get_latest_accepting_block_cursor(&self) -> Result<Option<Cursor>> {
         let key = [MetadataKey::LatestAcceptingBlockCursor as u8];
         if let Some(bytes) = self.0.get(key)? {
-            if bytes.len() == 56 {
-                // 24 + 32
+            if bytes.len() == 64 {
+                // 24 + 32 + 8
                 let value: CursorValue = *bytemuck::from_bytes(&bytes);
                 Ok(Some(Cursor {
                     blue_work: kaspa_math::Uint192::from_be_bytes(value.blue_work),
                     hash: kaspa_rpc_core::RpcHash::from_slice(&value.block_hash),
+                    daa_score: u64::from_le_bytes(value.daa_score),
                 }))
             } else {
                 bail!("Invalid cursor value size")
@@ -162,12 +169,13 @@ impl MetadataPartition {
     ) -> Result<Option<Cursor>> {
         let key = [MetadataKey::LatestAcceptingBlockCursor as u8];
         if let Some(bytes) = wtx.get(&self.0, key)? {
-            if bytes.len() == 56 {
-                // 24 + 32
+            if bytes.len() == 64 {
+                // 24 + 32 + 8
                 let value: CursorValue = *bytemuck::from_bytes(&bytes);
                 Ok(Some(Cursor {
                     blue_work: kaspa_math::Uint192::from_be_bytes(value.blue_work),
                     hash: kaspa_rpc_core::RpcHash::from_slice(&value.block_hash),
+                    daa_score: u64::from_le_bytes(value.daa_score),
                 }))
             } else {
                 bail!("Invalid cursor value size")
@@ -184,12 +192,13 @@ impl MetadataPartition {
     ) -> Result<Option<Cursor>> {
         let key = [MetadataKey::LatestBlockCursor as u8];
         if let Some(bytes) = wtx.get(&self.0, key)? {
-            if bytes.len() == 56 {
-                // 24 + 32
+            if bytes.len() == 64 {
+                // 24 + 32 + 8
                 let value: CursorValue = *bytemuck::from_bytes(&bytes);
                 Ok(Some(Cursor {
                     blue_work: kaspa_math::Uint192::from_be_bytes(value.blue_work),
                     hash: kaspa_rpc_core::RpcHash::from_slice(&value.block_hash),
+                    daa_score: u64::from_le_bytes(value.daa_score),
                 }))
             } else {
                 bail!("Invalid cursor value size")
@@ -232,10 +241,11 @@ mod tests {
         let value = CursorValue {
             blue_work: [1u8; 24],
             block_hash: [2u8; 32],
+            daa_score: [0u8; 8],
         };
 
         let bytes = bytemuck::bytes_of(&value);
-        assert_eq!(bytes.len(), 56); // 24 + 32
+        assert_eq!(bytes.len(), 64); // 24 + 32
 
         let deserialized: CursorValue = *bytemuck::from_bytes(bytes);
         assert_eq!(deserialized, value);
@@ -244,6 +254,7 @@ mod tests {
     #[test]
     fn test_cursor_conversion() {
         let cursor = Cursor {
+            daa_score: u64::from_le_bytes([0u8; 8]),
             blue_work: kaspa_math::Uint192::from_be_bytes([1u8; 24]),
             hash: kaspa_rpc_core::RpcHash::from_slice(&[2u8; 32]),
         };
@@ -251,9 +262,11 @@ mod tests {
         let value = CursorValue {
             blue_work: cursor.blue_work.to_be_bytes(),
             block_hash: *cursor.hash.as_ref(),
+            daa_score: cursor.daa_score.to_le_bytes(),
         };
 
         let converted_back = Cursor {
+            daa_score: u64::from_le_bytes(value.daa_score),
             blue_work: kaspa_math::Uint192::from_be_bytes(value.blue_work),
             hash: kaspa_rpc_core::RpcHash::from_slice(&value.block_hash),
         };

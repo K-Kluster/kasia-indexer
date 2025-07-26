@@ -1,10 +1,9 @@
-use crate::APP_IS_RUNNING;
 use crate::database::headers::BlockCompactHeaderPartition;
 use crate::database::metadata::MetadataPartition;
 use crate::historical_syncer::Cursor;
 use crate::virtual_chain_processor::VirtualChainChangedNotificationAndBlueWork;
+use crate::{APP_IS_RUNNING, CompactHeader};
 use anyhow::{Context, bail};
-use kaspa_consensus_core::BlueWorkType;
 use kaspa_rpc_core::VirtualChainChangedNotification;
 use kaspa_rpc_core::api::rpc::RpcApi;
 use kaspa_wrpc_client::KaspaRpcClient;
@@ -284,14 +283,15 @@ impl SelectedChainSyncer {
             return Ok(());
         }
         let last_block = vcc.added_chain_block_hashes.last().unwrap();
-        let blue_work = self.get_block_blue_work(*last_block).await?;
+        let c = self.get_block_daa_score_and_blue_work(*last_block).await?;
 
         if state.is_synced {
             debug!("Forwarding VCC notification (synced)");
             self.worker_sender
                 .send_async(VirtualChainChangedNotificationAndBlueWork {
                     vcc,
-                    last_block_blue_work: blue_work,
+                    last_block_blue_work: c.blue_work,
+                    last_daa_score: c.daa_score,
                 })
                 .await?;
         } else {
@@ -300,7 +300,8 @@ impl SelectedChainSyncer {
                 .vcc_queue
                 .push(VirtualChainChangedNotificationAndBlueWork {
                     vcc,
-                    last_block_blue_work: blue_work,
+                    last_block_blue_work: c.blue_work,
+                    last_daa_score: c.daa_score,
                 });
 
             // Warn about queue growth but don't limit it - we need all notifications for sync correctness
@@ -385,6 +386,7 @@ impl SelectedChainSyncer {
             .get_block(dag_info.pruning_point_hash, false)
             .await?;
         Ok(Cursor {
+            daa_score: pp_block.header.daa_score,
             blue_work: pp_block.header.blue_work,
             hash: dag_info.pruning_point_hash,
         })
@@ -398,9 +400,10 @@ impl SelectedChainSyncer {
         tokio::task::JoinHandle<()>,
         tokio::sync::oneshot::Sender<()>,
     )> {
-        let sink_blue_work = self.get_block_blue_work(sink_hash).await?;
+        let c = self.get_block_daa_score_and_blue_work(sink_hash).await?;
         let target = Cursor {
-            blue_work: sink_blue_work,
+            daa_score: c.daa_score,
+            blue_work: c.blue_work,
             hash: sink_hash,
         };
 
@@ -426,19 +429,22 @@ impl SelectedChainSyncer {
         Ok((task, interrupt_tx))
     }
 
-    async fn get_block_blue_work(
+    async fn get_block_daa_score_and_blue_work(
         &self,
         block_hash: kaspa_rpc_core::RpcHash,
-    ) -> anyhow::Result<kaspa_math::Uint192> {
+    ) -> anyhow::Result<CompactHeader> {
         let partition = self.block_compact_header_partition.clone();
         let local_blue_work =
-            task::spawn_blocking(move || partition.get_blue_work(block_hash)).await??;
+            task::spawn_blocking(move || partition.get_compact_header(block_hash)).await??;
 
-        if let Some(blue_work) = local_blue_work {
-            Ok(blue_work)
+        if let Some(compact) = local_blue_work {
+            Ok(compact)
         } else {
             let block = self.rpc_client.get_block(block_hash, false).await?;
-            Ok(block.header.blue_work)
+            Ok(CompactHeader {
+                blue_work: block.header.blue_work,
+                daa_score: block.header.daa_score,
+            })
         }
     }
 }
@@ -549,11 +555,12 @@ impl HistoricalSyncer {
         self.batches_processed += 1;
 
         let last_block = *vcc.added_chain_block_hashes.last().unwrap();
-        let last_blue_work = self.get_block_blue_work(last_block).await?;
+        let last_compact_header = self.get_block_compact_header(last_block).await?;
 
         *current = Cursor {
+            daa_score: last_compact_header.daa_score,
             hash: last_block,
-            blue_work: last_blue_work,
+            blue_work: last_compact_header.blue_work,
         };
 
         // Log progress periodically (every 100 batches like in HistoricalDataSyncer)
@@ -585,7 +592,8 @@ impl HistoricalSyncer {
         self.worker_sender
             .send_async(VirtualChainChangedNotificationAndBlueWork {
                 vcc: vcc.clone(),
-                last_block_blue_work: last_blue_work,
+                last_block_blue_work: last_compact_header.blue_work,
+                last_daa_score: last_compact_header.daa_score,
             })
             .await?;
 
@@ -596,7 +604,7 @@ impl HistoricalSyncer {
             }));
         }
 
-        if last_blue_work > self.to.blue_work {
+        if last_compact_header.blue_work > self.to.blue_work {
             return Ok(Some(HistoricalSyncResult::TargetReached {
                 target: self.to,
                 reached_via: TargetReachedVia::BlueWorkExceeded {
@@ -615,15 +623,13 @@ impl HistoricalSyncer {
             || vcc.removed_chain_block_hashes.contains(&self.to.hash)
     }
 
-    async fn get_block_blue_work(
+    async fn get_block_compact_header(
         &self,
         block_hash: kaspa_rpc_core::RpcHash,
-    ) -> anyhow::Result<kaspa_math::Uint192> {
+    ) -> anyhow::Result<CompactHeader> {
         let compact_header_partition = self.block_compact_header_partition.clone();
         let local_blue_work = task::spawn_blocking(move || -> anyhow::Result<_> {
-            Ok(compact_header_partition
-                .get_compact_header(block_hash)?
-                .map(|header| BlueWorkType::from_le_bytes(header.blue_work)))
+            compact_header_partition.get_compact_header(block_hash)
         })
         .await??;
 
@@ -636,7 +642,12 @@ impl HistoricalSyncer {
                 // TODO: Add proper error handling with HistoricalSyncResult::Failed variant
                 // to avoid infinite retry loops and allow graceful failure handling
                 match self.rpc_client.get_block(block_hash, false).await {
-                    Ok(block) => return Ok(block.header.blue_work),
+                    Ok(block) => {
+                        return Ok(CompactHeader {
+                            blue_work: block.header.blue_work,
+                            daa_score: block.header.daa_score,
+                        });
+                    }
                     Err(_) => {
                         tokio::time::sleep(Duration::from_secs(1)).await;
                         continue;

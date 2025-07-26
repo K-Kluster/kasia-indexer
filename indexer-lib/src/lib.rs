@@ -1,3 +1,4 @@
+use kaspa_consensus_core::BlueWorkType;
 use kaspa_rpc_core::RpcBlock;
 use std::ops::Deref;
 use std::slice;
@@ -5,6 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 pub static APP_IS_RUNNING: AtomicBool = AtomicBool::new(true);
+pub const RK_PRUNING_DEPTH: u64 = 1080000;
 
 pub mod fifo_set;
 pub mod historical_syncer;
@@ -38,4 +40,10 @@ impl Deref for BlockOrMany {
             }
         }
     }
+}
+
+#[derive(Clone, Debug, Copy, PartialEq, Eq, PartialOrd)]
+pub struct CompactHeader {
+    pub blue_work: BlueWorkType,
+    pub daa_score: u64,
 }

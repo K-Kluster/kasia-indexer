@@ -117,6 +117,7 @@ async fn run_subscriber() -> anyhow::Result<()> {
             block_gaps_partition,
             intake_tx,
             None,
+            Default::default(),
         );
         if let Err(e) = subscriber.task().await {
             error!("Subscriber task failed: {}", e);

@@ -1,3 +1,4 @@
+use crate::CompactHeader;
 use anyhow::{Result, bail};
 use bytemuck::{AnyBitPattern, NoUninit};
 use fjall::{PartitionCreateOptions, ReadTransaction, WriteTransaction};
@@ -17,9 +18,18 @@ pub struct BlockCompactHeaderPartition(fjall::TxPartition);
 /// Compact header data containing blue work and DAA score
 #[derive(Clone, Copy, Debug, AnyBitPattern, NoUninit, PartialEq, Eq)]
 #[repr(C)]
-pub struct CompactHeader {
+pub struct CompactHeaderDb {
     pub blue_work: [u8; 24], // BlueWorkType serialized as 24 bytes LE
     pub daa_score: [u8; 8],  // u64 DAA score serialized as 8 bytes LE
+}
+
+impl From<CompactHeaderDb> for CompactHeader {
+    fn from(value: CompactHeaderDb) -> Self {
+        Self {
+            blue_work: BlueWorkType::from_le_bytes(value.blue_work),
+            daa_score: u64::from_le_bytes(value.daa_score),
+        }
+    }
 }
 
 impl BlockCompactHeaderPartition {
@@ -29,10 +39,10 @@ impl BlockCompactHeaderPartition {
                 "block_compact_header",
                 PartitionCreateOptions::default()
                     .block_size(64 * 1024)
-                    .compaction_strategy(fjall::compaction::Strategy::Fifo(
-                        fjall::compaction::Fifo {
-                            limit: 128 * 1024 * 1024,
-                            ttl_seconds: None,
+                    .compaction_strategy(fjall::compaction::Strategy::SizeTiered(
+                        fjall::compaction::SizeTiered {
+                            base_size: 8 * 1024 * 1024,
+                            level_ratio: 6,
                         },
                     )),
             )?,
@@ -45,7 +55,7 @@ impl BlockCompactHeaderPartition {
         blue_work: BlueWorkType,
         daa_score: u64,
     ) -> Result<()> {
-        let header = CompactHeader {
+        let header = CompactHeaderDb {
             blue_work: blue_work.to_le_bytes(),
             daa_score: daa_score.to_le_bytes(),
         };
@@ -58,10 +68,10 @@ impl BlockCompactHeaderPartition {
         &self,
         rtx: &ReadTransaction,
         block_hash: &RpcHash,
-    ) -> Result<Option<CompactHeader>> {
+    ) -> Result<Option<CompactHeaderDb>> {
         if let Some(bytes) = rtx.get(&self.0, block_hash.as_bytes())? {
-            if bytes.len() == size_of::<CompactHeader>() {
-                let header: CompactHeader = *bytemuck::from_bytes(&bytes);
+            if bytes.len() == size_of::<CompactHeaderDb>() {
+                let header: CompactHeaderDb = *bytemuck::from_bytes(&bytes);
                 Ok(Some(header))
             } else {
                 bail!("Invalid CompactHeader length")
@@ -75,10 +85,10 @@ impl BlockCompactHeaderPartition {
         &self,
         wtx: &mut WriteTransaction,
         block_hash: RpcHash,
-    ) -> Result<Option<CompactHeader>> {
+    ) -> Result<Option<CompactHeaderDb>> {
         if let Some(bytes) = wtx.get(&self.0, block_hash.as_bytes())? {
-            if bytes.len() == size_of::<CompactHeader>() {
-                let header: CompactHeader = *bytemuck::from_bytes(&bytes);
+            if bytes.len() == size_of::<CompactHeaderDb>() {
+                let header: CompactHeaderDb = *bytemuck::from_bytes(&bytes);
                 Ok(Some(header))
             } else {
                 bail!("Invalid CompactHeader length")
@@ -114,9 +124,9 @@ impl BlockCompactHeaderPartition {
 
     pub fn get_compact_header(&self, block_hash: RpcHash) -> Result<Option<CompactHeader>> {
         if let Some(bytes) = self.0.get(block_hash.as_bytes())? {
-            if bytes.len() == size_of::<CompactHeader>() {
-                let header: CompactHeader = *bytemuck::from_bytes(&bytes);
-                Ok(Some(header))
+            if bytes.len() == size_of::<CompactHeaderDb>() {
+                let header: CompactHeaderDb = *bytemuck::from_bytes(&bytes);
+                Ok(Some(header.into()))
             } else {
                 bail!("Invalid CompactHeader length")
             }
@@ -127,7 +137,7 @@ impl BlockCompactHeaderPartition {
 
     pub fn get_blue_work(&self, block_hash: RpcHash) -> Result<Option<BlueWorkType>> {
         if let Some(header) = self.get_compact_header(block_hash)? {
-            Ok(Some(BlueWorkType::from_le_bytes(header.blue_work)))
+            Ok(Some(header.blue_work))
         } else {
             Ok(None)
         }
@@ -135,7 +145,7 @@ impl BlockCompactHeaderPartition {
 
     pub fn get_daa_score(&self, block_hash: RpcHash) -> Result<Option<u64>> {
         if let Some(header) = self.get_compact_header(block_hash)? {
-            Ok(Some(u64::from_le_bytes(header.daa_score)))
+            Ok(Some(header.daa_score))
         } else {
             Ok(None)
         }
@@ -143,7 +153,7 @@ impl BlockCompactHeaderPartition {
 
     pub fn get_daa_score_wtx(&self, block_hash: RpcHash) -> Result<Option<u64>> {
         if let Some(header) = self.get_compact_header(block_hash)? {
-            Ok(Some(u64::from_le_bytes(header.daa_score)))
+            Ok(Some(header.daa_score))
         } else {
             Ok(None)
         }
@@ -155,6 +165,11 @@ impl BlockCompactHeaderPartition {
 
     pub fn is_empty(&self) -> Result<bool> {
         Ok(self.0.inner().is_empty()?)
+    }
+
+    pub fn remove(&self, block_hash: &RpcHash) -> Result<()> {
+        self.0.remove(block_hash.as_bytes())?;
+        Ok(())
     }
 }
 

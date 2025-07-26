@@ -1,6 +1,8 @@
 use dotenv::dotenv;
 use fjall::Config;
-use indexer_lib::database::headers::{BlockCompactHeaderPartition, BlockGap, BlockGapsPartition};
+use indexer_lib::database::headers::{
+    BlockCompactHeaderPartition, BlockGapsPartition, DaaIndexPartition,
+};
 use indexer_lib::database::messages::{
     ContextualMessageBySenderPartition, HandshakeByReceiverPartition, HandshakeBySenderPartition,
     PaymentByReceiverPartition, PaymentBySenderPartition, TxIdToHandshakePartition,
@@ -11,7 +13,6 @@ use indexer_lib::database::processing::{
     SkipTxPartition, TxIDToAcceptancePartition, UnknownAcceptingDaaPartition, UnknownTxPartition,
 };
 use indexer_lib::fifo_set::FifoSet;
-use indexer_lib::historical_syncer::{Cursor, HistoricalDataSyncer};
 use indexer_lib::metrics::IndexerMetricsSnapshot;
 use indexer_lib::periodic_processor::{run_ticker, Notification, PeriodicProcessor};
 use indexer_lib::virtual_chain_processor::VirtualChainProcessor;
@@ -25,7 +26,7 @@ use indexer_lib::{
     APP_IS_RUNNING,
 };
 use kaspa_wrpc_client::client::{ConnectOptions, ConnectStrategy};
-use kaspa_wrpc_client::prelude::{NetworkId, NetworkType, RpcApi};
+use kaspa_wrpc_client::prelude::{NetworkId, NetworkType};
 use kaspa_wrpc_client::{KaspaRpcClient, WrpcEncoding};
 use parking_lot::Mutex;
 use std::path::{Path, PathBuf};
@@ -51,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
     let log_path = db_path.join("app_logs");
     std::fs::create_dir_all(&log_path)?;
     let _g = init_logs(log_path)?;
-    let config = Config::new(&db_path);
+    let config = Config::new(&db_path).max_write_buffer_size(512 * 1024 * 1024);
     let tx_keyspace = config.open_transactional()?;
     let reorg_lock = Arc::new(Mutex::new(()));
     // Partitions
@@ -76,6 +77,13 @@ async fn main() -> anyhow::Result<()> {
     let handshake_by_sender_partition = HandshakeBySenderPartition::new(&tx_keyspace)?;
     let payment_by_sender_partition = PaymentBySenderPartition::new(&tx_keyspace)?;
     let block_gaps_partition = BlockGapsPartition::new(&tx_keyspace)?;
+    let block_daa_index_partition = DaaIndexPartition::new(&tx_keyspace)?;
+    info!(
+        "Gaps exist: {:?}",
+        block_gaps_partition
+            .get_all_gaps_since_daa(0)
+            .collect::<Result<Vec<_>, _>>()
+    );
 
     let metrics = create_shared_metrics_from_snapshot(IndexerMetricsSnapshot {
         handshakes_by_sender: handshake_by_sender_partition.approximate_len() as u64,
@@ -100,12 +108,11 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let (block_intake_tx, block_intake_rx) = flume::bounded(4096);
-    // let (block_intake_tx, block_intake_rx) = flume::unbounded();
-    // let (vcc_intake_tx, vcc_intake_rx) = flume::unbounded();
 
     let (vcc_intake_tx, vcc_intake_rx) = flume::bounded(4096);
     let (shutdown_block_worker_tx, shutdown_block_worker_rx) = flume::bounded(1);
     let (shutdown_acceptance_worker_tx, shutdown_acceptance_worker_rx) = flume::bounded(1);
+    let virtual_daa = Arc::new(AtomicU64::new(0));
 
     let rpc_client = create_rpc_client()?;
 
@@ -128,6 +135,7 @@ async fn main() -> anyhow::Result<()> {
         .processed_txs(FifoSet::new(
             300/*txs per block*/ * 255, /*max mergeset size*/
         ))
+        .block_daa_index(block_daa_index_partition.clone())
         .build();
 
     let mut acceptance_worker = VirtualChainProcessor::builder()
@@ -194,6 +202,8 @@ async fn main() -> anyhow::Result<()> {
         .metrics_snapshot_interval(Duration::from_secs(10))
         .metadata_partition(metadata_partition.clone())
         .resolver_requests_in_progress(requests_in_progress)
+        .block_daa_index(block_daa_index_partition)
+        .virtual_daa(virtual_daa.clone())
         .build();
 
     let (selected_chain_intake_tx, selected_chain_intake_rx) = tokio::sync::mpsc::channel(4096);
@@ -220,6 +230,7 @@ async fn main() -> anyhow::Result<()> {
         block_gaps_partition.clone(),
         selected_chain_intake_tx,
         metadata_partition.get_latest_block_cursor_rtx(&tx_keyspace.read_tx())?,
+        virtual_daa.clone(),
     );
 
     let (shutdown_ticker_tx, shutdown_ticker_rx) = tokio::sync::oneshot::channel();
@@ -257,69 +268,6 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(async move { selected_chain_syncer.process().await });
     let subscriber_handle = tokio::spawn(async move { subscriber.task().await });
 
-    let (gap_shutdowns, gap_tasks) = {
-        let tmp_rpc_client = create_rpc_client()?;
-        tmp_rpc_client
-            .connect(Some(ConnectOptions {
-                block_async_connect: true,
-                ..Default::default()
-            }))
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to connect to node: {}", e))?;
-        if metadata_partition
-            .get_latest_block_cursor_rtx(&tx_keyspace.read_tx())?
-            .is_none()
-        {
-            let data = tmp_rpc_client.get_block_dag_info().await?;
-            let sink = data.sink;
-            let pp = data.pruning_point_hash;
-            let sink_blue_work = tmp_rpc_client
-                .get_block(sink, false)
-                .await?
-                .header
-                .blue_work;
-            let pp_blue_work = tmp_rpc_client.get_block(pp, false).await?.header.blue_work;
-            block_gaps_partition.add_gap(BlockGap {
-                from_blue_work: pp_blue_work,
-                from_block_hash: pp,
-                to_blue_work: Some(sink_blue_work),
-                to_block_hash: Some(sink),
-            })?;
-        }
-        let shutdown_and_task = block_gaps_partition
-            .get_all_gaps(&tx_keyspace.read_tx())
-            .map(|gap| -> anyhow::Result<_> {
-                let BlockGap {
-                    from_blue_work,
-                    from_block_hash,
-                    to_blue_work,
-                    to_block_hash,
-                } = gap?;
-                let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-                let mut syncer = HistoricalDataSyncer::new(
-                    tmp_rpc_client.clone(),
-                    Cursor {
-                        blue_work: from_blue_work,
-                        hash: from_block_hash,
-                    },
-                    Cursor {
-                        blue_work: to_blue_work.unwrap(),
-                        hash: to_block_hash.unwrap(),
-                    },
-                    block_intake_tx.clone(),
-                    shutdown_rx,
-                    block_gaps_partition.clone(),
-                );
-                Ok((
-                    shutdown_tx,
-                    tokio::spawn(async move { syncer.sync().await }),
-                ))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let (shutdowns, tasks): (Vec<_>, Vec<_>) = shutdown_and_task.into_iter().unzip();
-        (shutdowns, tasks)
-    };
-
     let options = ConnectOptions {
         block_async_connect: false,
         connect_timeout: Some(Duration::from_millis(10_000)),
@@ -342,12 +290,6 @@ async fn main() -> anyhow::Result<()> {
     _ = shutdown_subscriber_tx
         .send(())
         .inspect_err(|_err| error!("failed to shutdown subscriber"));
-
-    gap_shutdowns.into_iter().for_each(|shutdown| {
-        let _ = shutdown
-            .send(())
-            .inspect_err(|_| error!("Failed to send shutdown to gaps tasks"));
-    });
 
     _ = shutdown_block_worker_tx
         .send(())
@@ -387,15 +329,6 @@ async fn main() -> anyhow::Result<()> {
     _ = subscriber_handle
         .await
         .inspect(|_| info!("subscriber has stopped"))?; // todo logs
-    let has_gaps = !gap_tasks.is_empty();
-    info!("waiting for gap tasks finish");
-    for task in gap_tasks {
-        let _ = task.await;
-    }
-    if has_gaps {
-        info!("all gap task have stopped");
-    }
-
     info!("waiting for acceptance worker finish");
     _ = acceptance_worker_handle
         .join()

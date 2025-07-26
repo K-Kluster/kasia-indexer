@@ -263,6 +263,7 @@ impl UnknownAcceptingDaaPartition {
             keyspace.open_partition(
                 "unknown_accepting_daa",
                 PartitionCreateOptions::default()
+                    .max_memtable_size(32 * 1024 * 1024)
                     .block_size(64 * 1024)
                     .with_kv_separation(KvSeparationOptions::default().separation_threshold(1024)),
             )?,

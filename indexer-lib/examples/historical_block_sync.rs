@@ -1,5 +1,7 @@
 use fjall::{Config, TxKeyspace};
-use indexer_lib::database::headers::{BlockCompactHeaderPartition, BlockGapsPartition};
+use indexer_lib::database::headers::{
+    BlockCompactHeaderPartition, BlockGapsPartition, DaaIndexPartition,
+};
 use indexer_lib::database::messages::{
     ContextualMessageBySenderPartition, HandshakeByReceiverPartition, PaymentByReceiverPartition,
     TxIdToHandshakePartition, TxIdToPaymentPartition,
@@ -102,6 +104,7 @@ async fn run_syncer() -> anyhow::Result<()> {
             300/*txs per block*/ * 255, /*max mergeset size*/
         ))
         .skip_tx_by_block_partition(SkipTxByBlockPartition::new(&tx_keyspace)?)
+        .block_daa_index(DaaIndexPartition::new(&tx_keyspace)?)
         .build();
 
     info!("Starting syncer and block processor tasks");
@@ -252,7 +255,11 @@ async fn setup_sync_cursors(
         .await
         .map_err(|e| anyhow::anyhow!("Failed to get pruning point block: {}", e))?;
 
-    let start_cursor = Cursor::new(pruning_point_block.header.blue_work, pruning_point_hash);
+    let start_cursor = Cursor::new(
+        pruning_point_block.header.daa_score,
+        pruning_point_block.header.blue_work,
+        pruning_point_hash,
+    );
 
     // Target is the sink
     let sink_hash = dag_info.sink;
@@ -264,7 +271,11 @@ async fn setup_sync_cursors(
         .await
         .map_err(|e| anyhow::anyhow!("Failed to get sink block: {}", e))?;
 
-    let target_cursor = Cursor::new(sink_block.header.blue_work, sink_hash);
+    let target_cursor = Cursor::new(
+        sink_block.header.daa_score,
+        sink_block.header.blue_work,
+        sink_hash,
+    );
 
     // Validate sync range
     if start_cursor.blue_work >= target_cursor.blue_work {

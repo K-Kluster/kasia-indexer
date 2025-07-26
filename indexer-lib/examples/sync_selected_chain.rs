@@ -61,7 +61,7 @@ async fn run_selected_chain_syncer() -> anyhow::Result<()> {
     // Create selected chain syncer
     let mut selected_chain_syncer = SelectedChainSyncer::new(
         client.clone(),
-        metadata_partition,
+        metadata_partition.clone(),
         block_compact_header_partition,
         intake_rx,
         historical_sync_done_rx,
@@ -81,6 +81,7 @@ async fn run_selected_chain_syncer() -> anyhow::Result<()> {
             block_gaps_partition,
             intake_tx,
             None,
+            Default::default(),
         );
         if let Err(e) = subscriber.task().await {
             error!("Subscriber task failed: {}", e);
@@ -96,6 +97,7 @@ async fn run_selected_chain_syncer() -> anyhow::Result<()> {
         while let Ok(VirtualChainChangedNotificationAndBlueWork {
             vcc,
             last_block_blue_work,
+            ..
         }) = worker_rx.recv()
         {
             if !vcc.added_chain_block_hashes.is_empty() {

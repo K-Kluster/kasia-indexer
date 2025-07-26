@@ -8,3 +8,6 @@ pub mod block_gaps;
 
 pub use block_compact_headers::*;
 pub use block_gaps::*;
+
+pub mod daa_index;
+pub use daa_index::*;

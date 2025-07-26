@@ -1,5 +1,5 @@
 use crate::BlockOrMany;
-use crate::database::headers::BlockCompactHeaderPartition;
+use crate::database::headers::{BlockCompactHeaderPartition, DaaIndexPartition};
 use crate::database::messages::{
     AddressPayload, ContextualMessageBySenderPartition, HandshakeByReceiverPartition,
     HandshakeKeyByReceiver, PaymentByReceiverPartition, PaymentKeyByReceiver,
@@ -48,6 +48,7 @@ pub struct BlockProcessor {
     skip_tx_partition: SkipTxPartition,
     skip_tx_by_block_partition: SkipTxByBlockPartition,
     block_compact_header_partition: BlockCompactHeaderPartition,
+    block_daa_index: DaaIndexPartition,
     metrics: SharedMetrics,
 }
 
@@ -94,6 +95,7 @@ impl BlockProcessor {
                 block.header.blue_work,
                 block.header.daa_score,
             )?;
+            self.block_daa_index.insert(block.header.daa_score, hash)?;
             let mut wtx = self.tx_keyspace.write_tx()?;
             debug!(%hash, "Processing block with {} transactions", block.transactions.len());
 
@@ -118,6 +120,7 @@ impl BlockProcessor {
             self.metadata_partition.set_latest_block_cursor(
                 &mut wtx,
                 Cursor {
+                    daa_score: block.header.daa_score,
                     blue_work: block.header.blue_work,
                     hash: block.header.hash,
                 },

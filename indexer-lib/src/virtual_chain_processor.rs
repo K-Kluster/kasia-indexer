@@ -25,6 +25,7 @@ use tracing::{debug, info, trace, warn};
 pub struct VirtualChainChangedNotificationAndBlueWork {
     pub vcc: VirtualChainChangedNotification,
     pub last_block_blue_work: BlueWorkType,
+    pub last_daa_score: u64,
 }
 
 #[derive(bon::Builder)]
@@ -84,6 +85,7 @@ impl VirtualChainProcessor {
         VirtualChainChangedNotificationAndBlueWork {
             vcc,
             last_block_blue_work,
+            last_daa_score,
         }: &VirtualChainChangedNotificationAndBlueWork,
     ) -> anyhow::Result<()> {
         if vcc.added_chain_block_hashes.is_empty() {
@@ -121,6 +123,7 @@ impl VirtualChainProcessor {
         self.metadata_partition.set_latest_accepting_block_cursor(
             &mut wtx,
             Cursor {
+                daa_score: *last_daa_score,
                 blue_work: *last_block_blue_work,
                 hash: *last_block,
             },

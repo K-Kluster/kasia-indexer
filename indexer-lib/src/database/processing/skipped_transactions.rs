@@ -7,10 +7,20 @@ pub struct SkipTxPartition(fjall::TxPartition);
 
 impl SkipTxPartition {
     pub fn new(keyspace: &fjall::TxKeyspace) -> Result<Self> {
-        Ok(Self(keyspace.open_partition(
-            "skip_tx",
-            PartitionCreateOptions::default().block_size(32 * 1024),
-        )?))
+        Ok(Self(
+            keyspace.open_partition(
+                "skip_tx",
+                PartitionCreateOptions::default()
+                    .max_memtable_size(32 * 1024 * 1024)
+                    .block_size(32 * 1024)
+                    .compaction_strategy(fjall::compaction::Strategy::SizeTiered(
+                        fjall::compaction::SizeTiered {
+                            base_size: 6 * 1024 * 1024,
+                            level_ratio: 6,
+                        },
+                    )),
+            )?,
+        ))
     }
 
     /// Mark a transaction as one to skip
