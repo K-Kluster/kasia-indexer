@@ -583,17 +583,10 @@ impl PeriodicProcessor {
     }
 
     /// Prune skipped transactions based on DAA score threshold.
-    /// Uses 3x finality depth (1.296M blocks ≈ 36 hours) to prevent unbounded growth
-    /// while maintaining all data needed for historical/real-time sync coordination.
-    /// Caches latest accepting block for cases where header isn't available during sync.
     fn prune_skip_transactions(&mut self) -> anyhow::Result<()> {
         let current_daa = self.virtual_daa.load(Ordering::Relaxed);
-
-        // Finality depth is 432K blocks (12 hours), use 3x for pruning (36 hours)
-        // This provides 1.5x the pruning period to handle sync scenarios
-        const FINALITY_DEPTH: u64 = 432_000;
-        const INDEXER_PRUNING_DEPTH: u64 = FINALITY_DEPTH * 3; // 1.296M blocks ≈ 36 hours
-
+        const RK_PRUNING_DEPTH: u64 = 1080000;
+        const INDEXER_PRUNING_DEPTH: u64 = RK_PRUNING_DEPTH * 3 / 2;
         let prune_before_daa = current_daa.saturating_sub(INDEXER_PRUNING_DEPTH);
         let prune_before_daa_bytes = prune_before_daa.to_be_bytes();
 
@@ -611,7 +604,7 @@ impl PeriodicProcessor {
             .get_entries_to_prune(&rtx, prune_before_daa_bytes)
         {
             let (raw_key, tx_ids_view) = entry_result.context("Failed to get entry to prune")?;
-
+            error!("prune_block: {}", RpcHash::from_slice(&raw_key[8..]));
             // Remove individual skip transactions from the main skip partition
             for tx_id in tx_ids_view.as_tx_ids() {
                 self.skip_tx_partition.remove_skip(&mut wtx, *tx_id);
@@ -627,6 +620,7 @@ impl PeriodicProcessor {
 
         if pruned_count > 0 {
             info!(
+                current_daa = %current_daa,
                 pruned_blocks = %pruned_blocks,
                 pruned_tx_count = %pruned_count,
                 prune_before_daa = %prune_before_daa,
@@ -642,13 +636,13 @@ impl PeriodicProcessor {
 
     fn prune_block_headers(&self) -> anyhow::Result<()> {
         let read_tx = self.tx_keyspace.read_tx();
-        // Finality depth is 432K blocks (12 hours), use 3x for pruning (36 hours)
-        // This provides 1.5x the pruning period to handle sync scenarios
-        const FINALITY_DEPTH: u64 = 432_000;
-        const INDEXER_PRUNING_DEPTH: u64 = FINALITY_DEPTH * 3; // 1.296M blocks ≈ 36 hours
+        const RK_PRUNING_DEPTH: u64 = 1080000;
+        const INDEXER_PRUNING_DEPTH: u64 = RK_PRUNING_DEPTH * 3 / 2;
         for r in self.block_daa_index.iter_lt(
             &read_tx,
-            self.virtual_daa.load(Ordering::Relaxed) - INDEXER_PRUNING_DEPTH,
+            self.virtual_daa
+                .load(Ordering::Relaxed)
+                .saturating_sub(INDEXER_PRUNING_DEPTH),
         ) {
             let (daa, hash) = r?;
             self.block_compact_header_partition.remove(&hash)?;
