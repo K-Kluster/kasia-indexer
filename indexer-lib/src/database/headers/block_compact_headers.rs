@@ -29,10 +29,10 @@ impl BlockCompactHeaderPartition {
                 "block_compact_header",
                 PartitionCreateOptions::default()
                     .block_size(64 * 1024)
-                    .compaction_strategy(fjall::compaction::Strategy::Fifo(
-                        fjall::compaction::Fifo {
-                            limit: 128 * 1024 * 1024,
-                            ttl_seconds: None,
+                    .compaction_strategy(fjall::compaction::Strategy::SizeTiered(
+                        fjall::compaction::SizeTiered {
+                            base_size: 8 * 1024 * 1024,
+                            level_ratio: 6,
                         },
                     )),
             )?,
@@ -155,6 +155,11 @@ impl BlockCompactHeaderPartition {
 
     pub fn is_empty(&self) -> Result<bool> {
         Ok(self.0.inner().is_empty()?)
+    }
+
+    pub fn remove(&self, block_hash: &RpcHash) -> Result<()> {
+        self.0.remove(block_hash.as_bytes())?;
+        Ok(())
     }
 }
 

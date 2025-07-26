@@ -1,6 +1,6 @@
 use crate::APP_IS_RUNNING;
 use crate::database::PartitionId;
-use crate::database::headers::BlockCompactHeaderPartition;
+use crate::database::headers::{BlockCompactHeaderPartition, DaaIndexPartition};
 use crate::database::messages::{
     ContextualMessageBySenderPartition, HandshakeByReceiverPartition, HandshakeBySenderPartition,
     HandshakeKeyByReceiver, HandshakeKeyBySender, PaymentByReceiverPartition,
@@ -78,6 +78,7 @@ pub struct PeriodicProcessor {
     skip_tx_by_block_partition: SkipTxByBlockPartition,
     unknown_accepting_daa_partition: UnknownAcceptingDaaPartition,
     block_compact_header_partition: BlockCompactHeaderPartition,
+    block_daa_index: DaaIndexPartition,
     daa_resolution_attempt_count: u8,
     pending_sender_resolution_partition: PendingSenderResolutionPartition,
 
@@ -94,8 +95,8 @@ pub struct PeriodicProcessor {
     #[builder(default = Instant::now())]
     last_metrics_snapshot_time: Instant,
     resolver_requests_in_progress: Arc<AtomicU64>,
-    /// Cached latest accepting block hash for pruning when header isn't available yet
-    cached_latest_accepting_block: Option<kaspa_rpc_core::RpcHash>,
+
+    virtual_daa: Arc<AtomicU64>,
 }
 
 impl PeriodicProcessor {
@@ -127,10 +128,18 @@ impl PeriodicProcessor {
         self.unknown_daa()?;
         self.unknown_sender()?;
         self.prune_skip_transactions()?;
+        self.prune_block_headers()?;
+        self.compact_metadata()?;
         self.update_metrics()?;
         Ok(())
     }
 
+    fn compact_metadata(&self) -> anyhow::Result<()> {
+        if self.metadata_partition.0.inner().disk_space() > 1024 * 1024 {
+            self.metadata_partition.0.inner().major_compact()?;
+        }
+        Ok(())
+    }
     fn update_metrics(&mut self) -> anyhow::Result<()> {
         self.metrics
             .set_handshakes_by_receiver(self.tx_id_to_handshake_partition.approximate_len() as u64); // todo use len at startup and atomic for update
@@ -152,10 +161,6 @@ impl PeriodicProcessor {
                 .unwrap_or_default()
                 .hash,
         );
-
-        if self.metadata_partition.0.inner().disk_space() > 1024 * 1024 {
-            self.metadata_partition.0.inner().major_compact()?;
-        }
 
         if self.last_metrics_snapshot_time.elapsed() > self.metrics_snapshot_interval {
             info!("{}", self.metrics.snapshot());
@@ -196,6 +201,9 @@ impl PeriodicProcessor {
                     header.blue_work,
                     header.daa_score,
                 )?;
+                self.block_daa_index
+                    .insert(header.daa_score, &header.hash)?;
+
                 let accepting_daa = header.daa_score;
                 let accepting_block_hash = header.hash;
                 for entry in pending.as_entry_slice()? {
@@ -579,56 +587,14 @@ impl PeriodicProcessor {
     /// while maintaining all data needed for historical/real-time sync coordination.
     /// Caches latest accepting block for cases where header isn't available during sync.
     fn prune_skip_transactions(&mut self) -> anyhow::Result<()> {
-        // Get latest accepting block cursor
-        let Some(latest_cursor) = self
-            .metadata_partition
-            .get_latest_accepting_block_cursor()?
-        else {
-            // No latest accepting block yet, nothing to prune
-            return Ok(());
-        };
-
-        // Try to get DAA score from block compact header partition
-        let current_daa = match self
-            .block_compact_header_partition
-            .get_daa_score(latest_cursor.hash)?
-        {
-            Some(daa) => {
-                // Update cache only after successfully getting header
-                self.cached_latest_accepting_block = Some(latest_cursor.hash);
-                daa
-            }
-            None => {
-                // If current header not available, try using cached block from previous tick
-                if let Some(cached_hash) = self.cached_latest_accepting_block {
-                    match self
-                        .block_compact_header_partition
-                        .get_daa_score(cached_hash)?
-                    {
-                        Some(daa) => {
-                            debug!(cached_hash = %cached_hash, "Using cached block hash for pruning");
-                            daa
-                        }
-                        None => {
-                            debug!(
-                                "DAA score not available for both current and cached blocks, skipping pruning"
-                            );
-                            return Ok(());
-                        }
-                    }
-                } else {
-                    debug!("DAA score not available and no cached block, skipping pruning");
-                    return Ok(());
-                }
-            }
-        };
+        let current_daa = self.virtual_daa.load(Ordering::Relaxed);
 
         // Finality depth is 432K blocks (12 hours), use 3x for pruning (36 hours)
         // This provides 1.5x the pruning period to handle sync scenarios
         const FINALITY_DEPTH: u64 = 432_000;
-        const PRUNING_DEPTH: u64 = FINALITY_DEPTH * 3; // 1.296M blocks ≈ 36 hours
+        const INDEXER_PRUNING_DEPTH: u64 = FINALITY_DEPTH * 3; // 1.296M blocks ≈ 36 hours
 
-        let prune_before_daa = current_daa.saturating_sub(PRUNING_DEPTH);
+        let prune_before_daa = current_daa.saturating_sub(INDEXER_PRUNING_DEPTH);
         let prune_before_daa_bytes = prune_before_daa.to_be_bytes();
 
         debug!(current_daa = %current_daa, prune_before_daa = %prune_before_daa, "Starting skip transaction pruning");
@@ -671,6 +637,23 @@ impl PeriodicProcessor {
         wtx.commit()?
             .context("failed to commit, conflict prune_skip_transactions")?;
 
+        Ok(())
+    }
+
+    fn prune_block_headers(&self) -> anyhow::Result<()> {
+        let read_tx = self.tx_keyspace.read_tx();
+        // Finality depth is 432K blocks (12 hours), use 3x for pruning (36 hours)
+        // This provides 1.5x the pruning period to handle sync scenarios
+        const FINALITY_DEPTH: u64 = 432_000;
+        const INDEXER_PRUNING_DEPTH: u64 = FINALITY_DEPTH * 3; // 1.296M blocks ≈ 36 hours
+        for r in self.block_daa_index.iter_lt(
+            &read_tx,
+            self.virtual_daa.load(Ordering::Relaxed) - INDEXER_PRUNING_DEPTH,
+        ) {
+            let (daa, hash) = r?;
+            self.block_compact_header_partition.remove(&hash)?;
+            self.block_daa_index.delete(daa, &hash)?
+        }
         Ok(())
     }
 }

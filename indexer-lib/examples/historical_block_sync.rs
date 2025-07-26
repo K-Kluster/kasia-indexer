@@ -1,5 +1,7 @@
 use fjall::{Config, TxKeyspace};
-use indexer_lib::database::headers::{BlockCompactHeaderPartition, BlockGapsPartition};
+use indexer_lib::database::headers::{
+    BlockCompactHeaderPartition, BlockGapsPartition, DaaIndexPartition,
+};
 use indexer_lib::database::messages::{
     ContextualMessageBySenderPartition, HandshakeByReceiverPartition, PaymentByReceiverPartition,
     TxIdToHandshakePartition, TxIdToPaymentPartition,
@@ -102,6 +104,7 @@ async fn run_syncer() -> anyhow::Result<()> {
             300/*txs per block*/ * 255, /*max mergeset size*/
         ))
         .skip_tx_by_block_partition(SkipTxByBlockPartition::new(&tx_keyspace)?)
+        .block_daa_index(DaaIndexPartition::new(&tx_keyspace)?)
         .build();
 
     info!("Starting syncer and block processor tasks");

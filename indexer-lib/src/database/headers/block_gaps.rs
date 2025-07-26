@@ -35,19 +35,10 @@ pub struct BlockGap {
 
 impl BlockGapsPartition {
     pub fn new(keyspace: &fjall::TxKeyspace) -> Result<Self> {
-        Ok(Self(
-            keyspace.open_partition(
-                "block_gaps",
-                PartitionCreateOptions::default()
-                    .block_size(64 * 1024)
-                    .compaction_strategy(fjall::compaction::Strategy::Fifo(
-                        fjall::compaction::Fifo {
-                            limit: 128 * 1024 * 1024,
-                            ttl_seconds: None,
-                        },
-                    )),
-            )?,
-        ))
+        Ok(Self(keyspace.open_partition(
+            "block_gaps",
+            PartitionCreateOptions::default().block_size(64 * 1024),
+        )?))
     }
 
     /// Add a block gap that needs to be filled

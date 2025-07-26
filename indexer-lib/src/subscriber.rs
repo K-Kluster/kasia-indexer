@@ -10,7 +10,11 @@ use kaspa_rpc_core::notify::connection::{ChannelConnection, ChannelType};
 use kaspa_rpc_core::{BlockAddedNotification, Notification};
 use kaspa_wrpc_client::KaspaRpcClient;
 use kaspa_wrpc_client::client::ConnectOptions;
-use kaspa_wrpc_client::prelude::{BlockAddedScope, ListenerId, Scope, VirtualChainChangedScope};
+use kaspa_wrpc_client::prelude::{
+    BlockAddedScope, ListenerId, Scope, VirtualChainChangedScope, VirtualDaaScoreChangedScope,
+};
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use tokio::task;
 use tracing::{error, info, warn};
@@ -38,6 +42,8 @@ pub struct Subscriber {
     block_gaps_partition: BlockGapsPartition,
 
     selected_chain_syncer: tokio::sync::mpsc::Sender<Intake>,
+
+    virtual_daa: Arc<AtomicU64>,
 }
 
 impl Subscriber {
@@ -48,6 +54,7 @@ impl Subscriber {
         block_gaps_partition: BlockGapsPartition,
         selected_chain_syncer: tokio::sync::mpsc::Sender<Intake>,
         last_block_cursor: Option<Cursor>,
+        virtual_daa: Arc<AtomicU64>,
     ) -> Self {
         let notification_channel = Channel::bounded(256);
 
@@ -61,6 +68,7 @@ impl Subscriber {
             historical_data_syncer_shutdown_tx: Vec::new(),
             block_gaps_partition,
             selected_chain_syncer,
+            virtual_daa,
         }
     }
 
@@ -205,7 +213,12 @@ impl Subscriber {
         self.rpc_client
             .start_notify(listener_id, Scope::BlockAdded(BlockAddedScope {}))
             .await?;
-
+        self.rpc_client
+            .start_notify(
+                listener_id,
+                Scope::VirtualDaaScoreChanged(VirtualDaaScoreChangedScope {}),
+            )
+            .await?;
         self.rpc_client
             .start_notify(
                 listener_id,
@@ -249,6 +262,10 @@ impl Subscriber {
                     .send(Intake::VirtualChainChangedNotification(vcc))
                     .await
                     .context("block handler send failed")?;
+            }
+            Notification::VirtualDaaScoreChanged(daa) => {
+                self.virtual_daa
+                    .store(daa.virtual_daa_score, std::sync::atomic::Ordering::Relaxed);
             }
             _ => {
                 warn!("unknown notification: {:?}", notification)

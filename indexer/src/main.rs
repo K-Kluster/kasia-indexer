@@ -1,6 +1,8 @@
 use dotenv::dotenv;
 use fjall::Config;
-use indexer_lib::database::headers::{BlockCompactHeaderPartition, BlockGap, BlockGapsPartition};
+use indexer_lib::database::headers::{
+    BlockCompactHeaderPartition, BlockGap, BlockGapsPartition, DaaIndexPartition,
+};
 use indexer_lib::database::messages::{
     ContextualMessageBySenderPartition, HandshakeByReceiverPartition, HandshakeBySenderPartition,
     PaymentByReceiverPartition, PaymentBySenderPartition, TxIdToHandshakePartition,
@@ -76,6 +78,7 @@ async fn main() -> anyhow::Result<()> {
     let handshake_by_sender_partition = HandshakeBySenderPartition::new(&tx_keyspace)?;
     let payment_by_sender_partition = PaymentBySenderPartition::new(&tx_keyspace)?;
     let block_gaps_partition = BlockGapsPartition::new(&tx_keyspace)?;
+    let block_daa_index_partition = DaaIndexPartition::new(&tx_keyspace)?;
 
     let metrics = create_shared_metrics_from_snapshot(IndexerMetricsSnapshot {
         handshakes_by_sender: handshake_by_sender_partition.approximate_len() as u64,
@@ -106,6 +109,7 @@ async fn main() -> anyhow::Result<()> {
     let (vcc_intake_tx, vcc_intake_rx) = flume::bounded(4096);
     let (shutdown_block_worker_tx, shutdown_block_worker_rx) = flume::bounded(1);
     let (shutdown_acceptance_worker_tx, shutdown_acceptance_worker_rx) = flume::bounded(1);
+    let virtual_daa = Arc::new(AtomicU64::new(0));
 
     let rpc_client = create_rpc_client()?;
 
@@ -128,6 +132,7 @@ async fn main() -> anyhow::Result<()> {
         .processed_txs(FifoSet::new(
             300/*txs per block*/ * 255, /*max mergeset size*/
         ))
+        .block_daa_index(block_daa_index_partition.clone())
         .build();
 
     let mut acceptance_worker = VirtualChainProcessor::builder()
@@ -194,6 +199,8 @@ async fn main() -> anyhow::Result<()> {
         .metrics_snapshot_interval(Duration::from_secs(10))
         .metadata_partition(metadata_partition.clone())
         .resolver_requests_in_progress(requests_in_progress)
+        .block_daa_index(block_daa_index_partition)
+        .virtual_daa(virtual_daa.clone())
         .build();
 
     let (selected_chain_intake_tx, selected_chain_intake_rx) = tokio::sync::mpsc::channel(4096);
@@ -220,6 +227,7 @@ async fn main() -> anyhow::Result<()> {
         block_gaps_partition.clone(),
         selected_chain_intake_tx,
         metadata_partition.get_latest_block_cursor_rtx(&tx_keyspace.read_tx())?,
+        virtual_daa.clone(),
     );
 
     let (shutdown_ticker_tx, shutdown_ticker_rx) = tokio::sync::oneshot::channel();
