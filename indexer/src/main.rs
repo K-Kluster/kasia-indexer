@@ -281,38 +281,40 @@ async fn main() -> anyhow::Result<()> {
             let data = tmp_rpc_client.get_block_dag_info().await?;
             let sink = data.sink;
             let pp = data.pruning_point_hash;
-            let sink_blue_work = tmp_rpc_client
-                .get_block(sink, false)
-                .await?
-                .header
-                .blue_work;
-            let pp_blue_work = tmp_rpc_client.get_block(pp, false).await?.header.blue_work;
+            let sink_header = tmp_rpc_client.get_block(sink, false).await?.header;
+            let pp_header = tmp_rpc_client.get_block(pp, false).await?.header;
             block_gaps_partition.add_gap(BlockGap {
-                from_blue_work: pp_blue_work,
+                from_daa_score: pp_header.daa_score,
+                from_blue_work: pp_header.blue_work,
                 from_block_hash: pp,
-                to_blue_work: Some(sink_blue_work),
-                to_block_hash: Some(sink),
+                to_blue_work: sink_header.blue_work,
+                to_block_hash: sink,
+                to_daa_score: sink_header.daa_score,
             })?;
         }
         let shutdown_and_task = block_gaps_partition
             .get_all_gaps(&tx_keyspace.read_tx())
             .map(|gap| -> anyhow::Result<_> {
                 let BlockGap {
+                    from_daa_score,
                     from_blue_work,
                     from_block_hash,
                     to_blue_work,
                     to_block_hash,
+                    to_daa_score,
                 } = gap?;
                 let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
                 let mut syncer = HistoricalDataSyncer::new(
                     tmp_rpc_client.clone(),
                     Cursor {
+                        daa_score: from_daa_score,
                         blue_work: from_blue_work,
                         hash: from_block_hash,
                     },
                     Cursor {
-                        blue_work: to_blue_work.unwrap(),
-                        hash: to_block_hash.unwrap(),
+                        daa_score: to_daa_score,
+                        blue_work: to_blue_work,
+                        hash: to_block_hash,
                     },
                     block_intake_tx.clone(),
                     shutdown_rx,

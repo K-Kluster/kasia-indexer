@@ -97,6 +97,7 @@ async fn run_selected_chain_syncer() -> anyhow::Result<()> {
         while let Ok(VirtualChainChangedNotificationAndBlueWork {
             vcc,
             last_block_blue_work,
+            ..
         }) = worker_rx.recv()
         {
             if !vcc.added_chain_block_hashes.is_empty() {

@@ -255,7 +255,11 @@ async fn setup_sync_cursors(
         .await
         .map_err(|e| anyhow::anyhow!("Failed to get pruning point block: {}", e))?;
 
-    let start_cursor = Cursor::new(pruning_point_block.header.blue_work, pruning_point_hash);
+    let start_cursor = Cursor::new(
+        pruning_point_block.header.daa_score,
+        pruning_point_block.header.blue_work,
+        pruning_point_hash,
+    );
 
     // Target is the sink
     let sink_hash = dag_info.sink;
@@ -267,7 +271,11 @@ async fn setup_sync_cursors(
         .await
         .map_err(|e| anyhow::anyhow!("Failed to get sink block: {}", e))?;
 
-    let target_cursor = Cursor::new(sink_block.header.blue_work, sink_hash);
+    let target_cursor = Cursor::new(
+        sink_block.header.daa_score,
+        sink_block.header.blue_work,
+        sink_hash,
+    );
 
     // Validate sync range
     if start_cursor.blue_work >= target_cursor.blue_work {

@@ -13,6 +13,7 @@ use tracing::{debug, error, info, trace, warn};
 
 #[derive(Copy, Clone, PartialEq, Eq, Ord, PartialOrd, Default)]
 pub struct Cursor {
+    pub daa_score: u64,
     pub blue_work: Uint192,
     pub hash: RpcHash,
 }
@@ -20,6 +21,7 @@ pub struct Cursor {
 impl fmt::Debug for Cursor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Cursor")
+            .field("daa_score", &self.daa_score)
             .field("blue_work", &self.blue_work.to_string())
             .field("hash", &self.hash.to_string())
             .finish()
@@ -29,6 +31,7 @@ impl fmt::Debug for Cursor {
 impl From<&RpcHeader> for Cursor {
     fn from(value: &RpcHeader) -> Self {
         Self {
+            daa_score: value.daa_score,
             blue_work: value.blue_work,
             hash: value.hash,
         }
@@ -36,8 +39,12 @@ impl From<&RpcHeader> for Cursor {
 }
 
 impl Cursor {
-    pub fn new(blue_work: Uint192, hash: RpcHash) -> Self {
-        Self { blue_work, hash }
+    pub fn new(daa_score: u64, blue_work: Uint192, hash: RpcHash) -> Self {
+        Self {
+            daa_score,
+            blue_work,
+            hash,
+        }
     }
 }
 
@@ -206,10 +213,12 @@ impl HistoricalDataSyncer {
                 );
                 let gaps_partition = self.block_gaps_partition.clone();
                 let gap = BlockGap {
+                    from_daa_score: self.from_cursor.daa_score,
                     from_blue_work: self.from_cursor.blue_work,
                     from_block_hash: self.from_cursor.hash,
-                    to_blue_work: Some(self.target_cursor.blue_work),
-                    to_block_hash: Some(self.target_cursor.hash),
+                    to_blue_work: self.target_cursor.blue_work,
+                    to_block_hash: self.target_cursor.hash,
+                    to_daa_score: self.target_cursor.daa_score,
                 };
                 task::spawn_blocking(move || gaps_partition.remove_gap(gap)).await??;
                 return Ok(());
@@ -240,7 +249,7 @@ impl HistoricalDataSyncer {
                 SyncTargetStatus::NotReached(self.current_cursor),
                 |_acc, (block_hash, block)| {
                     // Update cursor for each block processed
-                    last_cursor = Cursor::new(block.header.blue_work, block.header.hash);
+                    last_cursor = Cursor::new(block.header.daa_score, block.header.blue_work, block.header.hash);
 
                     // Check if this block is our direct target
                     if block_hash == &self.target_cursor.hash {
@@ -261,7 +270,7 @@ impl HistoricalDataSyncer {
                         }
                         // Add to anticone candidates if blue work qualifies.
                         if block.header.blue_work >= self.target_cursor.blue_work && !verbose_data.is_chain_block /* selected block with higher blue work precedes target block unless target block is selected */ {
-                            let candidate = Cursor::new(block.header.blue_work, block.header.hash);
+                            let candidate = Cursor::new(block.header.daa_score, block.header.blue_work, block.header.hash);
                             trace!("Adding anticone candidate: {:?}", candidate);
                             self.anticone_candidates.push(candidate);
                         }

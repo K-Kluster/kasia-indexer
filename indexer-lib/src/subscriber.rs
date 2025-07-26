@@ -136,21 +136,18 @@ impl Subscriber {
         // can register for notifications
         self.register_notification_listeners().await?;
         let sink = self.rpc_client.get_sink().await?.sink;
-        let blue_work = self
-            .rpc_client
-            .get_block(sink, false)
-            .await?
-            .header
-            .blue_work;
+        let sink_header = self.rpc_client.get_block(sink, false).await?.header;
 
         if let Some(last) = self.last_block_cursor.take() {
             let gaps_partition = self.block_gaps_partition.clone();
             task::spawn_blocking(move || {
                 gaps_partition.add_gap(BlockGap {
+                    from_daa_score: last.daa_score,
                     from_blue_work: last.blue_work,
                     from_block_hash: last.hash,
-                    to_blue_work: Some(blue_work),
-                    to_block_hash: Some(sink),
+                    to_blue_work: sink_header.blue_work,
+                    to_block_hash: sink,
+                    to_daa_score: sink_header.daa_score,
                 })
             })
             .await??;
@@ -164,7 +161,7 @@ impl Subscriber {
                     HistoricalDataSyncer::new(
                         rpc_client,
                         last,
-                        Cursor::new(blue_work, sink),
+                        Cursor::new(sink_header.daa_score, sink_header.blue_work, sink),
                         block_handler,
                         shutdown_rx,
                         gaps_partition,
