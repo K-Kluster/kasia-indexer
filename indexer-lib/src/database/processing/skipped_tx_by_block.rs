@@ -29,8 +29,15 @@ impl SkipTxByBlockPartition {
             keyspace.open_partition(
                 "skip_tx_by_block",
                 PartitionCreateOptions::default()
+                    .max_memtable_size(32 * 1024 * 1024)
                     .block_size(64 * 1024)
-                    .with_kv_separation(KvSeparationOptions::default()),
+                    .with_kv_separation(KvSeparationOptions::default())
+                    .compaction_strategy(fjall::compaction::Strategy::SizeTiered(
+                        fjall::compaction::SizeTiered {
+                            base_size: 8 * 1024 * 1024,
+                            level_ratio: 6,
+                        },
+                    )),
             )?,
         ))
     }
