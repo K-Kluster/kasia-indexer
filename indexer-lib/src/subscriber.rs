@@ -87,6 +87,7 @@ impl Subscriber {
                     .inspect_err(|e|  warn!("Shutdown receiver error: {}", e))?;
                     for shutdown in std::mem::take(&mut self.historical_data_syncer_shutdown_tx) {
                         _ = shutdown.send(()).inspect_err(|_err| error!("Error sending shutdown signal"));
+                        // todo wait for their responses
                     }
                     return Ok(())
                 }
@@ -159,7 +160,7 @@ impl Subscriber {
             }
             let gaps = task::spawn_blocking(move || -> anyhow::Result<_> {
                 gaps_partition
-                    .get_all_gaps_since_daa(info.virtual_daa_score - RK_PRUNING_DEPTH)
+                    .get_all_gaps_since_daa(info.virtual_daa_score - RK_PRUNING_DEPTH * 2)
                     .collect::<Result<Vec<_>, _>>()
             })
             .await??;
@@ -187,14 +188,17 @@ impl Subscriber {
                         let block_handler = self.block_handler.clone();
                         let gaps_partition = self.block_gaps_partition.clone();
                         async move {
-                            HistoricalDataSyncer::new(
+                            _ = HistoricalDataSyncer::new(
                                 rpc_client,
                                 Cursor::new(from_daa_score, from_blue_work, from_block_hash),
                                 Cursor::new(to_daa_score, to_blue_work, to_block_hash),
                                 block_handler,
                                 shutdown_rx,
                                 gaps_partition,
-                            );
+                            )
+                            .sync()
+                            .await
+                            .inspect_err(|err| error!("Error in historical syncer: {err}"));
                         }
                     });
                     Ok(())
@@ -204,7 +208,7 @@ impl Subscriber {
             self.had_first_connect = true;
         }
         if let Some(last) = self.last_block_cursor.take()
-            && last.daa_score > info.virtual_daa_score + RK_PRUNING_DEPTH
+            && last.daa_score + RK_PRUNING_DEPTH * 2 > info.virtual_daa_score
         {
             let gaps_partition = self.block_gaps_partition.clone();
             task::spawn_blocking(move || {
@@ -225,14 +229,17 @@ impl Subscriber {
                 let block_handler = self.block_handler.clone();
                 let gaps_partition = self.block_gaps_partition.clone();
                 async move {
-                    HistoricalDataSyncer::new(
+                    _ = HistoricalDataSyncer::new(
                         rpc_client,
                         last,
                         Cursor::new(sink_header.daa_score, sink_header.blue_work, info.sink),
                         block_handler,
                         shutdown_rx,
                         gaps_partition,
-                    );
+                    )
+                    .sync()
+                    .await
+                    .inspect_err(|err| error!("Error in historical syncer: {err}"));
                 }
             });
         }

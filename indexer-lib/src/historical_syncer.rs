@@ -105,8 +105,13 @@ impl HistoricalDataSyncer {
         block_gaps_partition: BlockGapsPartition,
     ) -> Self {
         info!(
-            "Initializing historical data syncer: start_blue_work={}, target_blue_work={}, start_hash={:?}, target_hash={:?}",
-            start_cursor.blue_work, target_cursor.blue_work, start_cursor.hash, target_cursor.hash
+            "Initializing historical data syncer: start_blue_work={}, target_blue_work={}, start_blue_score: {}, target_blue_score: {}, start_hash={:?}, target_hash={:?}",
+            start_cursor.blue_work,
+            target_cursor.blue_work,
+            start_cursor.daa_score,
+            target_cursor.daa_score,
+            start_cursor.hash,
+            target_cursor.hash
         );
 
         Self {
@@ -206,6 +211,7 @@ impl HistoricalDataSyncer {
             // Check if we've reached our target
             if self.is_sync_complete(&target_status) {
                 info!(
+                    ?self.from_cursor, ?self.target_cursor,
                     "Synchronization completed successfully. Status: {:?}, Total blocks: {}, Total batches: {}",
                     target_status, self.total_blocks_processed, self.batches_processed
                 );

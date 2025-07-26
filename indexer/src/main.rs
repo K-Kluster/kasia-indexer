@@ -78,6 +78,12 @@ async fn main() -> anyhow::Result<()> {
     let payment_by_sender_partition = PaymentBySenderPartition::new(&tx_keyspace)?;
     let block_gaps_partition = BlockGapsPartition::new(&tx_keyspace)?;
     let block_daa_index_partition = DaaIndexPartition::new(&tx_keyspace)?;
+    info!(
+        "Gaps exist: {:?}",
+        block_gaps_partition
+            .get_all_gaps_since_daa(0)
+            .collect::<Result<Vec<_>, _>>()
+    );
 
     let metrics = create_shared_metrics_from_snapshot(IndexerMetricsSnapshot {
         handshakes_by_sender: handshake_by_sender_partition.approximate_len() as u64,
