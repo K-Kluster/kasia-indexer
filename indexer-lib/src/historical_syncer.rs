@@ -1,14 +1,16 @@
-use crate::BlockOrMany;
 use crate::database::headers::{BlockGap, BlockGapsPartition};
+use crate::{APP_IS_RUNNING, BlockOrMany};
+use anyhow::bail;
 use itertools::FoldWhile::{Continue, Done};
 use itertools::Itertools;
 use kaspa_math::Uint192;
-use kaspa_rpc_core::api::rpc::RpcApi;
-use kaspa_rpc_core::{GetBlocksResponse, RpcHash, RpcHeader};
+use kaspa_rpc_core::api::ops::RpcApiOps;
+use kaspa_rpc_core::{GetBlocksRequest, GetBlocksResponse, RpcBlock, RpcHash, RpcHeader};
 use kaspa_wrpc_client::KaspaRpcClient;
 use std::fmt;
 use tokio::task;
 use tracing::{debug, error, info, trace, warn};
+use workflow_serializer::prelude::Serializable;
 
 #[derive(Copy, Clone, PartialEq, Eq, Ord, PartialOrd, Default)]
 pub struct Cursor {
@@ -127,22 +129,13 @@ impl HistoricalDataSyncer {
 
         loop {
             let fetch_next_batch = async || {
-                loop {
-                    let Ok(blocks) = self
-                        .rpc_client
-                        .get_blocks(Some(self.current_cursor.hash), true, true)
-                        .await
-                        .inspect_err(|e| error!("RPC get_blocks failed: {}", e))
-                    else {
-                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                        continue;
-                    };
-                    return blocks;
-                }
+                get_blocks_with_retries(&self.rpc_client, self.current_cursor.hash, true, true)
+                    .await
+                    .inspect_err(|e| error!("RPC get_blocks failed: {}", e))
             };
 
             // Check for shutdown signal and fetch next batch
-            let blocks_response = tokio::select! {
+            let blocks = tokio::select! {
                 biased;
 
                 shutdown_result = &mut self.shutdown_rx => {
@@ -161,19 +154,19 @@ impl HistoricalDataSyncer {
 
                     return Ok(())
                 }
-                response = fetch_next_batch() => response,
+                response = fetch_next_batch() => response?,
             };
 
-            let batch_size = blocks_response.blocks.len();
+            let batch_size = blocks.len();
             debug!("Processing batch of {} blocks", batch_size);
 
             // Process the batch and check if target is reached
-            let target_status = self.process_blocks_batch(&blocks_response)?;
+            let target_status = self.process_blocks_batch(&blocks)?;
 
             // Send blocks to handler
             if let Err(e) = self
                 .block_handler
-                .send_async(BlockOrMany::Many(blocks_response.blocks))
+                .send_async(BlockOrMany::Many(blocks))
                 .await
             {
                 error!("Failed to send blocks to handler: {}", e);
@@ -232,33 +225,27 @@ impl HistoricalDataSyncer {
     }
 
     /// Processes a batch of blocks and determines sync status
-    fn process_blocks_batch(
-        &mut self,
-        response: &GetBlocksResponse,
-    ) -> anyhow::Result<SyncTargetStatus> {
-        let block_count = response.blocks.len();
+    fn process_blocks_batch(&mut self, blocks: &[RpcBlock]) -> anyhow::Result<SyncTargetStatus> {
+        let block_count = blocks.len();
         trace!("Processing {} blocks in current batch", block_count);
 
-        if response.blocks.is_empty() {
+        if blocks.is_empty() {
             warn!("Received empty block batch");
             return Ok(SyncTargetStatus::NotReached(self.current_cursor));
         }
 
         let mut last_cursor = self.current_cursor;
 
-        let target_status = response
-            .block_hashes
-            .iter()
-            .zip(response.blocks.iter())
+        let target_status = blocks.iter()
             .fold_while(
                 SyncTargetStatus::NotReached(self.current_cursor),
-                |_acc, (block_hash, block)| {
+                |_acc, block| {
                     // Update cursor for each block processed
                     last_cursor = Cursor::new(block.header.daa_score, block.header.blue_work, block.header.hash);
 
                     // Check if this block is our direct target
-                    if block_hash == &self.target_cursor.hash {
-                        debug!("Target block found directly: {:?}", block_hash);
+                    if block.header.hash == self.target_cursor.hash {
+                        debug!("Target block found directly: {:?}", block.header.hash);
                         return Done(SyncTargetStatus::TargetFoundDirectly);
                     }
 
@@ -269,7 +256,7 @@ impl HistoricalDataSyncer {
                         {
                             debug!(
                                 "Target found via anticone in block: {}, blue_work: {}",
-                                block_hash, block.header.blue_work,
+                                block.header.hash, block.header.blue_work,
                             );
                             return Done(SyncTargetStatus::TargetFoundViaAnticone);
                         }
@@ -357,4 +344,43 @@ pub struct SyncStats {
     pub current_blue_work: Uint192,
     pub target_blue_work: Uint192,
     pub anticone_candidates_count: usize,
+}
+
+async fn get_blocks_with_retries(
+    client: &KaspaRpcClient,
+    rpc_hash: RpcHash,
+    include_blocks: bool,
+    include_txs: bool,
+) -> anyhow::Result<Vec<RpcBlock>> {
+    loop {
+        if !APP_IS_RUNNING.load(std::sync::atomic::Ordering::Relaxed) {
+            bail!("App is stopped");
+        }
+        if !client.is_connected() {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            continue;
+        }
+        match client
+            .rpc_client()
+            .call(
+                RpcApiOps::GetBlocks,
+                Serializable(GetBlocksRequest::new(
+                    Some(rpc_hash),
+                    include_blocks,
+                    include_txs,
+                )),
+            )
+            .await
+        {
+            Ok(Serializable(GetBlocksResponse { blocks, .. })) => return Ok(blocks),
+            Err(
+                workflow_rpc::client::error::Error::Disconnect
+                | workflow_rpc::client::error::Error::Timeout,
+            ) => {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                continue;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
 }
