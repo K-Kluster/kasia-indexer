@@ -49,7 +49,7 @@ impl HandshakeApi {
 #[derive(Debug, Deserialize, IntoParams)]
 pub struct HandshakePaginationParams {
     pub limit: Option<usize>,
-    pub daa_score: Option<u64>,
+    pub block_time: Option<u64>,
     pub address: String,
 }
 
@@ -84,7 +84,7 @@ async fn get_handshakes_by_sender(
     Query(params): Query<HandshakePaginationParams>,
 ) -> impl IntoResponse {
     let limit = params.limit.unwrap_or(10).min(50);
-    let cursor = params.daa_score.unwrap_or(0);
+    let cursor = params.block_time.unwrap_or(0);
 
     let sender_rpc = match RpcAddress::try_from(params.address) {
         Ok(addr) => addr,
@@ -244,7 +244,7 @@ async fn get_handshakes_by_receiver(
         }
     };
     let limit = params.limit.unwrap_or(10).min(50);
-    let cursor = params.daa_score.unwrap_or(0);
+    let cursor = params.block_time.unwrap_or(0);
 
     let mut handshakes = vec![];
 

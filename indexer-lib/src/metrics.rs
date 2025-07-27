@@ -4,9 +4,16 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(feature = "serde")]
+use serde::Serialize;
+#[cfg(feature = "utoipa")]
+use utoipa::{ToSchema, schema};
+
 /// A snapshot of the indexer metrics.
 /// This structure contains a copy of all metric counters as simple u64 values.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(feature = "utoipa", derive(ToSchema))]
 pub struct IndexerMetricsSnapshot {
     /// Number of handshakes indexed by sender
     pub handshakes_by_sender: u64,
@@ -21,8 +28,10 @@ pub struct IndexerMetricsSnapshot {
     /// Number of blocks processed
     pub blocks_processed: u64,
     /// Latest block hash processed
+    #[cfg_attr(feature = "utoipa", schema(value_type = String, format = "hex"))]
     pub latest_block: RpcHash,
     /// Latest accepting block hash
+    #[cfg_attr(feature = "utoipa", schema(value_type = String, format = "hex"))]
     pub latest_accepting_block: RpcHash,
     /// Number of unknown DAA entries
     pub unknown_daa_entries: u64,

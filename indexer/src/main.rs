@@ -200,7 +200,7 @@ async fn main() -> anyhow::Result<()> {
         .payment_by_sender_partition(payment_by_sender_partition.clone())
         .tx_id_to_payment_partition(tx_id_to_payment_partition.clone())
         .tx_id_to_handshake_partition(tx_id_to_handshake_partition.clone())
-        .metrics(metrics)
+        .metrics(metrics.clone())
         .metrics_snapshot_interval(Duration::from_secs(10))
         .metadata_partition(metadata_partition.clone())
         .resolver_requests_in_progress(requests_in_progress)
@@ -274,8 +274,10 @@ async fn main() -> anyhow::Result<()> {
         tx_keyspace.clone(),
         handshake_by_sender_partition,
         handshake_by_receiver_partition,
+        contextual_message_partition,
         tx_id_to_acceptance_partition,
         tx_id_to_handshake_partition,
+        metrics.clone(),
     );
     let (api_shutdown_tx, api_shutdown_rx) = tokio::sync::oneshot::channel();
     let api_handle = tokio::spawn(api_service.serve("0.0.0.0:8080", api_shutdown_rx));
