@@ -42,6 +42,8 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
 
+mod api;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenv().ok();
@@ -268,6 +270,16 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(async move { selected_chain_syncer.process().await });
     let subscriber_handle = tokio::spawn(async move { subscriber.task().await });
 
+    let api_service = api::v1::Api::new(
+        tx_keyspace.clone(),
+        handshake_by_sender_partition,
+        handshake_by_receiver_partition,
+        tx_id_to_acceptance_partition,
+        tx_id_to_handshake_partition,
+    );
+    let (api_shutdown_tx, api_shutdown_rx) = tokio::sync::oneshot::channel();
+    let api_handle = tokio::spawn(api_service.serve("0.0.0.0:8080", api_shutdown_rx));
+
     let options = ConnectOptions {
         block_async_connect: false,
         connect_timeout: Some(Duration::from_millis(10_000)),
@@ -287,10 +299,12 @@ async fn main() -> anyhow::Result<()> {
     info!("Termination signal received. Shutting down...");
     APP_IS_RUNNING.store(false, std::sync::atomic::Ordering::Relaxed);
 
+    _ = api_shutdown_tx
+        .send(())
+        .inspect_err(|_err| error!("failed to shutdown api"));
     _ = shutdown_subscriber_tx
         .send(())
         .inspect_err(|_err| error!("failed to shutdown subscriber"));
-
     _ = shutdown_block_worker_tx
         .send(())
         .inspect_err(|err| error!("failed to shutdown block worker: {}", err));
@@ -317,9 +331,12 @@ async fn main() -> anyhow::Result<()> {
         .inspect_err(|_err| error!("failed to shutdown resolver"));
 
     // Await on all tasks to complete
+    info!("waiting for api finish");
+    _ = api_handle.await.inspect(|_| info!("api has stopped"));
+
     info!("waiting for resolver finish");
     _ = resolver_handle
-        .await?
+        .await
         .inspect(|_| info!("resolver has stopped")); // todo logs
     info!("waiting for syncer finish");
     _ = selected_chain_syncer_handle

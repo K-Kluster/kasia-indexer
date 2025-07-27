@@ -1,6 +1,6 @@
 use anyhow::bail;
 use bytemuck::{AnyBitPattern, NoUninit};
-use fjall::{PartitionCreateOptions, WriteTransaction};
+use fjall::{PartitionCreateOptions, ReadTransaction, WriteTransaction};
 use kaspa_addresses::Version;
 use kaspa_rpc_core::{RpcAddress, RpcScriptPublicKey};
 use kaspa_txscript::pay_to_address_script;
@@ -95,6 +95,37 @@ impl HandshakeBySenderPartition {
                 .map(|k| *bytemuck::from_bytes(k.as_ref()))
         })
     }
+
+    pub fn insert(&self, key: &HandshakeKeyBySender) -> anyhow::Result<()> {
+        self.0.insert(bytemuck::bytes_of(key), [])?;
+        Ok(())
+    }
+
+    pub fn insert_wtx(
+        &self,
+        wtx: &mut WriteTransaction,
+        key: &HandshakeKeyBySender,
+    ) -> anyhow::Result<()> {
+        wtx.insert(&self.0, bytemuck::bytes_of(key), []);
+        Ok(())
+    }
+
+    pub fn iter_by_sender_from_block_time_rtx(
+        &self,
+        rtx: &ReadTransaction,
+        sender: AddressPayload,
+        block_time: u64,
+    ) -> impl Iterator<Item = anyhow::Result<HandshakeKeyBySender>> {
+        let mut from = [0u8; 34 + 8];
+        from[..34].copy_from_slice(bytemuck::bytes_of(&sender));
+        from[34..].copy_from_slice(&block_time.to_be_bytes());
+        let mut to = [255u8; 34 + 8];
+        to[..34].copy_from_slice(bytemuck::bytes_of(&sender));
+        rtx.range(&self.0, from..=to).map(|r| {
+            r.map(|(k, _v)| *bytemuck::from_bytes(k.as_ref()))
+                .map_err(anyhow::Error::from)
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, AnyBitPattern, NoUninit, PartialEq, Eq)]
@@ -135,22 +166,6 @@ impl<T: AsRef<[u8]>> Deref for LikeHandshakeKeyBySender<T> {
 
     fn deref(&self) -> &Self::Target {
         bytemuck::from_bytes(self.bts.as_ref())
-    }
-}
-
-impl HandshakeBySenderPartition {
-    pub fn insert(&self, key: &HandshakeKeyBySender) -> anyhow::Result<()> {
-        self.0.insert(bytemuck::bytes_of(key), [])?;
-        Ok(())
-    }
-
-    pub fn insert_wtx(
-        &self,
-        wtx: &mut WriteTransaction,
-        key: &HandshakeKeyBySender,
-    ) -> anyhow::Result<()> {
-        wtx.insert(&self.0, bytemuck::bytes_of(key), []);
-        Ok(())
     }
 }
 
@@ -211,20 +226,32 @@ impl HandshakeByReceiverPartition {
             })
         })
     }
+
+    pub fn iter_by_receiver_from_block_time_rtx(
+        &self,
+        rtx: &ReadTransaction,
+        receiver: AddressPayload,
+        block_time: u64,
+    ) -> impl Iterator<Item = anyhow::Result<(HandshakeKeyByReceiver, AddressPayload)>> {
+        let mut from = [0u8; 34 + 8];
+        from[..34].copy_from_slice(bytemuck::bytes_of(&receiver));
+        from[34..].copy_from_slice(&block_time.to_be_bytes());
+        let mut to = [255u8; 34 + 8];
+        to[..34].copy_from_slice(bytemuck::bytes_of(&receiver));
+        rtx.range(&self.0, from..=to).map(|r| {
+            r.map(|(k, v)| {
+                (
+                    *bytemuck::from_bytes(k.as_ref()),
+                    *bytemuck::from_bytes(v.as_ref()),
+                )
+            })
+            .map_err(anyhow::Error::from)
+        })
+    }
 }
 
 #[derive(Clone)]
 pub struct TxIdToHandshakePartition(fjall::TxPartition);
-
-impl TxIdToHandshakePartition {
-    pub fn len(&self) -> anyhow::Result<usize> {
-        Ok(self.0.inner().len()?)
-    }
-
-    pub fn is_empty(&self) -> anyhow::Result<bool> {
-        Ok(self.0.inner().is_empty()?)
-    }
-}
 
 impl TxIdToHandshakePartition {
     pub fn new(keyspace: &fjall::TxKeyspace) -> anyhow::Result<Self> {
@@ -232,6 +259,14 @@ impl TxIdToHandshakePartition {
             "tx-id-to-handshake",
             PartitionCreateOptions::default(),
         )?))
+    }
+
+    pub fn len(&self) -> anyhow::Result<usize> {
+        Ok(self.0.inner().len()?)
+    }
+
+    pub fn is_empty(&self) -> anyhow::Result<bool> {
+        Ok(self.0.inner().is_empty()?)
     }
 
     pub fn insert(&self, tx_id: &[u8], sealed_hex: &[u8]) -> anyhow::Result<()> {
@@ -247,5 +282,13 @@ impl TxIdToHandshakePartition {
 
     pub fn approximate_len(&self) -> usize {
         self.0.approximate_len()
+    }
+
+    pub fn get_rtx(
+        &self,
+        rtx: &ReadTransaction,
+        tx_id: [u8; 32],
+    ) -> anyhow::Result<Option<impl AsRef<[u8]>>> {
+        rtx.get(&self.0, tx_id).map_err(anyhow::Error::from)
     }
 }
