@@ -28,7 +28,7 @@ use std::time::Instant;
 use tracing::{debug, error, info, trace, warn};
 use workflow_core::channel::{Receiver, Sender};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Notification {
     Tick,
     Shutdown,
@@ -268,7 +268,7 @@ impl PeriodicProcessor {
 
     pub fn handle_sender_resolution(
         &mut self,
-        r: Result<(RpcAddress, SenderByTxIdAndDaa), SenderByTxIdAndDaa>,
+        r: Result<(RpcAddress, SenderByTxIdAndDaa), (SenderByTxIdAndDaa, anyhow::Error)>,
     ) -> anyhow::Result<()> {
         let _lock = self.reorg_lock.lock();
         let mut wtx = self.tx_keyspace.write_tx()?;
@@ -352,10 +352,21 @@ impl PeriodicProcessor {
                     }
                 }
             }
-            Err(SenderByTxIdAndDaa { tx_id, daa_score }) => {
-                warn!(%tx_id, %daa_score, "Failed to resolve sender for transaction, decrementing attempt count");
-                self.pending_sender_resolution_partition
-                    .decrement_attempt_counts_by_transaction(&mut wtx, daa_score, tx_id)?;
+            Err((SenderByTxIdAndDaa { tx_id, daa_score }, err)) => {
+                let tx_id_already_pruned =
+                    err.to_string().contains("Transaction is already pruned");
+                if !tx_id_already_pruned {
+                    warn!(%tx_id, %daa_score, "Failed to resolve sender for transaction, decrementing attempt count");
+                    self.pending_sender_resolution_partition
+                        .decrement_attempt_counts_by_transaction(&mut wtx, daa_score, tx_id)?;
+                } else {
+                    warn!(%tx_id, %daa_score, "Transaction is already pruned, removing from pending sender resolution queue");
+                    self.pending_sender_resolution_partition.remove_pending(
+                        &mut wtx,
+                        daa_score,
+                        tx_id.as_ref(),
+                    )?;
+                }
             }
         }
         wtx.commit()?
@@ -531,17 +542,48 @@ impl PeriodicProcessor {
                         }
                         entries.iter().try_for_each(|entry| -> anyhow::Result<()> {
                             match entry.get_resolution_key()? {
-                                DaaResolutionLikeKey::HandshakeKey(hk) => self
-                                    .pending_sender_resolution_partition
-                                    .mark_handshake_pending(&mut wtx, daa, hk.tx_id, &hk)?,
-                                DaaResolutionLikeKey::ContextualMessageKey(cmk) => self
-                                    .pending_sender_resolution_partition
-                                    .mark_contextual_message_pending(
-                                        &mut wtx, daa, cmk.tx_id, &cmk,
-                                    )?,
-                                DaaResolutionLikeKey::PaymentKey(pmk) => self
-                                    .pending_sender_resolution_partition
-                                    .mark_payment_pending(&mut wtx, daa, pmk.tx_id, &pmk)?,
+                                DaaResolutionLikeKey::HandshakeKey(hk) => {
+                                    self.pending_sender_resolution_partition
+                                        .mark_handshake_pending(&mut wtx, daa, hk.tx_id, &hk)?;
+                                    self.tx_id_to_acceptance_partition
+                                        .remove_by_tx_id(&mut wtx, hk.tx_id)?;
+                                    self.tx_id_to_acceptance_partition.insert_handshake_wtx(
+                                        &mut wtx,
+                                        hk.tx_id,
+                                        &hk,
+                                        Some(daa),
+                                        Some(block.as_bytes()),
+                                    );
+                                }
+                                DaaResolutionLikeKey::ContextualMessageKey(cmk) => {
+                                    self.pending_sender_resolution_partition
+                                        .mark_contextual_message_pending(
+                                            &mut wtx, daa, cmk.tx_id, &cmk,
+                                        )?;
+                                    self.tx_id_to_acceptance_partition
+                                        .remove_by_tx_id(&mut wtx, cmk.tx_id)?;
+                                    self.tx_id_to_acceptance_partition
+                                        .insert_contextual_message_wtx(
+                                            &mut wtx,
+                                            cmk.tx_id,
+                                            &cmk,
+                                            Some(daa),
+                                            Some(block.as_bytes()),
+                                        );
+                                }
+                                DaaResolutionLikeKey::PaymentKey(pmk) => {
+                                    self.pending_sender_resolution_partition
+                                        .mark_payment_pending(&mut wtx, daa, pmk.tx_id, &pmk)?;
+                                    self.tx_id_to_acceptance_partition
+                                        .remove_by_tx_id(&mut wtx, pmk.tx_id)?;
+                                    self.tx_id_to_acceptance_partition.insert_payment_wtx(
+                                        &mut wtx,
+                                        pmk.tx_id,
+                                        &pmk,
+                                        Some(daa),
+                                        Some(block.as_bytes()),
+                                    );
+                                }
                             }
                             Ok(())
                         })?;

@@ -46,7 +46,7 @@ mod api;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    dotenv().ok();
+    dotenv()?;
 
     let db_path = std::env::var("KASIA_INDEXER_DB_PATH")
         .map(PathBuf::from)

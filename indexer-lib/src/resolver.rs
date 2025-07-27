@@ -19,10 +19,10 @@ pub struct SenderByTxIdAndDaa {
     pub daa_score: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum ResolverResponse {
     Block(Result<Box<RpcHeader>, RpcHash>),
-    Sender(Result<(RpcAddress, SenderByTxIdAndDaa), SenderByTxIdAndDaa>),
+    Sender(Result<(RpcAddress, SenderByTxIdAndDaa), (SenderByTxIdAndDaa, anyhow::Error)>),
 }
 
 pub struct Resolver {
@@ -138,10 +138,10 @@ impl Resolver {
                             error!(%err, "Failed to get sender for tx id: {tx_id} and daa score: {daa_score}");
                             self.response_tx
                                 .send(crate::periodic_processor::Notification::ResolverResponse(
-                                    ResolverResponse::Sender(Err(SenderByTxIdAndDaa {
-                                        tx_id,
-                                        daa_score,
-                                    })),
+                                    ResolverResponse::Sender(Err((
+                                        SenderByTxIdAndDaa { tx_id, daa_score },
+                                        err,
+                                    ))),
                                 ))
                                 .await?;
                         }
