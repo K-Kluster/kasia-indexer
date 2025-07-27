@@ -1,5 +1,7 @@
 use crate::api::to_rpc_address;
 use axum::extract::{Query, State};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
 use indexer_lib::database::messages::handshakes::{
@@ -37,11 +39,10 @@ impl HandshakeApi {
         }
     }
 
-    pub fn router(self) -> Router<Self> {
+    pub fn router() -> Router<Self> {
         Router::new()
             .route("/by-sender", get(get_handshakes_by_sender))
             .route("/by-receiver", get(get_handshakes_by_receiver))
-            .with_state(self)
     }
 }
 
@@ -63,22 +64,50 @@ pub struct HandshakeResponse {
     pub message_payload: String,
 }
 
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ErrorResponse {
+    pub error: String,
+}
+
 #[utoipa::path(
     get,
     path = "/handshakes/by-sender",
     params(HandshakePaginationParams),
     responses(
-        (status = 200, description = "Get handshakes by sender", body = [HandshakeResponse])
+        (status = 200, description = "Get handshakes by sender", body = [HandshakeResponse]),
+        (status = 400, description = "Bad request", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
     )
 )]
 async fn get_handshakes_by_sender(
     State(state): State<HandshakeApi>,
     Query(params): Query<HandshakePaginationParams>,
-) -> Json<Vec<HandshakeResponse>> {
+) -> impl IntoResponse {
     let limit = params.limit.unwrap_or(10).min(50);
     let cursor = params.daa_score.unwrap_or(0);
-    let sender = RpcAddress::try_from(params.address).unwrap();
-    let sender = AddressPayload::try_from(&sender).unwrap();
+
+    let sender_rpc = match RpcAddress::try_from(params.address) {
+        Ok(addr) => addr,
+        Err(e) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!("Invalid address: {e}"),
+                }),
+            ))
+        }
+    };
+    let sender = match AddressPayload::try_from(&sender_rpc) {
+        Ok(payload) => payload,
+        Err(e) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!("Invalid address payload: {e}"),
+                }),
+            ))
+        }
+    };
 
     let mut handshakes = vec![];
 
@@ -87,17 +116,44 @@ async fn get_handshakes_by_sender(
     for handshake in state
         .handshake_by_sender_partition
         .iter_by_sender_from_block_time_rtx(&rtx, sender, cursor)
+        .take(limit)
     {
-        let handshake = handshake.unwrap();
+        let handshake = match handshake {
+            Ok(hs) => hs,
+            Err(e) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: e.to_string(),
+                    }),
+                ))
+            }
+        };
         let block_time = u64::from_be_bytes(handshake.block_time);
 
         let tx_id = faster_hex::hex_string(&handshake.tx_id);
-        let sender = to_rpc_address(&handshake.sender, RpcNetworkType::Mainnet)
-            .unwrap()
-            .to_string();
-        let receiver = to_rpc_address(&handshake.receiver, RpcNetworkType::Mainnet)
-            .unwrap()
-            .to_string();
+        let sender_str = match to_rpc_address(&handshake.sender, RpcNetworkType::Mainnet) {
+            Ok(addr) => addr.to_string(),
+            Err(e) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: e.to_string(),
+                    }),
+                ))
+            }
+        };
+        let receiver_str = match to_rpc_address(&handshake.receiver, RpcNetworkType::Mainnet) {
+            Ok(addr) => addr.to_string(),
+            Err(e) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: e.to_string(),
+                    }),
+                ))
+            }
+        };
 
         let acceptance = state
             .tx_id_to_acceptance_partition
@@ -113,28 +169,42 @@ async fn get_handshakes_by_sender(
         } else {
             (None, None)
         };
-        let message_payload = state
+        let payload_bytes = match state
             .tx_id_to_handshake_partition
             .get_rtx(&rtx, handshake.tx_id)
-            .unwrap()
-            .map(|bts| faster_hex::hex_string(bts.as_ref()))
-            .unwrap();
+        {
+            Ok(Some(bts)) => bts,
+            Ok(None) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: "Missing handshake payload".to_string(),
+                    }),
+                ))
+            }
+            Err(e) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: e.to_string(),
+                    }),
+                ))
+            }
+        };
+        let message_payload = faster_hex::hex_string(payload_bytes.as_ref());
+
         handshakes.push(HandshakeResponse {
             tx_id,
-            sender,
-            receiver,
+            sender: sender_str,
+            receiver: receiver_str,
             block_time,
             accepting_block,
             accepting_daa_score,
             message_payload,
         });
-
-        if handshakes.len() >= limit {
-            break;
-        }
     }
 
-    Json(handshakes)
+    Ok(Json(handshakes))
 }
 
 #[utoipa::path(
@@ -142,15 +212,37 @@ async fn get_handshakes_by_sender(
     path = "/handshakes/by-receiver",
     params(HandshakePaginationParams),
     responses(
-        (status = 200, description = "Get handshakes by receiver", body = [HandshakeResponse])
+        (status = 200, description = "Get handshakes by receiver", body = [HandshakeResponse]),
+        (status = 400, description = "Bad request", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
     )
 )]
 async fn get_handshakes_by_receiver(
     State(state): State<HandshakeApi>,
     Query(params): Query<HandshakePaginationParams>,
-) -> Json<Vec<HandshakeResponse>> {
-    let receiver = RpcAddress::try_from(params.address).unwrap();
-    let receiver = AddressPayload::try_from(&receiver).unwrap();
+) -> impl IntoResponse {
+    let receiver_rpc = match RpcAddress::try_from(params.address.clone()) {
+        Ok(addr) => addr,
+        Err(e) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!("Invalid address: {e}"),
+                }),
+            ))
+        }
+    };
+    let receiver = match AddressPayload::try_from(&receiver_rpc) {
+        Ok(payload) => payload,
+        Err(e) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!("Invalid address payload: {e}"),
+                }),
+            ))
+        }
+    };
     let limit = params.limit.unwrap_or(10).min(50);
     let cursor = params.daa_score.unwrap_or(0);
 
@@ -163,28 +255,71 @@ async fn get_handshakes_by_receiver(
         .iter_by_receiver_from_block_time_rtx(&rtx, receiver, cursor)
         .take(limit)
     {
-        let (handshake, sender_payload) = handshake_result.unwrap();
+        let (handshake, sender_payload) = match handshake_result {
+            Ok(res) => res,
+            Err(e) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: e.to_string(),
+                    }),
+                ))
+            }
+        };
         let block_time = u64::from_be_bytes(handshake.block_time);
 
         let tx_id = faster_hex::hex_string(&handshake.tx_id);
-        let sender = to_rpc_address(&sender_payload, RpcNetworkType::Mainnet)
-            .unwrap()
-            .to_string();
-        let receiver = to_rpc_address(&handshake.receiver, RpcNetworkType::Mainnet)
-            .unwrap()
-            .to_string();
+        let sender_str = match to_rpc_address(&sender_payload, RpcNetworkType::Mainnet) {
+            Ok(addr) => addr.to_string(),
+            Err(e) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: e.to_string(),
+                    }),
+                ))
+            }
+        };
+        let receiver_str = match to_rpc_address(&handshake.receiver, RpcNetworkType::Mainnet) {
+            Ok(addr) => addr.to_string(),
+            Err(e) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: e.to_string(),
+                    }),
+                ))
+            }
+        };
 
         let acceptance = state
             .tx_id_to_acceptance_partition
             .get_by_tx_id(&rtx, &handshake.tx_id)
             .flatten()
             .next();
-        let message_payload = state
+        let payload_bytes = match state
             .tx_id_to_handshake_partition
             .get_rtx(&rtx, handshake.tx_id)
-            .unwrap()
-            .map(|bts| faster_hex::hex_string(bts.as_ref()))
-            .unwrap();
+        {
+            Ok(Some(bts)) => bts,
+            Ok(None) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: "Missing handshake payload".to_string(),
+                    }),
+                ))
+            }
+            Err(e) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: e.to_string(),
+                    }),
+                ))
+            }
+        };
+        let message_payload = faster_hex::hex_string(payload_bytes.as_ref());
         let (accepting_block, accepting_daa_score) = if let Some((key, _)) = acceptance {
             (
                 Some(faster_hex::hex_string(&key.accepted_by_block_hash)),
@@ -196,8 +331,8 @@ async fn get_handshakes_by_receiver(
 
         handshakes.push(HandshakeResponse {
             tx_id,
-            sender,
-            receiver,
+            sender: sender_str,
+            receiver: receiver_str,
             block_time,
             accepting_block,
             accepting_daa_score,
@@ -205,5 +340,5 @@ async fn get_handshakes_by_receiver(
         });
     }
 
-    Json(handshakes)
+    Ok(Json(handshakes))
 }

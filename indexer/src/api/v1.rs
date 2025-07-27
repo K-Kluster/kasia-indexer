@@ -71,7 +71,7 @@ impl Api {
     fn router(&self) -> Router {
         Router::new()
             .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
-            .nest("/handshakes", self.handshake_api.clone().router())
+            .nest("/handshakes", HandshakeApi::router())
             .layer(CorsLayer::permissive())
             .with_state(self.handshake_api.clone())
     }
