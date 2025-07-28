@@ -5,8 +5,8 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
 use indexer_lib::database::messages::{
-    payments::{PaymentByReceiverPartition, PaymentBySenderPartition}, 
     AddressPayload, TxIdToPaymentPartition,
+    payments::{PaymentByReceiverPartition, PaymentBySenderPartition},
 };
 use indexer_lib::database::processing::TxIDToAcceptancePartition;
 use kaspa_rpc_core::RpcNetworkType;
@@ -95,7 +95,7 @@ async fn get_payments_by_sender(
                 Json(ErrorResponse {
                     error: format!("Invalid address: {e}"),
                 }),
-            ))
+            ));
         }
     };
     let sender = match AddressPayload::try_from(&sender_rpc) {
@@ -106,7 +106,7 @@ async fn get_payments_by_sender(
                 Json(ErrorResponse {
                     error: format!("Invalid address payload: {e}"),
                 }),
-            ))
+            ));
         }
     };
 
@@ -126,7 +126,7 @@ async fn get_payments_by_sender(
                     Json(ErrorResponse {
                         error: format!("Database error: {e}"),
                     }),
-                ))
+                ));
             }
         };
 
@@ -137,9 +137,12 @@ async fn get_payments_by_sender(
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ErrorResponse {
-                        error: format!("Payment data inconsistency: tx_id {} found in payment_by_sender but not in tx_id_to_payment", faster_hex::hex_string(&key.tx_id)),
+                        error: format!(
+                            "Payment data inconsistency: tx_id {} found in payment_by_sender but not in tx_id_to_payment",
+                            faster_hex::hex_string(&key.tx_id)
+                        ),
                     }),
-                ))
+                ));
             }
             Err(e) => {
                 return Err((
@@ -147,27 +150,29 @@ async fn get_payments_by_sender(
                     Json(ErrorResponse {
                         error: format!("Failed to get payment data: {e}"),
                     }),
-                ))
+                ));
             }
         };
 
         // Get acceptance info
-        let (accepting_block, accepting_daa_score) = 
-            match state.tx_id_to_acceptance_partition.get(&key.tx_id) {
-                Ok(Some(acceptance)) => (
-                    Some(faster_hex::hex_string(&acceptance.accepting_block_hash)),
-                    Some(acceptance.accepting_block_daa_score),
-                ),
-                Ok(None) => (None, None),
-                Err(e) => {
-                    return Err((
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(ErrorResponse {
-                            error: format!("Failed to get acceptance data: {e}"),
-                        }),
-                    ))
-                }
-            };
+        let (accepting_block, accepting_daa_score) = match state
+            .tx_id_to_acceptance_partition
+            .get_by_tx_id(&rtx, &key.tx_id)
+        {
+            Ok(Some(acceptance)) => (
+                Some(faster_hex::hex_string(&acceptance.accepting_block_hash)),
+                Some(acceptance.accepting_block_daa_score),
+            ),
+            Ok(None) => (None, None),
+            Err(e) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: format!("Failed to get acceptance data: {e}"),
+                    }),
+                ));
+            }
+        };
 
         // Convert receiver address - this must exist since it's in the database
         let receiver_address = match to_rpc_address(&key.receiver, RpcNetworkType::Mainnet) {
@@ -176,9 +181,10 @@ async fn get_payments_by_sender(
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ErrorResponse {
-                        error: "Database consistency error: receiver address has EMPTY_VERSION".to_string(),
+                        error: "Database consistency error: receiver address has EMPTY_VERSION"
+                            .to_string(),
                     }),
-                ))
+                ));
             }
             Err(e) => {
                 return Err((
@@ -186,7 +192,7 @@ async fn get_payments_by_sender(
                     Json(ErrorResponse {
                         error: format!("Failed to convert receiver address: {e}"),
                     }),
-                ))
+                ));
             }
         };
 
@@ -230,7 +236,7 @@ async fn get_payments_by_receiver(
                 Json(ErrorResponse {
                     error: format!("Invalid address: {e}"),
                 }),
-            ))
+            ));
         }
     };
     let receiver = match AddressPayload::try_from(&receiver_rpc) {
@@ -241,7 +247,7 @@ async fn get_payments_by_receiver(
                 Json(ErrorResponse {
                     error: format!("Invalid address payload: {e}"),
                 }),
-            ))
+            ));
         }
     };
 
@@ -261,7 +267,7 @@ async fn get_payments_by_receiver(
                     Json(ErrorResponse {
                         error: format!("Database error: {e}"),
                     }),
-                ))
+                ));
             }
         };
 
@@ -272,9 +278,12 @@ async fn get_payments_by_receiver(
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ErrorResponse {
-                        error: format!("Payment data inconsistency: tx_id {} found in payment_by_receiver but not in tx_id_to_payment", faster_hex::hex_string(&key.tx_id)),
+                        error: format!(
+                            "Payment data inconsistency: tx_id {} found in payment_by_receiver but not in tx_id_to_payment",
+                            faster_hex::hex_string(&key.tx_id)
+                        ),
                     }),
-                ))
+                ));
             }
             Err(e) => {
                 return Err((
@@ -282,13 +291,13 @@ async fn get_payments_by_receiver(
                     Json(ErrorResponse {
                         error: format!("Failed to get payment data: {e}"),
                     }),
-                ))
+                ));
             }
         };
 
         // Get acceptance info
-        let (accepting_block, accepting_daa_score) = 
-            match state.tx_id_to_acceptance_partition.get(&key.tx_id) {
+        let (accepting_block, accepting_daa_score) =
+            match state.tx_id_to_acceptance_partition.get_by_tx_id(&key.tx_id) {
                 Ok(Some(acceptance)) => (
                     Some(faster_hex::hex_string(&acceptance.accepting_block_hash)),
                     Some(acceptance.accepting_block_daa_score),
@@ -300,7 +309,7 @@ async fn get_payments_by_receiver(
                         Json(ErrorResponse {
                             error: format!("Failed to get acceptance data: {e}"),
                         }),
-                    ))
+                    ));
                 }
             };
 
@@ -313,7 +322,7 @@ async fn get_payments_by_receiver(
                     Json(ErrorResponse {
                         error: format!("Failed to convert sender address: {e}"),
                     }),
-                ))
+                ));
             }
         };
 
@@ -324,9 +333,10 @@ async fn get_payments_by_receiver(
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ErrorResponse {
-                        error: "Database consistency error: receiver address has EMPTY_VERSION".to_string(),
+                        error: "Database consistency error: receiver address has EMPTY_VERSION"
+                            .to_string(),
                     }),
-                ))
+                ));
             }
             Err(e) => {
                 return Err((
@@ -334,7 +344,7 @@ async fn get_payments_by_receiver(
                     Json(ErrorResponse {
                         error: format!("Failed to convert receiver address: {e}"),
                     }),
-                ))
+                ));
             }
         };
 

@@ -1,14 +1,18 @@
 use crate::api::v1::contextual_messages::ContextualMessageApi;
 use crate::api::v1::handshakes::HandshakeApi;
+use crate::api::v1::payments::PaymentApi;
 use axum::extract::State;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
 use futures_util::FutureExt;
-use indexer_lib::database::messages::TxIdToHandshakePartition;
 use indexer_lib::database::messages::contextual_messages::ContextualMessageBySenderPartition;
 use indexer_lib::database::messages::handshakes::{
     HandshakeByReceiverPartition, HandshakeBySenderPartition,
+};
+use indexer_lib::database::messages::{
+    PaymentByReceiverPartition, PaymentBySenderPartition, TxIdToHandshakePartition,
+    TxIdToPaymentPartition,
 };
 use indexer_lib::database::processing::TxIDToAcceptancePartition;
 use indexer_lib::metrics::{IndexerMetricsSnapshot, SharedMetrics};
@@ -19,6 +23,7 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 pub mod contextual_messages;
 pub mod handshakes;
+pub mod payments;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -41,6 +46,7 @@ pub struct ApiDoc;
 pub struct Api {
     handshake_api: HandshakeApi,
     contextual_message_api: ContextualMessageApi,
+    payment_api: PaymentApi,
     metrics: SharedMetrics,
 }
 
@@ -50,8 +56,11 @@ impl Api {
         handshake_by_sender_partition: HandshakeBySenderPartition,
         handshake_by_receiver_partition: HandshakeByReceiverPartition,
         contextual_message_by_sender_partition: ContextualMessageBySenderPartition,
+        payment_by_sender_partition: PaymentBySenderPartition,
+        payment_by_receiver_partition: PaymentByReceiverPartition,
         tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
         tx_id_to_handshake_partition: TxIdToHandshakePartition,
+        tx_id_to_payment_partition: TxIdToPaymentPartition,
         metrics: SharedMetrics,
     ) -> Self {
         let handshake_api = HandshakeApi::new(
@@ -61,14 +70,25 @@ impl Api {
             tx_id_to_acceptance_partition.clone(),
             tx_id_to_handshake_partition,
         );
+
         let contextual_message_api = ContextualMessageApi::new(
-            tx_keyspace,
+            tx_keyspace.clone(),
             contextual_message_by_sender_partition,
+            tx_id_to_acceptance_partition.clone(),
+        );
+
+        let payment_api = PaymentApi::new(
+            tx_keyspace,
+            payment_by_sender_partition,
+            payment_by_receiver_partition,
+            tx_id_to_payment_partition,
             tx_id_to_acceptance_partition,
         );
+
         Self {
             handshake_api,
             contextual_message_api,
+            payment_api,
             metrics,
         }
     }
@@ -100,6 +120,10 @@ impl Api {
             .nest(
                 "/contextual-messages",
                 ContextualMessageApi::router().with_state(self.contextual_message_api.clone()),
+            )
+            .nest(
+                "/payments",
+                PaymentApi::router().with_state(self.payment_api.clone()),
             )
             .route(
                 "/metrics",

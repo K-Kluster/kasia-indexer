@@ -276,8 +276,11 @@ async fn main() -> anyhow::Result<()> {
         handshake_by_sender_partition,
         handshake_by_receiver_partition,
         contextual_message_partition,
+        payment_by_sender_partition,
+        payment_by_receiver_partition,
         tx_id_to_acceptance_partition,
         tx_id_to_handshake_partition,
+        tx_id_to_payment_partition,
         metrics.clone(),
     );
     let (api_shutdown_tx, api_shutdown_rx) = tokio::sync::oneshot::channel();
