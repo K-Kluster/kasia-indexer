@@ -9,7 +9,7 @@ use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 
-const EMPTY_VERSION: u8 = 0; // used when we don't know address at all
+pub const EMPTY_VERSION: u8 = 0; // used when we don't know address at all
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, AnyBitPattern, NoUninit)]

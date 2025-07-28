@@ -1,8 +1,7 @@
 use crate::database::messages::AddressPayload;
 use anyhow::bail;
 use bytemuck::{AnyBitPattern, NoUninit};
-use fjall::{PartitionCreateOptions, WriteTransaction};
-use kaspa_rpc_core::RpcTransactionId;
+use fjall::{PartitionCreateOptions, ReadTransaction, UserKey, UserValue, WriteTransaction};
 use std::marker::PhantomData;
 use std::ops::Deref;
 
@@ -63,6 +62,28 @@ impl PaymentBySenderPartition {
 
     pub fn approximate_len(&self) -> usize {
         self.0.approximate_len()
+    }
+
+    pub fn get_by_sender_from_block_time(
+        &self,
+        rtx: &ReadTransaction,
+        sender: &AddressPayload,
+        from_block_time: u64,
+    ) -> impl DoubleEndedIterator<Item = Result<LikePaymentKeyBySender<UserKey>, anyhow::Error>> + '_
+    {
+        // Create range start: sender (34 bytes) + block_time (8 bytes)
+        let mut range_start = [0u8; 42]; // 34 + 8
+        range_start[..34].copy_from_slice(bytemuck::bytes_of(sender));
+        range_start[34..42].copy_from_slice(&from_block_time.to_be_bytes());
+
+        // Create range end: sender (34 bytes) + max block_time (8 bytes)
+        let mut range_end = [0xFFu8; 42]; // 34 + 8
+        range_end[..34].copy_from_slice(bytemuck::bytes_of(sender));
+
+        rtx.range(&self.0, range_start..=range_end).map(|item| {
+            item.map(|(key, _value)| LikePaymentKeyBySender::new(key))
+                .map_err(anyhow::Error::from)
+        })
     }
 }
 
@@ -134,6 +155,65 @@ impl PaymentByReceiverPartition {
             bytemuck::bytes_of(key),
             bytemuck::bytes_of(&sender),
         );
+    }
+
+    pub fn get_by_receiver_from_block_time(
+        &self,
+        rtx: &ReadTransaction,
+        receiver: &AddressPayload,
+        from_block_time: u64,
+    ) -> impl DoubleEndedIterator<
+        Item = Result<(LikePaymentKeyByReceiver<UserKey>, AddressPayload), anyhow::Error>,
+    > + '_ {
+        // Create range start: receiver (34 bytes) + block_time (8 bytes)
+        let mut range_start = [0u8; 42]; // 34 + 8
+        range_start[..34].copy_from_slice(bytemuck::bytes_of(receiver));
+        range_start[34..42].copy_from_slice(&from_block_time.to_be_bytes());
+
+        // Create range end: receiver (34 bytes) + max block_time (8 bytes)
+        let mut range_end = [0xFFu8; 42]; // 34 + 8
+        range_end[..34].copy_from_slice(bytemuck::bytes_of(receiver));
+
+        rtx.range(&self.0, range_start..=range_end).map(|item| {
+            item.map(|(key, value)| {
+                let sender_payload = *bytemuck::from_bytes::<AddressPayload>(value.as_ref());
+                (LikePaymentKeyByReceiver::new(key), sender_payload)
+            })
+            .map_err(anyhow::Error::from)
+        })
+    }
+}
+
+#[repr(transparent)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct LikePaymentData<T: AsRef<[u8]>> {
+    bts: T,
+    phantom_data: PhantomData<[u8]>,
+}
+
+impl<T: AsRef<[u8]>> LikePaymentData<T> {
+    pub fn new(bts: T) -> anyhow::Result<Self> {
+        if bts.as_ref().len() < 8 {
+            bail!(
+                "Payment data must be at least 8 bytes (amount), got {}",
+                bts.as_ref().len()
+            );
+        }
+        Ok(Self {
+            bts,
+            phantom_data: PhantomData,
+        })
+    }
+
+    pub fn amount(&self) -> u64 {
+        let amount_bytes: [u8; 8] = self.bts.as_ref()[..8]
+            .try_into()
+            .expect("amount bytes should be exactly 8 bytes");
+        u64::from_be_bytes(amount_bytes)
+    }
+
+    pub fn message(&self) -> &[u8] {
+        &self.bts.as_ref()[8..]
     }
 }
 
@@ -220,8 +300,21 @@ impl TxIdToPaymentPartition {
         }
     }
 
-    pub fn get_tx_id(&self, tx_id: RpcTransactionId) -> anyhow::Result<Option<(u64, Vec<u8>)>> {
-        self.get(&tx_id.as_bytes())
+    pub fn get_rtx(
+        &self,
+        rtx: &ReadTransaction,
+        tx_id: &[u8],
+    ) -> anyhow::Result<Option<LikePaymentData<UserValue>>> {
+        if tx_id.len() != 32 {
+            bail!("Transaction ID must be 32 bytes, got {}", tx_id.len());
+        }
+
+        if let Some(value_bytes) = rtx.get(&self.0, tx_id)? {
+            let payment_data = LikePaymentData::new(value_bytes)?;
+            Ok(Some(payment_data))
+        } else {
+            Ok(None)
+        }
     }
 }
 

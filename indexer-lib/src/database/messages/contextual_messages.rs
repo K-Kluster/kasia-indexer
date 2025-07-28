@@ -172,8 +172,9 @@ impl ContextualMessageBySenderPartition {
         sender: &AddressPayload,
         alias: &[u8; 16],
         from_block_time: u64,
-    ) -> impl DoubleEndedIterator<Item = Result<(LikeContextualMessageBySenderKey<UserKey>, impl AsRef<[u8]>)>> + '_
-    {
+    ) -> impl DoubleEndedIterator<
+        Item = Result<(LikeContextualMessageBySenderKey<UserKey>, impl AsRef<[u8]>)>,
+    > + '_ {
         // Create range start: sender (34 bytes) + alias (16 bytes) + block_time (8 bytes)
         let mut range_start = [0u8; 58]; // 34 + 16 + 8
         range_start[..34].copy_from_slice(bytemuck::bytes_of(sender));
@@ -184,7 +185,6 @@ impl ContextualMessageBySenderPartition {
         let mut range_end = [0xFF; 58]; // 34 + 16 + 8
         range_end[..34].copy_from_slice(bytemuck::bytes_of(sender));
         range_end[34..50].copy_from_slice(alias);
-
 
         rtx.range(&self.0, range_start..=range_end).map(|item| {
             let (key_bytes, value_bytes) = item?;

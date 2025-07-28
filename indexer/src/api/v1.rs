@@ -1,24 +1,24 @@
-use crate::api::v1::handshakes::HandshakeApi;
 use crate::api::v1::contextual_messages::ContextualMessageApi;
+use crate::api::v1::handshakes::HandshakeApi;
 use axum::extract::State;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
 use futures_util::FutureExt;
+use indexer_lib::database::messages::TxIdToHandshakePartition;
+use indexer_lib::database::messages::contextual_messages::ContextualMessageBySenderPartition;
 use indexer_lib::database::messages::handshakes::{
     HandshakeByReceiverPartition, HandshakeBySenderPartition,
 };
-use indexer_lib::database::messages::contextual_messages::ContextualMessageBySenderPartition;
-use indexer_lib::database::messages::TxIdToHandshakePartition;
 use indexer_lib::database::processing::TxIDToAcceptancePartition;
-use indexer_lib::metrics::{SharedMetrics, IndexerMetricsSnapshot};
+use indexer_lib::metrics::{IndexerMetricsSnapshot, SharedMetrics};
 use std::net::SocketAddr;
 use tower_http::cors::CorsLayer;
 use tracing::error;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
-pub mod handshakes;
 pub mod contextual_messages;
+pub mod handshakes;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -66,7 +66,7 @@ impl Api {
             contextual_message_by_sender_partition,
             tx_id_to_acceptance_partition,
         );
-        Self { 
+        Self {
             handshake_api,
             contextual_message_api,
             metrics,
@@ -93,9 +93,18 @@ impl Api {
     fn router(&self) -> Router {
         Router::new()
             .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
-            .nest("/handshakes", HandshakeApi::router().with_state(self.handshake_api.clone()))
-            .nest("/contextual-messages", ContextualMessageApi::router().with_state(self.contextual_message_api.clone()))
-            .route("/metrics", get(get_metrics).with_state(self.metrics.clone()))
+            .nest(
+                "/handshakes",
+                HandshakeApi::router().with_state(self.handshake_api.clone()),
+            )
+            .nest(
+                "/contextual-messages",
+                ContextualMessageApi::router().with_state(self.contextual_message_api.clone()),
+            )
+            .route(
+                "/metrics",
+                get(get_metrics).with_state(self.metrics.clone()),
+            )
             .layer(CorsLayer::permissive())
     }
 }

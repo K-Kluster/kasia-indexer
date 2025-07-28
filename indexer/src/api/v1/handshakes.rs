@@ -4,10 +4,10 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
+use indexer_lib::database::messages::TxIdToHandshakePartition;
 use indexer_lib::database::messages::handshakes::{
     AddressPayload, HandshakeByReceiverPartition, HandshakeBySenderPartition,
 };
-use indexer_lib::database::messages::TxIdToHandshakePartition;
 use indexer_lib::database::processing::TxIDToAcceptancePartition;
 use kaspa_rpc_core::{RpcAddress, RpcNetworkType};
 use serde::{Deserialize, Serialize};
@@ -94,7 +94,7 @@ async fn get_handshakes_by_sender(
                 Json(ErrorResponse {
                     error: format!("Invalid address: {e}"),
                 }),
-            ))
+            ));
         }
     };
     let sender = match AddressPayload::try_from(&sender_rpc) {
@@ -105,7 +105,7 @@ async fn get_handshakes_by_sender(
                 Json(ErrorResponse {
                     error: format!("Invalid address payload: {e}"),
                 }),
-            ))
+            ));
         }
     };
 
@@ -126,32 +126,50 @@ async fn get_handshakes_by_sender(
                     Json(ErrorResponse {
                         error: e.to_string(),
                     }),
-                ))
+                ));
             }
         };
         let block_time = u64::from_be_bytes(handshake.block_time);
 
         let tx_id = faster_hex::hex_string(&handshake.tx_id);
         let sender_str = match to_rpc_address(&handshake.sender, RpcNetworkType::Mainnet) {
-            Ok(addr) => addr.to_string(),
+            Ok(Some(addr)) => addr.to_string(),
+            Ok(None) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: "Database consistency error: sender address has EMPTY_VERSION"
+                            .to_string(),
+                    }),
+                ));
+            }
             Err(e) => {
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ErrorResponse {
                         error: e.to_string(),
                     }),
-                ))
+                ));
             }
         };
         let receiver_str = match to_rpc_address(&handshake.receiver, RpcNetworkType::Mainnet) {
-            Ok(addr) => addr.to_string(),
+            Ok(Some(addr)) => addr.to_string(),
+            Ok(None) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: "Database consistency error: receiver address has EMPTY_VERSION"
+                            .to_string(),
+                    }),
+                ));
+            }
             Err(e) => {
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ErrorResponse {
                         error: e.to_string(),
                     }),
-                ))
+                ));
             }
         };
 
@@ -180,7 +198,7 @@ async fn get_handshakes_by_sender(
                     Json(ErrorResponse {
                         error: "Missing handshake payload".to_string(),
                     }),
-                ))
+                ));
             }
             Err(e) => {
                 return Err((
@@ -188,7 +206,7 @@ async fn get_handshakes_by_sender(
                     Json(ErrorResponse {
                         error: e.to_string(),
                     }),
-                ))
+                ));
             }
         };
         let message_payload = faster_hex::hex_string(payload_bytes.as_ref());
@@ -229,7 +247,7 @@ async fn get_handshakes_by_receiver(
                 Json(ErrorResponse {
                     error: format!("Invalid address: {e}"),
                 }),
-            ))
+            ));
         }
     };
     let receiver = match AddressPayload::try_from(&receiver_rpc) {
@@ -240,7 +258,7 @@ async fn get_handshakes_by_receiver(
                 Json(ErrorResponse {
                     error: format!("Invalid address payload: {e}"),
                 }),
-            ))
+            ));
         }
     };
     let limit = params.limit.unwrap_or(10).min(50);
@@ -263,32 +281,50 @@ async fn get_handshakes_by_receiver(
                     Json(ErrorResponse {
                         error: e.to_string(),
                     }),
-                ))
+                ));
             }
         };
         let block_time = u64::from_be_bytes(handshake.block_time);
 
         let tx_id = faster_hex::hex_string(&handshake.tx_id);
         let sender_str = match to_rpc_address(&sender_payload, RpcNetworkType::Mainnet) {
-            Ok(addr) => addr.to_string(),
+            Ok(Some(addr)) => addr.to_string(),
+            Ok(None) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: "Database consistency error: sender address has EMPTY_VERSION"
+                            .to_string(),
+                    }),
+                ));
+            }
             Err(e) => {
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ErrorResponse {
                         error: e.to_string(),
                     }),
-                ))
+                ));
             }
         };
         let receiver_str = match to_rpc_address(&handshake.receiver, RpcNetworkType::Mainnet) {
-            Ok(addr) => addr.to_string(),
+            Ok(Some(addr)) => addr.to_string(),
+            Ok(None) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: "Database consistency error: receiver address has EMPTY_VERSION"
+                            .to_string(),
+                    }),
+                ));
+            }
             Err(e) => {
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ErrorResponse {
                         error: e.to_string(),
                     }),
-                ))
+                ));
             }
         };
 
@@ -308,7 +344,7 @@ async fn get_handshakes_by_receiver(
                     Json(ErrorResponse {
                         error: "Missing handshake payload".to_string(),
                     }),
-                ))
+                ));
             }
             Err(e) => {
                 return Err((
@@ -316,7 +352,7 @@ async fn get_handshakes_by_receiver(
                     Json(ErrorResponse {
                         error: e.to_string(),
                     }),
-                ))
+                ));
             }
         };
         let message_payload = faster_hex::hex_string(payload_bytes.as_ref());

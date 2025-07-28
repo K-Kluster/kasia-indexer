@@ -14,16 +14,16 @@ use indexer_lib::database::processing::{
 };
 use indexer_lib::fifo_set::FifoSet;
 use indexer_lib::metrics::IndexerMetricsSnapshot;
-use indexer_lib::periodic_processor::{run_ticker, Notification, PeriodicProcessor};
+use indexer_lib::periodic_processor::{Notification, PeriodicProcessor, run_ticker};
 use indexer_lib::virtual_chain_processor::VirtualChainProcessor;
 use indexer_lib::{
+    APP_IS_RUNNING,
     block_processor::BlockProcessor,
     database::{self},
     metrics::create_shared_metrics_from_snapshot,
     resolver::Resolver,
     selected_chain_syncer::SelectedChainSyncer,
     subscriber::Subscriber,
-    APP_IS_RUNNING,
 };
 use kaspa_wrpc_client::client::{ConnectOptions, ConnectStrategy};
 use kaspa_wrpc_client::prelude::{NetworkId, NetworkType};
@@ -31,8 +31,8 @@ use kaspa_wrpc_client::{KaspaRpcClient, WrpcEncoding};
 use parking_lot::Mutex;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use time::macros::format_description;
 use tracing::{error, info};

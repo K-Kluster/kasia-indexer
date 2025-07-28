@@ -5,7 +5,7 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
 use indexer_lib::database::messages::{
-    contextual_messages::ContextualMessageBySenderPartition, AddressPayload
+    AddressPayload, contextual_messages::ContextualMessageBySenderPartition,
 };
 use indexer_lib::database::processing::TxIDToAcceptancePartition;
 use kaspa_rpc_core::RpcNetworkType;
@@ -33,8 +33,7 @@ impl ContextualMessageApi {
     }
 
     pub fn router() -> Router<Self> {
-        Router::new()
-            .route("/by-sender", get(get_contextual_messages_by_sender))
+        Router::new().route("/by-sender", get(get_contextual_messages_by_sender))
     }
 }
 
@@ -87,7 +86,7 @@ async fn get_contextual_messages_by_sender(
                 Json(ErrorResponse {
                     error: format!("Invalid address: {e}"),
                 }),
-            ))
+            ));
         }
     };
     let sender = match AddressPayload::try_from(&sender_rpc) {
@@ -98,7 +97,7 @@ async fn get_contextual_messages_by_sender(
                 Json(ErrorResponse {
                     error: format!("Invalid address payload: {e}"),
                 }),
-            ))
+            ));
         }
     };
 
@@ -113,7 +112,10 @@ async fn get_contextual_messages_by_sender(
     }
 
     let mut alias_bytes = [0u8; 16];
-    match faster_hex::hex_decode(params.alias.as_bytes(), &mut alias_bytes[..params.alias.len() / 2]) {
+    match faster_hex::hex_decode(
+        params.alias.as_bytes(),
+        &mut alias_bytes[..params.alias.len() / 2],
+    ) {
         Ok(bytes) => bytes,
         Err(e) => {
             return Err((
@@ -121,7 +123,7 @@ async fn get_contextual_messages_by_sender(
                 Json(ErrorResponse {
                     error: format!("Invalid alias hex: {e}"),
                 }),
-            ))
+            ));
         }
     };
 
@@ -141,25 +143,34 @@ async fn get_contextual_messages_by_sender(
                     Json(ErrorResponse {
                         error: e.to_string(),
                     }),
-                ))
+                ));
             }
         };
 
         let block_time = u64::from_be_bytes(message_key.block_time);
         let tx_id = faster_hex::hex_string(&message_key.tx_id);
-        
+
         let sender_str = match to_rpc_address(&message_key.sender, RpcNetworkType::Mainnet) {
-            Ok(addr) => addr.to_string(),
+            Ok(Some(addr)) => addr.to_string(),
+            Ok(None) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: "Database consistency error: sender address has EMPTY_VERSION"
+                            .to_string(),
+                    }),
+                ));
+            }
             Err(e) => {
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ErrorResponse {
                         error: e.to_string(),
                     }),
-                ))
+                ));
             }
         };
-        
+
         let acceptance = state
             .tx_id_to_acceptance_partition
             .get_by_tx_id(&rtx, &message_key.tx_id)
