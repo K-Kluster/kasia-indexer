@@ -12,6 +12,8 @@ use indexer_lib::database::processing::TxIDToAcceptancePartition;
 use kaspa_rpc_core::RpcNetworkType;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
+use tokio::task::spawn_blocking;
+use anyhow::{bail};
 
 #[derive(Clone)]
 pub struct PaymentApi {
@@ -110,101 +112,75 @@ async fn get_payments_by_sender(
         }
     };
 
-    let rtx = state.tx_keyspace.read_tx();
-    let mut payments = Vec::new();
+    let address_clone = params.address.clone();
 
-    for result in state
-        .payment_by_sender_partition
-        .get_by_sender_from_block_time(&rtx, &sender, cursor)
-        .take(limit)
-    {
-        let key = match result {
-            Ok(key) => key,
-            Err(e) => {
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: format!("Database error: {e}"),
-                    }),
-                ));
-            }
-        };
+    let result = spawn_blocking(move || {
+        let rtx = state.tx_keyspace.read_tx();
+        let mut payments = Vec::new();
 
-        // Get payment amount and message from tx_id_to_payment partition
-        let payment_data = match state.tx_id_to_payment_partition.get_rtx(&rtx, &key.tx_id) {
-            Ok(Some(data)) => data,
-            Ok(None) => {
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: format!(
-                            "Payment data inconsistency: tx_id {} found in payment_by_sender but not in tx_id_to_payment",
-                            faster_hex::hex_string(&key.tx_id)
-                        ),
-                    }),
-                ));
-            }
-            Err(e) => {
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: format!("Failed to get payment data: {e}"),
-                    }),
-                ));
-            }
-        };
-
-        // Get acceptance info
-        let (accepting_block, accepting_daa_score) = match state
-            .tx_id_to_acceptance_partition
-            .get_by_tx_id(&rtx, &key.tx_id)
-            .flatten()
-            .next()
+        for result in state
+            .payment_by_sender_partition
+            .get_by_sender_from_block_time(&rtx, &sender, cursor)
+            .take(limit)
         {
-            Some((acceptance_key, _)) => (
-                Some(faster_hex::hex_string(
-                    &acceptance_key.accepted_by_block_hash,
-                )),
-                Some(u64::from_le_bytes(acceptance_key.accepted_at_daa)),
-            ),
-            None => (None, None),
-        };
+            let key = match result {
+                Ok(key) => key,
+                Err(e) => bail!("Database error: {}", e),
+            };
 
-        // Convert receiver address - this must exist since it's in the database
-        let receiver_address = match to_rpc_address(&key.receiver, RpcNetworkType::Mainnet) {
-            Ok(Some(addr)) => addr.to_string(),
-            Ok(None) => {
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: "Database consistency error: receiver address has EMPTY_VERSION"
-                            .to_string(),
-                    }),
-                ));
-            }
-            Err(e) => {
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: format!("Failed to convert receiver address: {e}"),
-                    }),
-                ));
-            }
-        };
+            let payment_data = match state.tx_id_to_payment_partition.get_rtx(&rtx, &key.tx_id) {
+                Ok(Some(data)) => data,
+                Ok(None) => bail!("Payment data inconsistency: tx_id {} found in payment_by_sender but not in tx_id_to_payment", faster_hex::hex_string(&key.tx_id)),
+                Err(e) => bail!("Failed to get payment data: {}", e),
+            };
 
-        payments.push(PaymentResponse {
-            tx_id: faster_hex::hex_string(&key.tx_id),
-            sender: Some(params.address.clone()), // todo rc to use without cloning??
-            receiver: receiver_address,
-            block_time: u64::from_be_bytes(key.block_time),
-            amount: payment_data.amount(),
-            message: faster_hex::hex_string(payment_data.message()),
-            accepting_block,
-            accepting_daa_score,
-        });
+            let (accepting_block, accepting_daa_score) = match state
+                .tx_id_to_acceptance_partition
+                .get_by_tx_id(&rtx, &key.tx_id)
+                .flatten()
+                .next()
+            {
+                Some((acceptance_key, _)) => (
+                    Some(faster_hex::hex_string(
+                        &acceptance_key.accepted_by_block_hash,
+                    )),
+                    Some(u64::from_be_bytes(acceptance_key.accepted_at_daa)),
+                ),
+                None => (None, None),
+            };
+
+            let receiver_address = match to_rpc_address(&key.receiver, RpcNetworkType::Mainnet) {
+                Ok(Some(addr)) => addr.to_string(),
+                Ok(None) => bail!("Database consistency error: receiver address has EMPTY_VERSION"),
+                Err(e) => bail!("Failed to convert receiver address: {}", e),
+            };
+
+            payments.push(PaymentResponse {
+                tx_id: faster_hex::hex_string(&key.tx_id),
+                sender: Some(address_clone.clone()),
+                receiver: receiver_address,
+                block_time: u64::from_be_bytes(key.block_time),
+                amount: payment_data.amount(),
+                message: faster_hex::hex_string(payment_data.message()),
+                accepting_block,
+                accepting_daa_score,
+            });
+        }
+
+        Ok(payments)
+    }).await;
+
+    match result {
+        Ok(Ok(payments)) => Ok(Json(payments)),
+        Ok(Err(e)) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: e.to_string() }),
+        )),
+        Err(join_err) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: format!("Task error: {join_err}") }),
+        )),
     }
-
-    Ok(Json(payments))
 }
 
 #[utoipa::path(
@@ -247,112 +223,76 @@ async fn get_payments_by_receiver(
         }
     };
 
-    let rtx = state.tx_keyspace.read_tx();
-    let mut payments = Vec::new();
+    let result = spawn_blocking(move || {
+        let rtx = state.tx_keyspace.read_tx();
+        let mut payments = Vec::new();
 
-    for result in state
-        .payment_by_receiver_partition
-        .get_by_receiver_from_block_time(&rtx, &receiver, cursor)
-        .take(limit)
-    {
-        let (key, sender_payload) = match result {
-            Ok((key, sender)) => (key, sender),
-            Err(e) => {
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: format!("Database error: {e}"),
-                    }),
-                ));
-            }
-        };
-
-        // Get payment amount and message from tx_id_to_payment partition
-        let payment_data = match state.tx_id_to_payment_partition.get_rtx(&rtx, &key.tx_id) {
-            Ok(Some(data)) => data,
-            Ok(None) => {
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: format!(
-                            "Payment data inconsistency: tx_id {} found in payment_by_receiver but not in tx_id_to_payment",
-                            faster_hex::hex_string(&key.tx_id)
-                        ),
-                    }),
-                ));
-            }
-            Err(e) => {
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: format!("Failed to get payment data: {e}"),
-                    }),
-                ));
-            }
-        };
-
-        // Get acceptance info
-        let (accepting_block, accepting_daa_score) = match state
-            .tx_id_to_acceptance_partition
-            .get_by_tx_id(&rtx, &key.tx_id)
-            .flatten()
-            .next()
+        for result in state
+            .payment_by_receiver_partition
+            .get_by_receiver_from_block_time(&rtx, &receiver, cursor)
+            .take(limit)
         {
-            Some((acceptance_key, _)) => (
-                Some(faster_hex::hex_string(
-                    &acceptance_key.accepted_by_block_hash,
-                )),
-                Some(u64::from_le_bytes(acceptance_key.accepted_at_daa)),
-            ),
-            None => (None, None),
-        };
+            let (key, sender_payload) = match result {
+                Ok((key, sender)) => (key, sender),
+                Err(e) => bail!("Database error: {}", e),
+            };
 
-        // Convert sender address - may be None if unknown (EMPTY_VERSION)
-        let sender_address = match to_rpc_address(&sender_payload, RpcNetworkType::Mainnet) {
-            Ok(opt_addr) => opt_addr.map(|addr| addr.to_string()),
-            Err(e) => {
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: format!("Failed to convert sender address: {e}"),
-                    }),
-                ));
-            }
-        };
+            let payment_data = match state.tx_id_to_payment_partition.get_rtx(&rtx, &key.tx_id) {
+                Ok(Some(data)) => data,
+                Ok(None) => bail!("Payment data inconsistency: tx_id {} found in payment_by_receiver but not in tx_id_to_payment", faster_hex::hex_string(&key.tx_id)),
+                Err(e) => bail!("Failed to get payment data: {}", e),
+            };
 
-        // The receiver address is the one we queried by, so we need to convert it
-        let receiver_address = match to_rpc_address(&key.receiver, RpcNetworkType::Mainnet) {
-            Ok(Some(addr)) => addr.to_string(),
-            Ok(None) => {
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: "Database consistency error: receiver address has EMPTY_VERSION"
-                            .to_string(),
-                    }),
-                ));
-            }
-            Err(e) => {
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: format!("Failed to convert receiver address: {e}"),
-                    }),
-                ));
-            }
-        };
+            let (accepting_block, accepting_daa_score) = match state
+                .tx_id_to_acceptance_partition
+                .get_by_tx_id(&rtx, &key.tx_id)
+                .flatten()
+                .next()
+            {
+                Some((acceptance_key, _)) => (
+                    Some(faster_hex::hex_string(
+                        &acceptance_key.accepted_by_block_hash,
+                    )),
+                    Some(u64::from_be_bytes(acceptance_key.accepted_at_daa)),
+                ),
+                None => (None, None),
+            };
 
-        payments.push(PaymentResponse {
-            tx_id: faster_hex::hex_string(&key.tx_id),
-            sender: sender_address,
-            receiver: receiver_address,
-            block_time: u64::from_be_bytes(key.block_time),
-            amount: payment_data.amount(),
-            message: faster_hex::hex_string(payment_data.message()),
-            accepting_block,
-            accepting_daa_score,
-        });
+            let sender_address = match to_rpc_address(&sender_payload, RpcNetworkType::Mainnet) {
+                Ok(opt_addr) => opt_addr.map(|addr| addr.to_string()),
+                Err(e) => bail!("Failed to convert sender address: {}", e),
+            };
+
+            let receiver_address = match to_rpc_address(&key.receiver, RpcNetworkType::Mainnet) {
+                Ok(Some(addr)) => addr.to_string(),
+                Ok(None) => bail!("Database consistency error: receiver address has EMPTY_VERSION"),
+                Err(e) => bail!("Failed to convert receiver address: {}", e),
+            };
+
+            payments.push(PaymentResponse {
+                tx_id: faster_hex::hex_string(&key.tx_id),
+                sender: sender_address,
+                receiver: receiver_address,
+                block_time: u64::from_be_bytes(key.block_time),
+                amount: payment_data.amount(),
+                message: faster_hex::hex_string(payment_data.message()),
+                accepting_block,
+                accepting_daa_score,
+            });
+        }
+
+        Ok(payments)
+    }).await;
+
+    match result {
+        Ok(Ok(payments)) => Ok(Json(payments)),
+        Ok(Err(e)) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: e.to_string() }),
+        )),
+        Err(join_err) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: format!("Task error: {join_err}") }),
+        )),
     }
-
-    Ok(Json(payments))
 }

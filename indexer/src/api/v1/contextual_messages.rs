@@ -1,3 +1,4 @@
+use anyhow::bail;
 use crate::api::to_rpc_address;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -11,6 +12,7 @@ use indexer_lib::database::processing::TxIDToAcceptancePartition;
 use kaspa_rpc_core::RpcNetworkType;
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
+use tokio::task::spawn_blocking;
 
 #[derive(Clone)]
 pub struct ContextualMessageApi {
@@ -116,7 +118,7 @@ async fn get_contextual_messages_by_sender(
         params.alias.as_bytes(),
         &mut alias_bytes[..params.alias.len() / 2],
     ) {
-        Ok(bytes) => bytes,
+        Ok(_) => (),
         Err(e) => {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -127,77 +129,71 @@ async fn get_contextual_messages_by_sender(
         }
     };
 
-    let mut messages = vec![];
-    let rtx = state.tx_keyspace.read_tx();
+    let alias = params.alias;
 
-    for message_result in state
-        .contextual_message_by_sender_partition
-        .get_by_sender_alias_from_block_time(&rtx, &sender, &alias_bytes, cursor)
-        .take(limit)
-    {
-        let (message_key, sealed_hex) = match message_result {
-            Ok(res) => res,
-            Err(e) => {
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: e.to_string(),
-                    }),
-                ));
-            }
-        };
+    let result = spawn_blocking(move || {
+        let mut messages = vec![];
+        let rtx = state.tx_keyspace.read_tx();
 
-        let block_time = u64::from_be_bytes(message_key.block_time);
-        let tx_id = faster_hex::hex_string(&message_key.tx_id);
+        for message_result in state
+            .contextual_message_by_sender_partition
+            .get_by_sender_alias_from_block_time(&rtx, &sender, &alias_bytes, cursor)
+            .take(limit)
+        {
+            let (message_key, sealed_hex) = match message_result {
+                Ok(res) => res,
+                Err(e) => bail!("Database error: {}", e),
+            };
 
-        let sender_str = match to_rpc_address(&message_key.sender, RpcNetworkType::Mainnet) {
-            Ok(Some(addr)) => addr.to_string(),
-            Ok(None) => {
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: "Database consistency error: sender address has EMPTY_VERSION"
-                            .to_string(),
-                    }),
-                ));
-            }
-            Err(e) => {
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: e.to_string(),
-                    }),
-                ));
-            }
-        };
+            let block_time = u64::from_be_bytes(message_key.block_time);
+            let tx_id = faster_hex::hex_string(&message_key.tx_id);
 
-        let acceptance = state
-            .tx_id_to_acceptance_partition
-            .get_by_tx_id(&rtx, &message_key.tx_id)
-            .flatten()
-            .next();
+            let sender_str = match to_rpc_address(&message_key.sender, RpcNetworkType::Mainnet) {
+                Ok(Some(addr)) => addr.to_string(),
+                Ok(None) => bail!("Database consistency error: sender address has EMPTY_VERSION"),
+                Err(e) => bail!("Address conversion error: {}", e),
+            };
 
-        let (accepting_block, accepting_daa_score) = if let Some((key, _)) = acceptance {
-            (
-                Some(faster_hex::hex_string(&key.accepted_by_block_hash)),
-                Some(u64::from_be_bytes(key.accepted_at_daa)),
-            )
-        } else {
-            (None, None)
-        };
+            let acceptance = state
+                .tx_id_to_acceptance_partition
+                .get_by_tx_id(&rtx, &message_key.tx_id)
+                .flatten()
+                .next();
 
-        let message_payload = faster_hex::hex_string(sealed_hex.as_ref());
+            let (accepting_block, accepting_daa_score) = if let Some((key, _)) = acceptance {
+                (
+                    Some(faster_hex::hex_string(&key.accepted_by_block_hash)),
+                    Some(u64::from_be_bytes(key.accepted_at_daa)),
+                )
+            } else {
+                (None, None)
+            };
 
-        messages.push(ContextualMessageResponse {
-            tx_id,
-            sender: sender_str,
-            alias: params.alias.clone(), // todo use byteview
-            block_time,
-            accepting_block,
-            accepting_daa_score,
-            message_payload,
-        });
+            let message_payload = faster_hex::hex_string(sealed_hex.as_ref());
+
+            messages.push(ContextualMessageResponse {
+                tx_id,
+                sender: sender_str,
+                alias: alias.clone(), // todo use byteview
+                block_time,
+                accepting_block,
+                accepting_daa_score,
+                message_payload,
+            });
+        }
+
+        Ok(messages)
+    }).await;
+
+    match result {
+        Ok(Ok(messages)) => Ok(Json(messages)),
+        Ok(Err(e)) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: e.to_string() }),
+        )),
+        Err(join_err) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: format!("Task error: {join_err}") }),
+        )),
     }
-
-    Ok(Json(messages))
 }
