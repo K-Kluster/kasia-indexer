@@ -158,20 +158,16 @@ async fn get_payments_by_sender(
         let (accepting_block, accepting_daa_score) = match state
             .tx_id_to_acceptance_partition
             .get_by_tx_id(&rtx, &key.tx_id)
+            .flatten()
+            .next()
         {
-            Ok(Some(acceptance)) => (
-                Some(faster_hex::hex_string(&acceptance.accepting_block_hash)),
-                Some(acceptance.accepting_block_daa_score),
+            Some((acceptance_key, _)) => (
+                Some(faster_hex::hex_string(
+                    &acceptance_key.accepted_by_block_hash,
+                )),
+                Some(u64::from_le_bytes(acceptance_key.accepted_at_daa)),
             ),
-            Ok(None) => (None, None),
-            Err(e) => {
-                return Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse {
-                        error: format!("Failed to get acceptance data: {e}"),
-                    }),
-                ));
-            }
+            None => (None, None),
         };
 
         // Convert receiver address - this must exist since it's in the database
@@ -296,22 +292,20 @@ async fn get_payments_by_receiver(
         };
 
         // Get acceptance info
-        let (accepting_block, accepting_daa_score) =
-            match state.tx_id_to_acceptance_partition.get_by_tx_id(&key.tx_id) {
-                Ok(Some(acceptance)) => (
-                    Some(faster_hex::hex_string(&acceptance.accepting_block_hash)),
-                    Some(acceptance.accepting_block_daa_score),
-                ),
-                Ok(None) => (None, None),
-                Err(e) => {
-                    return Err((
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(ErrorResponse {
-                            error: format!("Failed to get acceptance data: {e}"),
-                        }),
-                    ));
-                }
-            };
+        let (accepting_block, accepting_daa_score) = match state
+            .tx_id_to_acceptance_partition
+            .get_by_tx_id(&rtx, &key.tx_id)
+            .flatten()
+            .next()
+        {
+            Some((acceptance_key, _)) => (
+                Some(faster_hex::hex_string(
+                    &acceptance_key.accepted_by_block_hash,
+                )),
+                Some(u64::from_le_bytes(acceptance_key.accepted_at_daa)),
+            ),
+            None => (None, None),
+        };
 
         // Convert sender address - may be None if unknown (EMPTY_VERSION)
         let sender_address = match to_rpc_address(&sender_payload, RpcNetworkType::Mainnet) {

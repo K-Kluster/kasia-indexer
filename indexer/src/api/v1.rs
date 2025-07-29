@@ -31,6 +31,8 @@ pub mod payments;
         handshakes::get_handshakes_by_sender,
         handshakes::get_handshakes_by_receiver,
         contextual_messages::get_contextual_messages_by_sender,
+        payments::get_payments_by_sender,
+        payments::get_payments_by_receiver,
         get_metrics,
     ),
     components(
