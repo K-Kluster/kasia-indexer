@@ -87,7 +87,7 @@ async fn get_payments_by_sender(
     let limit = params.limit.unwrap_or(10).min(50);
     let cursor = params.block_time.unwrap_or(0);
 
-    let sender_rpc = match kaspa_rpc_core::RpcAddress::try_from(params.address) {
+    let sender_rpc = match kaspa_rpc_core::RpcAddress::try_from(params.address.as_str()) {
         Ok(addr) => addr,
         Err(e) => {
             return Err((
@@ -194,7 +194,7 @@ async fn get_payments_by_sender(
 
         payments.push(PaymentResponse {
             tx_id: faster_hex::hex_string(&key.tx_id),
-            sender: None, // Not included for by-sender queries
+            sender: Some(params.address.clone()), // todo rc to use without cloning??
             receiver: receiver_address,
             block_time: u64::from_be_bytes(key.block_time),
             amount: payment_data.amount(),
