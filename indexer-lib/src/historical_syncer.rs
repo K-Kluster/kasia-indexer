@@ -56,8 +56,6 @@ enum SyncTargetStatus {
     NotReached(Cursor),
     /// Target block found directly in the response
     TargetFoundDirectly,
-    /// Target found indirectly via anticone resolution and selected child
-    TargetFoundViaAnticone,
 }
 
 /// Configuration for the historical data syncer
@@ -242,38 +240,22 @@ impl HistoricalDataSyncer {
 
         let mut last_cursor = self.current_cursor;
 
-        let target_status = blocks.iter()
+        let target_status = blocks
+            .iter()
             .fold_while(
                 SyncTargetStatus::NotReached(self.current_cursor),
                 |_acc, block| {
                     // Update cursor for each block processed
-                    last_cursor = Cursor::new(block.header.daa_score, block.header.blue_work, block.header.hash);
+                    last_cursor = Cursor::new(
+                        block.header.daa_score,
+                        block.header.blue_work,
+                        block.header.hash,
+                    );
 
                     // Check if this block is our direct target
                     if block.header.hash == self.target_cursor.hash {
                         debug!("Target block found directly: {:?}", block.header.hash);
                         return Done(SyncTargetStatus::TargetFoundDirectly);
-                    }
-
-                    // Process chain blocks for anticone resolution
-                    if let Some(verbose_data) = &block.verbose_data {
-                        if verbose_data.is_chain_block
-                            && self.check_target_in_merge_sets(verbose_data)
-                        {
-                            debug!(
-                                "Target found via anticone in block: {}, blue_work: {}",
-                                block.header.hash, block.header.blue_work,
-                            );
-                            return Done(SyncTargetStatus::TargetFoundViaAnticone);
-                        }
-                        // Add to anticone candidates if blue work qualifies.
-                        if block.header.blue_work >= self.target_cursor.blue_work && !verbose_data.is_chain_block /* selected block with higher blue work precedes target block unless target block is selected */ {
-                            let candidate = Cursor::new(block.header.daa_score, block.header.blue_work, block.header.hash);
-                            trace!("Adding anticone candidate: {:?}", candidate);
-                            self.anticone_candidates.push(candidate);
-                        }
-                    } else {
-                        warn!("Block missing verbose data: {:?}", block);
                     }
 
                     Continue(SyncTargetStatus::NotReached(last_cursor))
@@ -287,7 +269,7 @@ impl HistoricalDataSyncer {
                 self.current_cursor = *cursor;
                 trace!("Updated current cursor to: {:?}", self.current_cursor);
             }
-            SyncTargetStatus::TargetFoundDirectly | SyncTargetStatus::TargetFoundViaAnticone => {
+            SyncTargetStatus::TargetFoundDirectly => {
                 // Target found, cursor update not critical but keep it consistent
                 self.current_cursor = last_cursor;
                 trace!("Target found, final cursor: {:?}", self.current_cursor);
@@ -297,37 +279,9 @@ impl HistoricalDataSyncer {
         Ok(target_status)
     }
 
-    /// Checks if target or anticone candidates are found in merge sets
-    fn check_target_in_merge_sets(
-        &self,
-        verbose_data: &kaspa_rpc_core::RpcBlockVerboseData,
-    ) -> bool {
-        // Check if target is directly in merge sets
-        if verbose_data
-            .merge_set_blues_hashes
-            .contains(&self.target_cursor.hash)
-            || verbose_data
-                .merge_set_reds_hashes
-                .contains(&self.target_cursor.hash)
-        {
-            return true;
-        }
-
-        // Check if any anticone candidates are in merge sets
-        self.anticone_candidates.iter().any(|candidate| {
-            verbose_data
-                .merge_set_blues_hashes
-                .contains(&candidate.hash)
-                || verbose_data.merge_set_reds_hashes.contains(&candidate.hash)
-        })
-    }
-
     /// Determines if synchronization is complete based on target status
     fn is_sync_complete(&self, status: &SyncTargetStatus) -> bool {
-        matches!(
-            status,
-            SyncTargetStatus::TargetFoundDirectly | SyncTargetStatus::TargetFoundViaAnticone
-        )
+        matches!(status, SyncTargetStatus::TargetFoundDirectly)
     }
 
     /// Returns current sync statistics

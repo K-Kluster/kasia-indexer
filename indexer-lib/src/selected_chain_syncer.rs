@@ -20,13 +20,8 @@ pub enum Intake {
 
 #[derive(Debug, Clone)]
 pub enum HistoricalSyncResult {
-    TargetReached {
-        target: Cursor,
-        reached_via: TargetReachedVia,
-    },
-    Interrupted {
-        last_processed_block: Cursor,
-    },
+    TargetReached { target: Cursor },
+    Interrupted { last_processed_block: Cursor },
 }
 
 #[derive(Debug, Clone)]
@@ -200,14 +195,8 @@ impl SelectedChainSyncer {
         sync_result: Option<HistoricalSyncResult>,
     ) -> anyhow::Result<()> {
         match sync_result {
-            Some(HistoricalSyncResult::TargetReached {
-                target,
-                reached_via,
-            }) => {
-                info!(
-                    "Historical sync completed: target={:?}, reached_via={:?}",
-                    target, reached_via
-                );
+            Some(HistoricalSyncResult::TargetReached { target }) => {
+                info!("Historical sync completed: target={:?}", target);
                 state.is_synced = true;
                 state.clear_historical_task();
                 self.process_queued_notifications(state).await?;
@@ -600,19 +589,8 @@ impl HistoricalSyncer {
         if self.target_reached_exactly(&vcc) {
             return Ok(Some(HistoricalSyncResult::TargetReached {
                 target: self.to,
-                reached_via: TargetReachedVia::DirectMatch,
             }));
         }
-
-        if last_compact_header.blue_work > self.to.blue_work {
-            return Ok(Some(HistoricalSyncResult::TargetReached {
-                target: self.to,
-                reached_via: TargetReachedVia::BlueWorkExceeded {
-                    final_block: *current,
-                },
-            }));
-        }
-
         Ok(None)
     }
 

@@ -1,5 +1,5 @@
-use anyhow::bail;
 use crate::api::to_rpc_address;
+use anyhow::bail;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -11,8 +11,8 @@ use indexer_lib::database::messages::{
 use indexer_lib::database::processing::TxIDToAcceptancePartition;
 use kaspa_rpc_core::RpcNetworkType;
 use serde::{Deserialize, Serialize};
-use utoipa::{IntoParams, ToSchema};
 use tokio::task::spawn_blocking;
+use utoipa::{IntoParams, ToSchema};
 
 #[derive(Clone)]
 pub struct ContextualMessageApi {
@@ -183,17 +183,22 @@ async fn get_contextual_messages_by_sender(
         }
 
         Ok(messages)
-    }).await;
+    })
+    .await;
 
     match result {
         Ok(Ok(messages)) => Ok(Json(messages)),
         Ok(Err(e)) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { error: e.to_string() }),
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
         )),
         Err(join_err) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { error: format!("Task error: {join_err}") }),
+            Json(ErrorResponse {
+                error: format!("Task error: {join_err}"),
+            }),
         )),
     }
 }
