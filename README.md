@@ -6,7 +6,6 @@ A lightweight, specialized indexer for the Kasia messenger application built on 
 
 **This project is currently in active development and is NOT ready for production use.**
 
-
 ## Features
 
 - **Real-time BlockDAG Indexing**: Efficiently processes Kaspa blocks and transactions
@@ -19,6 +18,7 @@ A lightweight, specialized indexer for the Kasia messenger application built on 
 The indexer consists of several key components:
 
 ### Core Modules
+
 - **Block Processor**: Extracts and parses encrypted messages from transaction data
 - **Virtual Chain Processor**: Handles Virtual Chain Changed (VCC) notifications and transaction acceptance
 - **Periodic Processor**: Manages resolution of unknown transactions and DAA scores
@@ -26,13 +26,15 @@ The indexer consists of several key components:
 - **Chain Subscriber**: Real-time subscription to new blocks and chain updates
 
 ### Database Organization
+
 - **Headers**: Block compact headers and gap tracking
 - **Messages**: Protocol message storage (handshakes, payments, contextual messages)
 - **Processing**: Transaction processing state and resolution workflows
 
 ### Message Types
+
 - **Handshakes**: Initial connection establishment between parties
-- **Payments**: Payment transactions with optional attached messages  
+- **Payments**: Payment transactions with optional attached messages
 - **Contextual Messages**: Application-specific encrypted messages
 
 Useful commands:
@@ -40,6 +42,10 @@ Useful commands:
 - run locally: `RUST_LOG=info cargo run -r -p indexer`
 - build docker image `docker build -t kasia-indexer .`
 - run docker container: `docker run -v ./data:/root/.kasia-indexer -e RUST_LOG=info --restart always kasia-indexer ./indexer`
+
+## API
+
+- http://localhost:8080/swagger-ui/
 
 ## Env vars
 

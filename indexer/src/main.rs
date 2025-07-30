@@ -14,16 +14,16 @@ use indexer_lib::database::processing::{
 };
 use indexer_lib::fifo_set::FifoSet;
 use indexer_lib::metrics::IndexerMetricsSnapshot;
-use indexer_lib::periodic_processor::{run_ticker, Notification, PeriodicProcessor};
+use indexer_lib::periodic_processor::{Notification, PeriodicProcessor, run_ticker};
 use indexer_lib::virtual_chain_processor::VirtualChainProcessor;
 use indexer_lib::{
+    APP_IS_RUNNING,
     block_processor::BlockProcessor,
     database::{self},
     metrics::create_shared_metrics_from_snapshot,
     resolver::Resolver,
     selected_chain_syncer::SelectedChainSyncer,
     subscriber::Subscriber,
-    APP_IS_RUNNING,
 };
 use kaspa_wrpc_client::client::{ConnectOptions, ConnectStrategy};
 use kaspa_wrpc_client::prelude::{NetworkId, NetworkType};
@@ -31,8 +31,8 @@ use kaspa_wrpc_client::{KaspaRpcClient, WrpcEncoding};
 use parking_lot::Mutex;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use time::macros::format_description;
 use tracing::{error, info};
@@ -42,8 +42,11 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
 
+mod api;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // ignore faillures as .env might not be present at runtime, and this use-case is tolerated
     dotenv().ok();
 
     let db_path = std::env::var("KASIA_INDEXER_DB_PATH")
@@ -198,7 +201,7 @@ async fn main() -> anyhow::Result<()> {
         .payment_by_sender_partition(payment_by_sender_partition.clone())
         .tx_id_to_payment_partition(tx_id_to_payment_partition.clone())
         .tx_id_to_handshake_partition(tx_id_to_handshake_partition.clone())
-        .metrics(metrics)
+        .metrics(metrics.clone())
         .metrics_snapshot_interval(Duration::from_secs(10))
         .metadata_partition(metadata_partition.clone())
         .resolver_requests_in_progress(requests_in_progress)
@@ -268,6 +271,21 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(async move { selected_chain_syncer.process().await });
     let subscriber_handle = tokio::spawn(async move { subscriber.task().await });
 
+    let api_service = api::v1::Api::new(
+        tx_keyspace.clone(),
+        handshake_by_sender_partition,
+        handshake_by_receiver_partition,
+        contextual_message_partition,
+        payment_by_sender_partition,
+        payment_by_receiver_partition,
+        tx_id_to_acceptance_partition,
+        tx_id_to_handshake_partition,
+        tx_id_to_payment_partition,
+        metrics.clone(),
+    );
+    let (api_shutdown_tx, api_shutdown_rx) = tokio::sync::oneshot::channel();
+    let api_handle = tokio::spawn(api_service.serve("0.0.0.0:8080", api_shutdown_rx));
+
     let options = ConnectOptions {
         block_async_connect: false,
         connect_timeout: Some(Duration::from_millis(10_000)),
@@ -287,10 +305,12 @@ async fn main() -> anyhow::Result<()> {
     info!("Termination signal received. Shutting down...");
     APP_IS_RUNNING.store(false, std::sync::atomic::Ordering::Relaxed);
 
+    _ = api_shutdown_tx
+        .send(())
+        .inspect_err(|_err| error!("failed to shutdown api"));
     _ = shutdown_subscriber_tx
         .send(())
         .inspect_err(|_err| error!("failed to shutdown subscriber"));
-
     _ = shutdown_block_worker_tx
         .send(())
         .inspect_err(|err| error!("failed to shutdown block worker: {}", err));
@@ -317,9 +337,12 @@ async fn main() -> anyhow::Result<()> {
         .inspect_err(|_err| error!("failed to shutdown resolver"));
 
     // Await on all tasks to complete
+    info!("waiting for api finish");
+    _ = api_handle.await.inspect(|_| info!("api has stopped"));
+
     info!("waiting for resolver finish");
     _ = resolver_handle
-        .await?
+        .await
         .inspect(|_| info!("resolver has stopped")); // todo logs
     info!("waiting for syncer finish");
     _ = selected_chain_syncer_handle

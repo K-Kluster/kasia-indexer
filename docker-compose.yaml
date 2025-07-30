@@ -1,0 +1,20 @@
+services:
+  kasia-indexer:
+    stdin_open: true
+    tty: true
+    image: kluster/kasia-indexer
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      KASPA_NODE_WBORSH_URL: ${KASPA_NODE_WBORSH_URL}
+      RUST_LOG: ${RUST_LOG}
+      KASIA_INDEXER_DB_PATH: /app/data
+      RUST_BACKTRACE: 1
+    ports:
+      - 1337:8080
+    volumes:
+      - indexer-data:/app/data
+
+volumes:
+  indexer-data:
