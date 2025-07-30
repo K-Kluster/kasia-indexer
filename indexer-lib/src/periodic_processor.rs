@@ -648,7 +648,7 @@ impl PeriodicProcessor {
             .get_entries_to_prune(&rtx, prune_before_daa_bytes)
         {
             let (raw_key, tx_ids_view) = entry_result.context("Failed to get entry to prune")?;
-            error!("prune_block: {}", RpcHash::from_slice(&raw_key[8..]));
+            debug!("prune_block: {}", RpcHash::from_slice(&raw_key[8..]));
             // Remove individual skip transactions from the main skip partition
             for tx_id in tx_ids_view.as_tx_ids() {
                 self.skip_tx_partition.remove_skip(&mut wtx, *tx_id);
