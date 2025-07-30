@@ -207,6 +207,7 @@ async fn main() -> anyhow::Result<()> {
         .resolver_requests_in_progress(requests_in_progress)
         .block_daa_index(block_daa_index_partition)
         .virtual_daa(virtual_daa.clone())
+        .accepting_block_to_tx_id_partition(acceptance_to_tx_id_partition.clone())
         .build();
 
     let (selected_chain_intake_tx, selected_chain_intake_rx) = tokio::sync::mpsc::channel(4096);

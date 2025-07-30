@@ -57,6 +57,10 @@ impl AcceptingBlockToTxIDPartition {
         Ok(old.map(LikeTxIds::new))
     }
 
+    pub fn remove(&self, accepted_by_block_hash: &RpcHash) -> Result<()> {
+        Ok(self.0.inner().remove(accepted_by_block_hash.as_bytes())?)
+    }
+
     pub fn get_rtx(
         &self,
         rtx: &ReadTransaction,

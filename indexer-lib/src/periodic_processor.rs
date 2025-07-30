@@ -10,9 +10,10 @@ use crate::database::messages::{
 };
 use crate::database::metadata::MetadataPartition;
 use crate::database::processing::{
-    AcceptingBlockResolutionData, PendingResolutionKey, PendingSenderResolutionPartition,
-    ResolutionEntries, SkipTxByBlockPartition, SkipTxPartition, TxIDToAcceptancePartition,
-    UnknownAcceptingDaaPartition, UnknownTxPartition, UnknownTxUpdateAction,
+    AcceptingBlockResolutionData, AcceptingBlockToTxIDPartition, PendingResolutionKey,
+    PendingSenderResolutionPartition, ResolutionEntries, SkipTxByBlockPartition, SkipTxPartition,
+    TxIDToAcceptancePartition, UnknownAcceptingDaaPartition, UnknownTxPartition,
+    UnknownTxUpdateAction,
 };
 use crate::database::resolution_keys::{DaaResolutionLikeKey, SenderResolutionLikeKey};
 use crate::metrics::SharedMetrics;
@@ -74,6 +75,7 @@ pub struct PeriodicProcessor {
 
     tx_keyspace: TxKeyspace,
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
+    accepting_block_to_tx_id_partition: AcceptingBlockToTxIDPartition,
     unknown_tx_partition: UnknownTxPartition,
     skip_tx_partition: SkipTxPartition,
     skip_tx_by_block_partition: SkipTxByBlockPartition,
@@ -129,7 +131,7 @@ impl PeriodicProcessor {
         self.unknown_daa()?;
         self.unknown_sender()?;
         self.prune_skip_transactions()?;
-        self.prune_block_headers()?;
+        self.prune_block_partitions()?;
         self.compact_metadata()?;
         self.update_metrics()?;
         Ok(())
@@ -676,7 +678,7 @@ impl PeriodicProcessor {
         Ok(())
     }
 
-    fn prune_block_headers(&self) -> anyhow::Result<()> {
+    fn prune_block_partitions(&self) -> anyhow::Result<()> {
         let read_tx = self.tx_keyspace.read_tx();
         const INDEXER_PRUNING_DEPTH: u64 = RK_PRUNING_DEPTH * 3;
         for r in self.block_daa_index.iter_lt(
@@ -687,7 +689,8 @@ impl PeriodicProcessor {
         ) {
             let (daa, hash) = r?;
             self.block_compact_header_partition.remove(&hash)?;
-            self.block_daa_index.delete(daa, &hash)?
+            self.block_daa_index.delete(daa, &hash)?;
+            self.accepting_block_to_tx_id_partition.remove(&hash)?;
         }
         Ok(())
     }
