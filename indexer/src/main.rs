@@ -40,7 +40,7 @@ use tracing_subscriber::{
     EnvFilter, Layer, filter::Directive, layer::SubscriberExt, util::SubscriberInitExt,
 };
 
-use crate::context::IndexerContext;
+use crate::context::{IndexerContext, get_indexer_context};
 
 mod api;
 mod context;
@@ -50,11 +50,11 @@ async fn main() -> anyhow::Result<()> {
     // ignore faillures as .env might not be present at runtime, and this use-case is tolerated
     dotenv().ok();
 
-    let context = IndexerContext::try_new()?;
+    let context = get_indexer_context()?;
 
     let _g = init_logs(&context)?;
 
-    let config = Config::new(context.db_path()).max_write_buffer_size(512 * 1024 * 1024);
+    let config = Config::new(context.db_path).max_write_buffer_size(512 * 1024 * 1024);
     let tx_keyspace = config.open_transactional()?;
     let reorg_lock = Arc::new(Mutex::new(()));
     // Partitions
@@ -170,7 +170,7 @@ async fn main() -> anyhow::Result<()> {
         resolver_block_request_rx,
         resolver_sender_request_rx,
         resolver_response_tx.clone(),
-        context.rpc_client(),
+        context.rpc_client.clone(),
         requests_in_progress.clone(),
     );
 
@@ -213,7 +213,7 @@ async fn main() -> anyhow::Result<()> {
     let (shutdown_selected_chain_syncer_tx, shutdown_selected_chain_syncer_rx) =
         tokio::sync::oneshot::channel();
     let mut selected_chain_syncer = SelectedChainSyncer::new(
-        context.rpc_client(),
+        context.rpc_client.clone(),
         metadata_partition.clone(),
         block_compact_header_partition.clone(),
         selected_chain_intake_rx,
@@ -225,7 +225,7 @@ async fn main() -> anyhow::Result<()> {
 
     let (shutdown_subscriber_tx, shutdown_subscriber_rx) = tokio::sync::oneshot::channel();
     let mut subscriber = Subscriber::new(
-        context.rpc_client(),
+        context.rpc_client.clone(),
         block_intake_tx.clone(),
         shutdown_subscriber_rx,
         block_gaps_partition.clone(),
@@ -294,7 +294,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::time::sleep(Duration::from_secs(5)).await; // let time to spawn everything
     info!("Connecting to Kaspa node...");
     context
-        .rpc_client()
+        .rpc_client
         .connect(Some(options))
         .await
         .map_err(|e| anyhow::anyhow!("Failed to connect to node: {}", e))?;
@@ -371,9 +371,9 @@ async fn main() -> anyhow::Result<()> {
 
 pub fn init_logs(context: &IndexerContext) -> anyhow::Result<(WorkerGuard, WorkerGuard)> {
     let file_appender = rolling_file::BasicRollingFileAppender::new(
-        context.log_path().join(format!(
+        context.log_path.join(format!(
             "kasia-indexer.{}.log",
-            NetworkType::to_string(&context.network_type())
+            NetworkType::to_string(&context.network_type)
         )),
         rolling_file::RollingConditionBasic::new()
             .max_size(1024 * 1024 * 8)

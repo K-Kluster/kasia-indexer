@@ -1,4 +1,4 @@
-use std::{path::PathBuf, str::FromStr, sync::Arc};
+use std::{path::PathBuf, str::FromStr};
 
 use kaspa_wrpc_client::{
     KaspaRpcClient, WrpcEncoding,
@@ -6,16 +6,12 @@ use kaspa_wrpc_client::{
 };
 use tracing::info;
 
-struct InnerIndexerContext {
-    db_path: PathBuf,
-    log_path: PathBuf,
-    network_type: NetworkType,
-    rpc_client: KaspaRpcClient,
-}
-
 #[derive(Clone)]
 pub struct IndexerContext {
-    inner: Arc<InnerIndexerContext>,
+    pub db_path: PathBuf,
+    pub log_path: PathBuf,
+    pub network_type: NetworkType,
+    pub rpc_client: KaspaRpcClient,
 }
 
 fn create_rpc_client(network_type: NetworkType) -> anyhow::Result<KaspaRpcClient> {
@@ -58,49 +54,29 @@ fn create_rpc_client(network_type: NetworkType) -> anyhow::Result<KaspaRpcClient
     Ok(client)
 }
 
-impl IndexerContext {
-    pub fn try_new() -> anyhow::Result<Self> {
-        let network_type = std::env::var("NETWORK_TYPE")
-            .map(|s| NetworkType::from_str(&s).unwrap_or(NetworkType::Mainnet))
-            .unwrap_or(NetworkType::Mainnet);
+pub fn get_indexer_context() -> anyhow::Result<IndexerContext> {
+    let network_type = std::env::var("NETWORK_TYPE")
+        .map(|s| NetworkType::from_str(&s).unwrap_or(NetworkType::Mainnet))
+        .unwrap_or(NetworkType::Mainnet);
 
-        let db_path = std::env::var("KASIA_INDEXER_DB_ROOT")
-            .map(|s| PathBuf::from(s).join(network_type.to_string()))
-            .unwrap_or_else(|_| {
-                std::env::home_dir()
-                    .unwrap()
-                    .join(".kasia-indexer")
-                    .join(network_type.to_string())
-            });
-        let log_path = db_path.join("app_logs");
+    let db_path = std::env::var("KASIA_INDEXER_DB_ROOT")
+        .map(|s| PathBuf::from(s).join(network_type.to_string()))
+        .unwrap_or_else(|_| {
+            std::env::home_dir()
+                .unwrap()
+                .join(".kasia-indexer")
+                .join(network_type.to_string())
+        });
+    let log_path = db_path.join("app_logs");
 
-        std::fs::create_dir_all(&log_path)?;
+    std::fs::create_dir_all(&log_path)?;
 
-        let rpc_client = create_rpc_client(network_type)?;
+    let rpc_client = create_rpc_client(network_type)?;
 
-        Ok(Self {
-            inner: Arc::new(InnerIndexerContext {
-                db_path,
-                log_path,
-                network_type,
-                rpc_client,
-            }),
-        })
-    }
-
-    pub fn db_path(&self) -> &PathBuf {
-        &self.inner.db_path
-    }
-
-    pub fn log_path(&self) -> &PathBuf {
-        &self.inner.log_path
-    }
-
-    pub fn network_type(&self) -> NetworkType {
-        self.inner.network_type
-    }
-
-    pub fn rpc_client(&self) -> KaspaRpcClient {
-        self.inner.rpc_client.clone()
-    }
+    Ok(IndexerContext {
+        db_path,
+        log_path,
+        network_type,
+        rpc_client,
+    })
 }
