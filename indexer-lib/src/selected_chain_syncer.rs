@@ -531,6 +531,11 @@ impl HistoricalSyncer {
                 return Ok(None);
             }
         };
+        if vcc_response.removed_chain_block_hashes.is_empty()
+            && vcc_response.added_chain_block_hashes.is_empty()
+        {
+            return Ok(None);
+        }
 
         let vcc = VirtualChainChangedNotification {
             removed_chain_block_hashes: Arc::new(vcc_response.removed_chain_block_hashes),
@@ -543,7 +548,11 @@ impl HistoricalSyncer {
         self.total_blocks_processed += batch_size as u64;
         self.batches_processed += 1;
 
-        let last_block = *vcc.added_chain_block_hashes.last().unwrap();
+        let last_block = if let Some(block) = vcc.added_chain_block_hashes.last() {
+            *block
+        } else {
+            *vcc.removed_chain_block_hashes.last().unwrap()
+        };
         let last_compact_header = self.get_block_compact_header(last_block).await?;
 
         *current = Cursor {
