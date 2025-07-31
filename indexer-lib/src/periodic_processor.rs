@@ -362,14 +362,19 @@ impl PeriodicProcessor {
                     let removed = self
                         .pending_sender_resolution_partition
                         .decrement_attempt_counts_by_transaction(&mut wtx, daa_score, tx_id)?;
-                    warn!(%tx_id, %daa_score, "Removed {} pending sender resolutions", removed.len());
+                    if !removed.is_empty() {
+                        warn!(%tx_id, %daa_score, "Removed {} pending sender resolutions due to all attempts are done", removed.len());
+                    }
                 } else {
                     warn!(%tx_id, %daa_score, "Transaction is already pruned, removing from pending sender resolution queue");
-                    self.pending_sender_resolution_partition.remove_pending(
+                    let removed = self.pending_sender_resolution_partition.remove_pending(
                         &mut wtx,
                         daa_score,
                         tx_id.as_ref(),
                     )?;
+                    if !removed.is_empty() {
+                        warn!(%tx_id, %daa_score, "Removed {} pending sender resolutions due to tx is pruned", removed.len());
+                    }
                 }
             }
         }
