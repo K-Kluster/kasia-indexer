@@ -9,7 +9,8 @@ services:
     environment:
       KASPA_NODE_WBORSH_URL: ${KASPA_NODE_WBORSH_URL}
       RUST_LOG: ${RUST_LOG}
-      KASIA_INDEXER_DB_PATH: /app/data
+      KASIA_INDEXER_DB_ROOT: /app/data
+      NETWORK_TYPE: ${NETWORK_TYPE}
       RUST_BACKTRACE: 1
     ports:
       - 1337:8080
