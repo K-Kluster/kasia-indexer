@@ -47,7 +47,9 @@ mod api;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // ignore faillures as .env might not be present at runtime, and this use-case is tolerated
-    dotenv().ok();
+    dotenv()
+        .inspect_err(|err| println!("[WARN] reading .env files is failed with err {err}"))
+        .ok();
 
     let db_path = std::env::var("KASIA_INDEXER_DB_PATH")
         .map(PathBuf::from)
