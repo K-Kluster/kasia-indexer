@@ -20,7 +20,7 @@ use kaspa_rpc_core::{
 };
 use parking_lot::Mutex;
 use std::sync::Arc;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info, log, trace, warn};
 
 pub struct VirtualChainChangedNotificationAndBlueWork {
     pub vcc: VirtualChainChangedNotification,
@@ -171,8 +171,16 @@ impl VirtualChainProcessor {
                 self.unknown_tx_partition
                     .remove_by_accepting_block_hash(wtx, removed_block_hash)?;
                 if let Some(daa) = daa {
-                    self.pending_sender_resolution_partition
+                    let removed = self
+                        .pending_sender_resolution_partition
                         .remove_pending(wtx, daa, tx_id)?;
+                    if !removed.is_empty() {
+                        let tx_id = RpcTransactionId::from_bytes(*tx_id);
+                        warn!(tx_id = %tx_id, %daa, "Removing {} pending sender resolutions", removed.len());
+                        if log::log_enabled!(log::Level::Debug) {
+                            debug!(%daa, %tx_id, "Pending sender resolutions: {:?}", removed);
+                        }
+                    }
                 }
             }
         }

@@ -14,7 +14,7 @@ use kaspa_rpc_core::{RpcHash, RpcTransactionId};
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
-use tracing::warn;
+use tracing::{debug, log, warn};
 
 /// Enum for accepting block resolution data types
 #[derive(Debug, Clone)]
@@ -241,9 +241,21 @@ impl TxIDToAcceptancePartition {
         wtx: &mut WriteTransaction,
         iter: I,
     ) -> Result<()> {
-        for k in iter {
-            wtx.update_fetch(&self.0, k?, |_old| Some([].into()))?;
+        if log::log_enabled!(log::Level::Debug) {
+            let mut resolved_txs = Vec::new();
+            for k in iter {
+                let k = k?;
+                let lk = LikeAcceptanceTxKey::new(k.clone());
+                resolved_txs.push(RpcTransactionId::from_bytes(lk.tx_id));
+                wtx.update_fetch(&self.0, k, |_old| Some([].into()))?;
+            }
+            debug!("resolved_txs: {:?}", resolved_txs);
+        } else {
+            for k in iter {
+                wtx.update_fetch(&self.0, k?, |_old| Some([].into()))?;
+            }
         }
+
         Ok(())
     }
 
