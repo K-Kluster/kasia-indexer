@@ -10,10 +10,11 @@ use fjall::{
     KvSeparationOptions, PartitionCreateOptions, ReadTransaction, UserKey, UserValue,
     WriteTransaction,
 };
-use kaspa_rpc_core::RpcHash;
+use kaspa_rpc_core::{RpcHash, RpcTransactionId};
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
+use tracing::warn;
 
 /// Enum for accepting block resolution data types
 #[derive(Debug, Clone)]
@@ -88,7 +89,7 @@ pub struct AcceptanceTxKey {
     pub tx_id: [u8; 32],
     pub accepted_at_daa: [u8; 8], // be
     pub accepted_by_block_hash: [u8; 32],
-    pub partition_id: u8, // PartitionId as u8 (added to end as requested)
+    pub partition_id: u8,
 }
 
 #[repr(transparent)]
@@ -213,7 +214,11 @@ impl TxIDToAcceptancePartition {
             &self.0,
             bytemuck::bytes_of(key),
             match value {
-                AcceptingBlockResolutionData::None => UserValue::from([]),
+                AcceptingBlockResolutionData::None => {
+                    let tx = RpcTransactionId::from_bytes(key.tx_id);
+                    warn!(tx = %tx, "insert_wtx called with AcceptingBlockResolutionData::None");
+                    UserValue::from([])
+                }
                 AcceptingBlockResolutionData::HandshakeKey(hk) => hk.inner(),
                 AcceptingBlockResolutionData::ContextualMessageKey(cmk) => cmk.inner(),
                 AcceptingBlockResolutionData::PaymentKey(pmk) => pmk.inner(),

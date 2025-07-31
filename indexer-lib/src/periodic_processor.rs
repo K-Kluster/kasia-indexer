@@ -359,8 +359,10 @@ impl PeriodicProcessor {
                     err.to_string().contains("Transaction is already pruned");
                 if !tx_id_already_pruned {
                     warn!(%tx_id, %daa_score, "Failed to resolve sender for transaction, decrementing attempt count");
-                    self.pending_sender_resolution_partition
+                    let removed = self
+                        .pending_sender_resolution_partition
                         .decrement_attempt_counts_by_transaction(&mut wtx, daa_score, tx_id)?;
+                    warn!(%tx_id, %daa_score, "Removed {} pending sender resolutions", removed.len());
                 } else {
                     warn!(%tx_id, %daa_score, "Transaction is already pruned, removing from pending sender resolution queue");
                     self.pending_sender_resolution_partition.remove_pending(

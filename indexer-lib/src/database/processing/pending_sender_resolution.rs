@@ -173,6 +173,10 @@ impl PendingSenderResolutionPartition {
                 };
 
                 results.push((partition_type, like_key));
+            } else {
+                return Err(anyhow::anyhow!(
+                    "Invalid key length in pending_sender_resolution partition"
+                ));
             }
         }
 
