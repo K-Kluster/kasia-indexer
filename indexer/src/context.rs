@@ -46,11 +46,6 @@ fn create_rpc_client(network_type: NetworkType) -> anyhow::Result<KaspaRpcClient
     )
     .map_err(|e| anyhow::anyhow!("Failed to create RPC client: {}", e))?;
 
-    info!(
-        "Creating RPC client for network: {:?}, with url {:?}",
-        network_type, url
-    );
-
     Ok(client)
 }
 
