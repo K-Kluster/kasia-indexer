@@ -405,7 +405,7 @@ pub fn init_logs<P: AsRef<Path>>(logs_dir: P) -> anyhow::Result<(WorkerGuard, Wo
     let file_appender = rolling_file::BasicRollingFileAppender::new(
         logs_dir.as_ref().join("kasia-indexer.mainnet.log"),
         rolling_file::RollingConditionBasic::new()
-            .max_size(1024 * 1024 * 8)
+            .max_size(1024 * 1024 * 64)
             .daily(),
         14,
     )?;
