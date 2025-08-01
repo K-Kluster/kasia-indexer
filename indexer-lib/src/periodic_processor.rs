@@ -481,9 +481,11 @@ impl PeriodicProcessor {
                 self.unknown_tx_partition.update_by_accepting_block_hash(
                     &mut wtx,
                     &accepting_block_hash,
-                    move |_current| {
+                    move |current| {
                         if remaining_tx_ids.is_empty() {
                             UnknownTxUpdateAction::Delete
+                        } else if current.len() == remaining_tx_ids.len() {
+                            UnknownTxUpdateAction::DoNothing
                         } else {
                             warn!(
                                 "{} unknown transactions in accepting block {}",
