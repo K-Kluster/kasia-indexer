@@ -962,7 +962,7 @@ checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 [[package]]
 name = "fjall"
 version = "2.11.2"
-source = "git+https://github.com/fjall-rs/fjall.git?branch=improve-write-stalling#0ad8037ae4f99c9784d0cd791dd419d4113249fb"
+source = "git+https://github.com/biryukovmaxim/fjall.git?branch=pass-partition-name-to-logs#401532bc1a5c12b2e850a694c2e948ac8c01b52a"
 dependencies = [
  "byteorder",
  "byteview",
