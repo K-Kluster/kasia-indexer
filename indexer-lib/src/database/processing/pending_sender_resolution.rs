@@ -182,6 +182,7 @@ impl PendingSenderResolutionPartition {
 
         // Then remove all collected keys
         for key in keys_to_remove {
+            assert_eq!(&key.tx_id, tx_id);
             wtx.remove(&self.0, bytemuck::bytes_of(&key));
         }
 

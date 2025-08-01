@@ -176,7 +176,7 @@ impl VirtualChainProcessor {
                         .remove_pending(wtx, daa, tx_id)?;
                     if !removed.is_empty() {
                         let tx_id = RpcTransactionId::from_bytes(*tx_id);
-                        warn!(tx_id = %tx_id, %daa, "Removing {} pending sender resolutions", removed.len());
+                        warn!(tx_id = %tx_id, %daa, "Removing {} pending sender resolutions", removed.len()); // todo convert to warning
                         if log::log_enabled!(log::Level::Debug) {
                             debug!(%daa, %tx_id, "Pending sender resolutions: {:?}", removed);
                         }
