@@ -16,6 +16,7 @@ use crate::database::processing::{
     UnknownTxUpdateAction,
 };
 use crate::database::resolution_keys::{DaaResolutionLikeKey, SenderResolutionLikeKey};
+use crate::fifo_set::FifoSet;
 use crate::metrics::SharedMetrics;
 use crate::resolver::{ResolverResponse, SenderByTxIdAndDaa};
 use anyhow::Context;
@@ -100,6 +101,12 @@ pub struct PeriodicProcessor {
     resolver_requests_in_progress: Arc<AtomicU64>,
 
     virtual_daa: Arc<AtomicU64>,
+
+    // FifoSet caches to avoid duplicate requests to resolver
+    #[builder(default = FifoSet::new(256))]
+    block_requests_cache: FifoSet<RpcHash>,
+    #[builder(default = FifoSet::new(256 * 300))]
+    sender_requests_cache: FifoSet<SenderByTxIdAndDaa>,
 }
 
 impl PeriodicProcessor {
@@ -532,10 +539,15 @@ impl PeriodicProcessor {
                 .get_daa_score_rtx(&rtx, &block)?
             {
                 None => {
+                    if self.block_requests_cache.contains(&block) {
+                        debug!(block_hash = %block, "Block request cache hit, request is skipped");
+                        continue;
+                    }
                     debug!(block_hash = %block, "DAA score still not available for block");
                     let _ = self.resolver_request_block_tx.try_send(block).inspect(|_| {
                         self.resolver_requests_in_progress
                             .fetch_add(1, Ordering::Relaxed);
+                        self.block_requests_cache.insert(block);
                     });
                 }
                 Some(daa) => {
@@ -619,15 +631,23 @@ impl PeriodicProcessor {
                 ..
             } = pending?;
             count += 1;
+            let sender_request = SenderByTxIdAndDaa {
+                tx_id: RpcTransactionId::from_bytes(tx_id),
+                daa_score: u64::from_be_bytes(accepting_daa_score),
+            };
+
+            if self.sender_requests_cache.contains(&sender_request) {
+                debug!(tx_id = %sender_request.tx_id, daa_score = %sender_request.daa_score, "Sender request cache hit, request is skipped");
+                continue;
+            }
+
             _ = self
                 .resolver_request_sender_tx
-                .try_send(SenderByTxIdAndDaa {
-                    tx_id: RpcTransactionId::from_bytes(tx_id),
-                    daa_score: u64::from_be_bytes(accepting_daa_score),
-                })
+                .try_send(sender_request)
                 .inspect(|_| {
                     self.resolver_requests_in_progress
                         .fetch_add(1, Ordering::Relaxed);
+                    self.sender_requests_cache.insert(sender_request);
                 });
         }
         self.metrics.set_unknown_sender_entries(count);

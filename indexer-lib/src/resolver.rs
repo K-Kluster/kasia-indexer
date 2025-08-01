@@ -1,5 +1,4 @@
 use crate::APP_IS_RUNNING;
-use crate::fifo_set::FifoSet;
 use anyhow::bail;
 use kaspa_rpc_core::api::ops::RpcApiOps;
 use kaspa_rpc_core::prelude::*;
@@ -31,8 +30,6 @@ pub struct Resolver {
     sender_request_rx: Receiver<SenderByTxIdAndDaa>,
     kaspa_rpc_client: KaspaRpcClient,
     response_tx: Sender<crate::periodic_processor::Notification>,
-    block_requests_cache: FifoSet<RpcHash>,
-    sender_request_cache: FifoSet<SenderByTxIdAndDaa>,
     requests_in_progress: Arc<AtomicU64>,
 }
 
@@ -46,24 +43,6 @@ impl Resolver {
         requests_in_progress: Arc<AtomicU64>,
     ) -> Self {
         Self {
-            block_requests_cache: FifoSet::new(
-                if let Some(cap) = block_request_rx.capacity()
-                    && cap > 0
-                {
-                    cap
-                } else {
-                    256
-                },
-            ),
-            sender_request_cache: FifoSet::new(
-                if let Some(cap) = sender_request_rx.capacity()
-                    && cap > 0
-                {
-                    cap
-                } else {
-                    256 * 300
-                },
-            ),
             shutdown_rx,
             block_request_rx,
             sender_request_rx,
@@ -78,14 +57,7 @@ impl Resolver {
         loop {
             match self.select_input().await? {
                 Input::BlockRequest(hash) => {
-                    if self.block_requests_cache.contains(&hash) {
-                        debug!("Block request cache hit, request is skipped");
-                        self.requests_in_progress
-                            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                        continue;
-                    } else {
-                        debug!(%hash, "Received block resolution request");
-                    }
+                    debug!(%hash, "Received block resolution request");
                     match get_block_with_retries(&self.kaspa_rpc_client, hash).await {
                         Ok(block) => {
                             self.response_tx
@@ -93,7 +65,6 @@ impl Resolver {
                                     ResolverResponse::Block(Ok(Box::new(block.header))),
                                 ))
                                 .await?;
-                            self.block_requests_cache.insert(hash);
                         }
                         Err(err) => {
                             error!(%err, "Failed to get block for hash: {hash}");
@@ -107,15 +78,8 @@ impl Resolver {
                     self.requests_in_progress
                         .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                 }
-                Input::SenderRequest(i @ SenderByTxIdAndDaa { tx_id, daa_score }) => {
-                    if self.sender_request_cache.contains(&i) {
-                        debug!(%tx_id, %daa_score, "Sender request skipped since it's already processed before");
-                        self.requests_in_progress
-                            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                        continue;
-                    } else {
-                        debug!(%tx_id, %daa_score, "Received sender resolution request");
-                    }
+                Input::SenderRequest(SenderByTxIdAndDaa { tx_id, daa_score }) => {
+                    debug!(%tx_id, %daa_score, "Received sender resolution request");
                     match get_utxo_return_address_with_retries(
                         &self.kaspa_rpc_client,
                         tx_id,
@@ -132,7 +96,6 @@ impl Resolver {
                                     ))),
                                 ))
                                 .await?;
-                            self.sender_request_cache.insert(i);
                         }
                         Err(err) => {
                             error!(%err, "Failed to get sender for tx id: {tx_id} and daa score: {daa_score}");
