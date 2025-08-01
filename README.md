@@ -52,8 +52,13 @@ Useful commands:
 ```bash
 # debug, info, warn, error
 RUST_LOG=info
-# default to home_dir/.kasia-indexer, must be an existing directory with read/write permissions
-# KASIA_INDEXER_DB_PATH=
+
+# default to home_dir/.kasia-indexer/mainnet, must be an existing directory with read/write permissions
+# KASIA_INDEXER_DB_ROOT=
+
+# default to mainnet, allowed values: mainnet, testnet
+NETWORK_TYPE=mainnet
+
 # if not defined, fallback to public kaspa network, if specified, the `ws://{ip}:{port}` node url
 KASPA_NODE_WBORSH_URL=
 ```

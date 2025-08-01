@@ -26,23 +26,24 @@ use indexer_lib::{
     subscriber::Subscriber,
 };
 use kaspa_wrpc_client::client::{ConnectOptions, ConnectStrategy};
-use kaspa_wrpc_client::prelude::{NetworkId, NetworkType};
-use kaspa_wrpc_client::{KaspaRpcClient, WrpcEncoding};
+use kaspa_wrpc_client::prelude::NetworkType;
 use parking_lot::Mutex;
-use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use time::macros::format_description;
 use tracing::{error, info};
+
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::filter::Directive;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{EnvFilter, Layer};
+use tracing_subscriber::{
+    EnvFilter, Layer, filter::Directive, layer::SubscriberExt, util::SubscriberInitExt,
+};
+
+use crate::context::{IndexerContext, get_indexer_context};
 
 mod api;
+mod context;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -51,13 +52,11 @@ async fn main() -> anyhow::Result<()> {
         .inspect_err(|err| println!("[WARN] reading .env files is failed with err {err}"))
         .ok();
 
-    let db_path = std::env::var("KASIA_INDEXER_DB_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| std::env::home_dir().unwrap().join(".kasia-indexer"));
-    let log_path = db_path.join("app_logs");
-    std::fs::create_dir_all(&log_path)?;
-    let _g = init_logs(log_path)?;
-    let config = Config::new(&db_path).max_write_buffer_size(512 * 1024 * 1024);
+    let context = get_indexer_context()?;
+
+    let _g = init_logs(&context)?;
+
+    let config = Config::new(context.db_path).max_write_buffer_size(512 * 1024 * 1024);
     let tx_keyspace = config.open_transactional()?;
     let reorg_lock = Arc::new(Mutex::new(()));
     // Partitions
@@ -119,8 +118,6 @@ async fn main() -> anyhow::Result<()> {
     let (shutdown_acceptance_worker_tx, shutdown_acceptance_worker_rx) = flume::bounded(1);
     let virtual_daa = Arc::new(AtomicU64::new(0));
 
-    let rpc_client = create_rpc_client()?;
-
     let mut block_worker = BlockProcessor::builder()
         .processed_blocks(FifoSet::new(256))
         .intake(block_intake_rx)
@@ -175,7 +172,7 @@ async fn main() -> anyhow::Result<()> {
         resolver_block_request_rx,
         resolver_sender_request_rx,
         resolver_response_tx.clone(),
-        rpc_client.clone(),
+        context.rpc_client.clone(),
         requests_in_progress.clone(),
     );
 
@@ -218,7 +215,7 @@ async fn main() -> anyhow::Result<()> {
     let (shutdown_selected_chain_syncer_tx, shutdown_selected_chain_syncer_rx) =
         tokio::sync::oneshot::channel();
     let mut selected_chain_syncer = SelectedChainSyncer::new(
-        rpc_client.clone(),
+        context.rpc_client.clone(),
         metadata_partition.clone(),
         block_compact_header_partition.clone(),
         selected_chain_intake_rx,
@@ -230,7 +227,7 @@ async fn main() -> anyhow::Result<()> {
 
     let (shutdown_subscriber_tx, shutdown_subscriber_rx) = tokio::sync::oneshot::channel();
     let mut subscriber = Subscriber::new(
-        rpc_client.clone(),
+        context.rpc_client.clone(),
         block_intake_tx.clone(),
         shutdown_subscriber_rx,
         block_gaps_partition.clone(),
@@ -298,7 +295,8 @@ async fn main() -> anyhow::Result<()> {
 
     tokio::time::sleep(Duration::from_secs(5)).await; // let time to spawn everything
     info!("Connecting to Kaspa node...");
-    rpc_client
+    context
+        .rpc_client
         .connect(Some(options))
         .await
         .map_err(|e| anyhow::anyhow!("Failed to connect to node: {}", e))?;
@@ -373,37 +371,12 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn create_rpc_client() -> anyhow::Result<KaspaRpcClient> {
-    let encoding = WrpcEncoding::Borsh;
-
-    let url = std::env::var("KASPA_NODE_WBORSH_URL").ok();
-    let resolver = if url.is_some() {
-        None
-    } else {
-        Some(kaspa_wrpc_client::Resolver::default())
-    };
-
-    let network_type = NetworkType::Mainnet;
-    let selected_network = Some(NetworkId::new(network_type));
-
-    let subscription_context = None;
-
-    info!("Creating RPC client for network: {:?}", network_type);
-
-    let client = KaspaRpcClient::new(
-        encoding,
-        url.as_deref(),
-        resolver,
-        selected_network,
-        subscription_context,
-    )
-    .map_err(|e| anyhow::anyhow!("Failed to create RPC client: {}", e))?;
-    Ok(client)
-}
-
-pub fn init_logs<P: AsRef<Path>>(logs_dir: P) -> anyhow::Result<(WorkerGuard, WorkerGuard)> {
+pub fn init_logs(context: &IndexerContext) -> anyhow::Result<(WorkerGuard, WorkerGuard)> {
     let file_appender = rolling_file::BasicRollingFileAppender::new(
-        logs_dir.as_ref().join("kasia-indexer.mainnet.log"),
+        context.log_path.join(format!(
+            "kasia-indexer.{}.log",
+            NetworkType::to_string(&context.network_type)
+        )),
         rolling_file::RollingConditionBasic::new()
             .max_size(1024 * 1024 * 8)
             .daily(),
