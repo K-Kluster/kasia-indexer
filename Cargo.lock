@@ -1561,6 +1561,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "indexer-actors"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "bon",
+ "bytemuck",
+ "fjall",
+ "flume",
+ "futures-util",
+ "indexer-db",
+ "itertools 0.14.0",
+ "kaspa-addresses",
+ "kaspa-consensus-core",
+ "kaspa-math",
+ "kaspa-rpc-core",
+ "kaspa-txscript",
+ "kaspa-wrpc-client",
+ "parking_lot",
+ "ringmap",
+ "serde",
+ "thiserror 2.0.12",
+ "tokio",
+ "tracing",
+ "utoipa",
+ "workflow-core",
+ "workflow-rpc",
+ "workflow-serializer",
+]
+
+[[package]]
+name = "indexer-db"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arrayref",
+ "fjall",
+ "zerocopy",
+]
+
+[[package]]
 name = "indexer-lib"
 version = "0.1.0"
 dependencies = [
