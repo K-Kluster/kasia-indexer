@@ -1,4 +1,5 @@
 use crate::api::to_rpc_address;
+use crate::context::IndexerContext;
 use anyhow::bail;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -10,7 +11,7 @@ use indexer_lib::database::messages::handshakes::{
     AddressPayload, HandshakeByReceiverPartition, HandshakeBySenderPartition,
 };
 use indexer_lib::database::processing::TxIDToAcceptancePartition;
-use kaspa_rpc_core::{RpcAddress, RpcNetworkType};
+use kaspa_rpc_core::RpcAddress;
 use serde::{Deserialize, Serialize};
 use tokio::task::spawn_blocking;
 use utoipa::{IntoParams, ToSchema};
@@ -22,6 +23,7 @@ pub struct HandshakeApi {
     handshake_by_receiver_partition: HandshakeByReceiverPartition,
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
     tx_id_to_handshake_partition: TxIdToHandshakePartition,
+    context: IndexerContext,
 }
 
 impl HandshakeApi {
@@ -31,6 +33,7 @@ impl HandshakeApi {
         handshake_by_receiver_partition: HandshakeByReceiverPartition,
         tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
         tx_id_to_handshake_partition: TxIdToHandshakePartition,
+        context: IndexerContext,
     ) -> Self {
         Self {
             tx_keyspace,
@@ -38,6 +41,7 @@ impl HandshakeApi {
             handshake_by_receiver_partition,
             tx_id_to_acceptance_partition,
             tx_id_to_handshake_partition,
+            context,
         }
     }
 
@@ -128,12 +132,13 @@ async fn get_handshakes_by_sender(
             let block_time = u64::from_be_bytes(handshake.block_time);
 
             let tx_id = faster_hex::hex_string(&handshake.tx_id);
-            let sender_str = match to_rpc_address(&handshake.sender, RpcNetworkType::Mainnet) {
+            let sender_str = match to_rpc_address(&handshake.sender, state.context.network_type) {
                 Ok(Some(addr)) => addr.to_string(),
                 Ok(None) => bail!("Database consistency error: sender address has EMPTY_VERSION"),
                 Err(e) => bail!("Address conversion error: {}", e),
             };
-            let receiver_str = match to_rpc_address(&handshake.receiver, RpcNetworkType::Mainnet) {
+            let receiver_str = match to_rpc_address(&handshake.receiver, state.context.network_type)
+            {
                 Ok(Some(addr)) => addr.to_string(),
                 Ok(None) => bail!("Database consistency error: receiver address has EMPTY_VERSION"),
                 Err(e) => bail!("Address conversion error: {}", e),
@@ -252,12 +257,13 @@ async fn get_handshakes_by_receiver(
             let block_time = u64::from_be_bytes(handshake.block_time);
 
             let tx_id = faster_hex::hex_string(&handshake.tx_id);
-            let sender_str = match to_rpc_address(&sender_payload, RpcNetworkType::Mainnet) {
+            let sender_str = match to_rpc_address(&sender_payload, state.context.network_type) {
                 Ok(Some(addr)) => addr.to_string(),
                 Ok(None) => bail!("Database consistency error: sender address has EMPTY_VERSION"),
                 Err(e) => bail!("Address conversion error: {}", e),
             };
-            let receiver_str = match to_rpc_address(&handshake.receiver, RpcNetworkType::Mainnet) {
+            let receiver_str = match to_rpc_address(&handshake.receiver, state.context.network_type)
+            {
                 Ok(Some(addr)) => addr.to_string(),
                 Ok(None) => bail!("Database consistency error: receiver address has EMPTY_VERSION"),
                 Err(e) => bail!("Address conversion error: {}", e),

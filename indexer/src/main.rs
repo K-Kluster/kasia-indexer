@@ -56,7 +56,7 @@ async fn main() -> anyhow::Result<()> {
 
     let _g = init_logs(&context)?;
 
-    let config = Config::new(context.db_path).max_write_buffer_size(512 * 1024 * 1024);
+    let config = Config::new(context.clone().db_path).max_write_buffer_size(512 * 1024 * 1024);
     let tx_keyspace = config.open_transactional()?;
     let reorg_lock = Arc::new(Mutex::new(()));
     // Partitions
@@ -282,6 +282,7 @@ async fn main() -> anyhow::Result<()> {
         tx_id_to_handshake_partition,
         tx_id_to_payment_partition,
         metrics.clone(),
+        context.clone()
     );
     let (api_shutdown_tx, api_shutdown_rx) = tokio::sync::oneshot::channel();
     let api_handle = tokio::spawn(api_service.serve("0.0.0.0:8080", api_shutdown_rx));
