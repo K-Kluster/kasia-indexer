@@ -150,7 +150,7 @@ async fn get_contextual_messages_by_sender(
 
             let sender_str = match to_rpc_address(&message_key.sender, RpcNetworkType::Mainnet) {
                 Ok(Some(addr)) => addr.to_string(),
-                Ok(None) => bail!("Database consistency error: sender address has EMPTY_VERSION"),
+                Ok(None) => String::new(),
                 Err(e) => bail!("Address conversion error: {}", e),
             };
 
