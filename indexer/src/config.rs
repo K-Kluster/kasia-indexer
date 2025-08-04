@@ -13,7 +13,7 @@ pub struct IndexerConfig {
     pub rust_log: LevelFilter,
     #[serde_as(as = "DisplayFromStr")]
     #[serde(default = "default_rust_log")]
-    pub rust_file_log: LevelFilter,
+    pub rust_log_file: LevelFilter,
     #[serde(default = "default_kasia_indexer_db_root")]
     pub kasia_indexer_db_root: PathBuf,
     #[serde(default = "default_network_type")]

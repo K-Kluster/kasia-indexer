@@ -387,7 +387,7 @@ pub fn init_logs(context: &IndexerContext) -> anyhow::Result<(WorkerGuard, Worke
     let file_subscriber = tracing_subscriber::fmt::layer()
         .with_ansi(false)
         .with_writer(non_blocking_appender)
-        .with_filter(context.config.rust_file_log);
+        .with_filter(context.config.rust_log_file);
     let (non_blocking_appender, guard_stdout) = tracing_appender::non_blocking(std::io::stdout());
     let stdout_subscriber = tracing_subscriber::fmt::layer()
         .with_timer(tracing_subscriber::fmt::time::LocalTime::new(
