@@ -1,4 +1,5 @@
 use crate::api::to_rpc_address;
+use crate::context::IndexerContext;
 use anyhow::bail;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -9,7 +10,6 @@ use indexer_lib::database::messages::{
     AddressPayload, contextual_messages::ContextualMessageBySenderPartition,
 };
 use indexer_lib::database::processing::TxIDToAcceptancePartition;
-use kaspa_rpc_core::RpcNetworkType;
 use serde::{Deserialize, Serialize};
 use tokio::task::spawn_blocking;
 use utoipa::{IntoParams, ToSchema};
@@ -19,6 +19,7 @@ pub struct ContextualMessageApi {
     tx_keyspace: fjall::TxKeyspace,
     contextual_message_by_sender_partition: ContextualMessageBySenderPartition,
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
+    context: IndexerContext,
 }
 
 impl ContextualMessageApi {
@@ -26,11 +27,13 @@ impl ContextualMessageApi {
         tx_keyspace: fjall::TxKeyspace,
         contextual_message_by_sender_partition: ContextualMessageBySenderPartition,
         tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
+        context: IndexerContext,
     ) -> Self {
         Self {
             tx_keyspace,
             contextual_message_by_sender_partition,
             tx_id_to_acceptance_partition,
+            context,
         }
     }
 
@@ -148,7 +151,7 @@ async fn get_contextual_messages_by_sender(
             let block_time = u64::from_be_bytes(message_key.block_time);
             let tx_id = faster_hex::hex_string(&message_key.tx_id);
 
-            let sender_str = match to_rpc_address(&message_key.sender, RpcNetworkType::Mainnet) {
+            let sender_str = match to_rpc_address(&message_key.sender, state.context.network_type) {
                 Ok(Some(addr)) => addr.to_string(),
                 Ok(None) => String::new(),
                 Err(e) => bail!("Address conversion error: {}", e),

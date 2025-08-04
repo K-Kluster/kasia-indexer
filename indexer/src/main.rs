@@ -28,21 +28,19 @@ use indexer_lib::{
 use kaspa_wrpc_client::client::{ConnectOptions, ConnectStrategy};
 use kaspa_wrpc_client::prelude::NetworkType;
 use parking_lot::Mutex;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use time::macros::format_description;
 use tracing::{error, info};
-
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{
-    EnvFilter, Layer, filter::Directive, layer::SubscriberExt, util::SubscriberInitExt,
-};
+use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
+use crate::config::get_indexer_config;
 use crate::context::{IndexerContext, get_indexer_context};
 
 mod api;
+mod config;
 mod context;
 
 #[tokio::main]
@@ -52,11 +50,12 @@ async fn main() -> anyhow::Result<()> {
         .inspect_err(|err| println!("[WARN] reading .env files is failed with err {err}"))
         .ok();
 
-    let context = get_indexer_context()?;
+    let config = get_indexer_config()?;
+    let context = get_indexer_context(&config)?;
 
     let _g = init_logs(&context)?;
 
-    let config = Config::new(context.db_path).max_write_buffer_size(512 * 1024 * 1024);
+    let config = Config::new(context.clone().db_path).max_write_buffer_size(512 * 1024 * 1024);
     let tx_keyspace = config.open_transactional()?;
     let reorg_lock = Arc::new(Mutex::new(()));
     // Partitions
@@ -282,6 +281,7 @@ async fn main() -> anyhow::Result<()> {
         tx_id_to_handshake_partition,
         tx_id_to_payment_partition,
         metrics.clone(),
+        context.clone(),
     );
     let (api_shutdown_tx, api_shutdown_rx) = tokio::sync::oneshot::channel();
     let api_handle = tokio::spawn(api_service.serve("0.0.0.0:8080", api_shutdown_rx));
@@ -387,23 +387,14 @@ pub fn init_logs(context: &IndexerContext) -> anyhow::Result<(WorkerGuard, Worke
     let file_subscriber = tracing_subscriber::fmt::layer()
         .with_ansi(false)
         .with_writer(non_blocking_appender)
-        .with_filter(
-            EnvFilter::builder()
-                .with_env_var("RUST_LOG_FILE")
-                .with_default_directive(Directive::from_str("info")?)
-                .from_env_lossy(),
-        );
+        .with_filter(context.config.rust_log_file);
     let (non_blocking_appender, guard_stdout) = tracing_appender::non_blocking(std::io::stdout());
     let stdout_subscriber = tracing_subscriber::fmt::layer()
         .with_timer(tracing_subscriber::fmt::time::LocalTime::new(
             format_description!("[year]-[month]-[day] [hour]:[minute]:[second]"),
         ))
         .with_writer(non_blocking_appender)
-        .with_filter(
-            EnvFilter::builder()
-                .with_default_directive(Directive::from_str("info")?)
-                .from_env_lossy(),
-        );
+        .with_filter(context.config.rust_log);
 
     tracing_subscriber::registry()
         .with(file_subscriber)

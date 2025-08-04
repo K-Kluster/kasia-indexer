@@ -26,6 +26,8 @@ tracing-subscriber = { workspace = true, features = ["env-filter", "local-time"]
 utoipa = { workspace = true, features = ["axum_extras"] }
 utoipa-swagger-ui = { workspace = true, features = ["axum"] }
 workflow-core = { workspace = true }
+serde_with = { workspace = true }
+envy = { workspace = true }
 
 indexer-lib = { path = "../indexer-lib", features = ["utoipa"] }
 
