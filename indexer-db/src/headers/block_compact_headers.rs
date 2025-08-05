@@ -33,7 +33,7 @@ impl BlockCompactHeaderPartition {
 
     pub fn insert_compact_header(
         &self,
-        block_hash: [u8; 32],
+        block_hash: &[u8; 32],
         blue_work: [u8; 24],
         daa_score: impl Into<U64>,
     ) -> Result<()> {

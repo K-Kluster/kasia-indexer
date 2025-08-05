@@ -1,8 +1,5 @@
-use anyhow::{Context, Result, bail};
-use fjall::{
-    CompressionType, PartitionCreateOptions, ReadTransaction, UserValue, WriteTransaction,
-};
-use tracing::warn;
+use anyhow::Result;
+use fjall::{CompressionType, PartitionCreateOptions, ReadTransaction, WriteTransaction};
 use zerocopy::little_endian::U64;
 use zerocopy::{FromBytes, Immutable, IntoBytes, TryFromBytes, Unaligned};
 

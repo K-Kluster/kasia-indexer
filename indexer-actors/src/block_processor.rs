@@ -4,12 +4,14 @@ use crate::BlockGap;
 use crate::block_gap_filler::BlockGapFiller;
 use crate::data_source::Command;
 use fjall::{TxKeyspace, WriteTransaction};
+use indexer_db::headers::block_compact_headers::BlockCompactHeaderPartition;
 use indexer_db::headers::block_gaps::BlockGapsPartition;
-use kaspa_rpc_core::RpcBlock;
+use indexer_db::headers::daa_index::DaaIndexPartition;
+use indexer_db::metadata::MetadataPartition;
+use kaspa_rpc_core::{RpcBlock, RpcHeader, RpcTransaction};
 pub use message::*;
 use std::collections::HashMap;
 use tracing::{error, info, trace};
-use indexer_db::metadata::MetadataPartition;
 
 pub struct BlockProcessor {
     notification_rx: flume::Receiver<BlockNotification>,
@@ -21,6 +23,8 @@ pub struct BlockProcessor {
     blocks_gap_partition: BlockGapsPartition,
     runtime_handle: tokio::runtime::Handle,
     metadata_partition: MetadataPartition,
+    block_compact_header_partition: BlockCompactHeaderPartition,
+    daa_index_partition: DaaIndexPartition,
 }
 
 impl BlockProcessor {
@@ -87,7 +91,7 @@ impl BlockProcessor {
                 NotificationOrGapResult::Notification(BlockNotification::Disconnected) => {
                     std::mem::take(&mut gaps_fillers)
                         .into_iter()
-                        .for_each(|(to, interrupt_tx)| {
+                        .for_each(|(_to, interrupt_tx)| {
                             let _ = interrupt_tx.send(()).inspect_err(|_err| {
                                 error!("Error sending interrupt to block gap filler")
                             });
@@ -97,7 +101,7 @@ impl BlockProcessor {
                     is_shutdown = true;
                     std::mem::take(&mut gaps_fillers)
                         .into_iter()
-                        .for_each(|(to, interrupt_tx)| {
+                        .for_each(|(_to, interrupt_tx)| {
                             let _ = interrupt_tx.send(()).inspect_err(|_err| {
                                 error!("Error sending interrupt to block gap filler")
                             });
@@ -110,6 +114,7 @@ impl BlockProcessor {
                     last_processed_block = Some(hash);
                     self.update_block(&mut wtx, hash);
                     wtx.commit()??;
+                    self.processed_block_tx.send(hash)?;
                 }
                 NotificationOrGapResult::GapFilling(GapFillingProgress::Interrupted { to }) => {
                     gaps_fillers.remove(&to);
@@ -132,6 +137,7 @@ impl BlockProcessor {
                             },
                         );
                         wtx.commit()??;
+                        self.processed_block_tx.send(block.header.hash.as_bytes())?;
                         Ok(())
                     })?;
                 }
@@ -153,11 +159,13 @@ impl BlockProcessor {
                                     },
                                 );
                                 wtx.commit()??;
+                                self.processed_block_tx.send(block.header.hash.as_bytes())?;
                             } else {
                                 let mut wtx = self.tx_keyspace.write_tx()?;
                                 self.handle_block(&mut wtx, block)?;
                                 self.blocks_gap_partition.remove_gap_wtx(&mut wtx, &to);
                                 wtx.commit()??;
+                                self.processed_block_tx.send(block.header.hash.as_bytes())?;
                             }
                             Ok(())
                         },
@@ -177,57 +185,27 @@ impl BlockProcessor {
         wtx: &mut WriteTransaction,
         block: &RpcBlock,
     ) -> anyhow::Result<()> {
-        let hash = block.header.hash.as_bytes();
-        //     if self.processed_blocks.contains(hash) {
-        //         debug!(%hash, "Skipping already processed block");
-        //         continue;
-        //     }
-        //     self.block_compact_header_partition.insert_compact_header(
-        //         hash,
-        //         block.header.blue_work,
-        //         block.header.daa_score,
-        //     )?;
-        //     self.block_daa_index.insert(block.header.daa_score, hash)?;
-        //     let mut wtx = self.tx_keyspace.write_tx()?;
-        //     debug!(%hash, "Processing block with {} transactions", block.transactions.len());
-        //
-        //     let mut skipped_tx_ids = Vec::with_capacity(block.transactions.len());
-        //     for tx in &block.transactions {
-        //         if let Some(skipped_tx_id) = self.handle_transaction(&mut wtx, block, tx)? {
-        //             skipped_tx_ids.push(skipped_tx_id);
-        //         }
-        //     }
-        //
-        //     // Add skipped transactions to the block-organized partition
-        //     if !skipped_tx_ids.is_empty() {
-        //         debug!(%hash, skipped_count = skipped_tx_ids.len(), "Adding skipped transactions to block partition");
-        //         self.skip_tx_by_block_partition.add_skip_for_block(
-        //             &mut wtx,
-        //             block.header.daa_score,
-        //             *block.header.hash.as_ref(),
-        //             &skipped_tx_ids,
-        //         );
-        //     }
-        //
-        //     self.metadata_partition.set_latest_block_cursor(
-        //         &mut wtx,
-        //         Cursor {
-        //             daa_score: block.header.daa_score,
-        //             blue_work: block.header.blue_work,
-        //             hash: block.header.hash,
-        //         },
-        //     )?;
-        //
-        //     wtx.commit()??;
-        //     self.processed_blocks.insert(*hash);
-        //     self.metrics.increment_blocks_processed();
-        self.processed_block_tx.send(hash)?;
+        self.block_compact_header_partition.insert_compact_header(
+            block.header.hash.as_ref(),
+            block.header.blue_work.to_le_bytes(),
+            block.header.daa_score,
+        )?;
+        self.daa_index_partition
+            .insert(block.header.daa_score, block.header.hash.as_ref())?;
+        for tx in &block.transactions {
+            self.handle_transaction(wtx, &block.header, tx)?;
+        }
         Ok(())
     }
 
-    fn handle_transaction(&self) -> anyhow::Result<()> {
+    fn handle_transaction(
+        &self,
+        _wtx: &mut WriteTransaction,
+        _block_header: &RpcHeader,
+        _tx: &RpcTransaction,
+    ) -> anyhow::Result<()> {
+        todo!("Handle transaction");
         // todo we mustn't overwrite already processed tx. use fetch_update
-        Ok(())
     }
 
     fn select_input(&self) -> anyhow::Result<NotificationOrGapResult> {
@@ -285,7 +263,7 @@ impl BlockProcessor {
     }
 
     fn update_block(&self, wtx: &mut WriteTransaction, hash: [u8; 32]) {
-       self.metadata_partition.set_latest_block_cursor(wtx, hash)
+        self.metadata_partition.set_latest_block_cursor(wtx, hash)
     }
 }
 
