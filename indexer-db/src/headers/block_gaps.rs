@@ -5,8 +5,8 @@ use fjall::{PartitionCreateOptions, ReadTransaction, WriteTransaction};
 // todo use blockhash type after rewriting rpc client
 #[derive(Debug, Copy, Clone)]
 pub struct BlockGap {
-    pub from: [u8; 32],
     pub to: [u8; 32],
+    pub from: [u8; 32],
 }
 #[derive(Clone)]
 pub struct BlockGapsPartition(fjall::TxPartition);

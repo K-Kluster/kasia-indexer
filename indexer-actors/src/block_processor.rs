@@ -9,6 +9,7 @@ use kaspa_rpc_core::RpcBlock;
 pub use message::*;
 use std::collections::HashMap;
 use tracing::{error, info, trace};
+use indexer_db::metadata::MetadataPartition;
 
 pub struct BlockProcessor {
     notification_rx: flume::Receiver<BlockNotification>,
@@ -19,6 +20,7 @@ pub struct BlockProcessor {
     tx_keyspace: TxKeyspace,
     blocks_gap_partition: BlockGapsPartition,
     runtime_handle: tokio::runtime::Handle,
+    metadata_partition: MetadataPartition,
 }
 
 impl BlockProcessor {
@@ -102,11 +104,12 @@ impl BlockProcessor {
                         })
                 }
                 NotificationOrGapResult::Notification(BlockNotification::Notification(block)) => {
-                    todo!("for each block use write_tx")
-                    // let mut wtx = self.tx_keyspace.write_tx()?;
-                    // self.handle_blocks(&mut wtx, std::slice::from_ref(block.as_ref()))?;
-                    // last_processed_block = Some(block.header.hash);
-                    // wtx.commit()??;
+                    let mut wtx = self.tx_keyspace.write_tx()?;
+                    self.handle_block(&mut wtx, &block)?;
+                    let hash = block.header.hash.as_bytes();
+                    last_processed_block = Some(hash);
+                    self.update_block(&mut wtx, hash);
+                    wtx.commit()??;
                 }
                 NotificationOrGapResult::GapFilling(GapFillingProgress::Interrupted { to }) => {
                     gaps_fillers.remove(&to);
@@ -118,34 +121,47 @@ impl BlockProcessor {
                     gaps_filling_in_progress -= 1;
                 }
                 NotificationOrGapResult::GapFilling(GapFillingProgress::Update { to, blocks }) => {
-                    todo!("insert block and update gap in the same tx")
-                    // let mut wtx = self.tx_keyspace.write_tx()?;
-                    // self.handle_blocks(&mut wtx, &blocks)?;
-                    // let last = blocks.last().unwrap();
-                    // self.blocks_gap_partition.update_gap_wtx(
-                    //     &mut wtx,
-                    //     indexer_db::headers::block_gaps::BlockGap {
-                    //         from: to.as_bytes(),
-                    //         to: last.header.hash.as_bytes(),
-                    //     },
-                    // );
-                    // wtx.commit()??;
+                    blocks.iter().try_for_each(|block| -> anyhow::Result<()> {
+                        let mut wtx = self.tx_keyspace.write_tx()?;
+                        self.handle_block(&mut wtx, block)?;
+                        self.blocks_gap_partition.update_gap_wtx(
+                            &mut wtx,
+                            indexer_db::headers::block_gaps::BlockGap {
+                                from: block.header.hash.as_bytes(),
+                                to,
+                            },
+                        );
+                        wtx.commit()??;
+                        Ok(())
+                    })?;
                 }
                 NotificationOrGapResult::GapFilling(GapFillingProgress::Finished {
                     to,
                     blocks,
                 }) => {
-                    todo!("update per block, remove gap by the end");
-                    // blocks.iter().try_for_each(|block| {
-                    //     let mut wtx = self.tx_keyspace.write_tx()?;
-                    //     self.handle_block(&mut wtx, block)?;
-                    //     Ok(())
-                    // })?;
-                    // self.blocks_gap_partition.remove_gap_wtx(
-                    //     &mut wtx,
-                    //     &to.as_bytes(),
-                    // );
-                    // wtx.commit()??;
+                    let last_index = blocks.len() - 1; // todo is it possible that blocks are empty?
+                    blocks.iter().enumerate().try_for_each(
+                        |(idx, block)| -> anyhow::Result<()> {
+                            if idx != last_index {
+                                let mut wtx = self.tx_keyspace.write_tx()?;
+                                self.handle_block(&mut wtx, block)?;
+                                self.blocks_gap_partition.update_gap_wtx(
+                                    &mut wtx,
+                                    indexer_db::headers::block_gaps::BlockGap {
+                                        from: block.header.hash.as_bytes(),
+                                        to,
+                                    },
+                                );
+                                wtx.commit()??;
+                            } else {
+                                let mut wtx = self.tx_keyspace.write_tx()?;
+                                self.handle_block(&mut wtx, block)?;
+                                self.blocks_gap_partition.remove_gap_wtx(&mut wtx, &to);
+                                wtx.commit()??;
+                            }
+                            Ok(())
+                        },
+                    )?;
                     gaps_fillers.remove(&to);
                     gaps_filling_in_progress -= 1;
                 }
@@ -158,7 +174,7 @@ impl BlockProcessor {
 
     pub fn handle_block(
         &mut self,
-        _wtx: &mut WriteTransaction,
+        wtx: &mut WriteTransaction,
         block: &RpcBlock,
     ) -> anyhow::Result<()> {
         let hash = block.header.hash.as_bytes();
@@ -231,7 +247,6 @@ impl BlockProcessor {
         sink: [u8; 32],
         pp: [u8; 32],
     ) -> anyhow::Result<Vec<BlockGap>> {
-        // todo check if we process at least one block, otherwise add it as block gap
         let gap = match self.last_real_time_block()? {
             None => Some(BlockGap {
                 from_block: pp,
@@ -261,13 +276,16 @@ impl BlockProcessor {
     }
 
     fn last_real_time_block(&self) -> anyhow::Result<Option<[u8; 32]>> {
-        // todo fetch from metadata db
-        Ok(None)
+        self.metadata_partition.get_latest_block_cursor()
     }
 
     fn insert_gap(&self, from: [u8; 32], to: [u8; 32]) -> anyhow::Result<()> {
         self.blocks_gap_partition
             .add_gap(indexer_db::headers::block_gaps::BlockGap { from, to })
+    }
+
+    fn update_block(&self, wtx: &mut WriteTransaction, hash: [u8; 32]) {
+       self.metadata_partition.set_latest_block_cursor(wtx, hash)
     }
 }
 
