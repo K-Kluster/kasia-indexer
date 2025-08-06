@@ -7,7 +7,6 @@ edition = "2024"
 anyhow.workspace = true
 arc-swap.workspace = true
 bon.workspace = true
-bytemuck = { workspace = true, features = ["latest_stable_rust"]}
 fjall.workspace = true
 flume.workspace = true
 futures-util.workspace = true
@@ -30,3 +29,4 @@ workflow-rpc.workspace = true
 workflow-serializer.workspace = true
 
 indexer-db.workspace = true
+protocol.workspace = true

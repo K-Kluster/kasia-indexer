@@ -8,8 +8,10 @@ use indexer_db::headers::block_compact_headers::BlockCompactHeaderPartition;
 use indexer_db::headers::block_gaps::BlockGapsPartition;
 use indexer_db::headers::daa_index::DaaIndexPartition;
 use indexer_db::metadata::MetadataPartition;
+use kaspa_consensus_core::tx::Transaction;
 use kaspa_rpc_core::{RpcBlock, RpcHeader, RpcTransaction};
 pub use message::*;
+use protocol::operation::deserializer::parse_sealed_operation;
 use std::collections::HashMap;
 use tracing::{error, info, trace};
 
@@ -202,10 +204,19 @@ impl BlockProcessor {
         &self,
         _wtx: &mut WriteTransaction,
         _block_header: &RpcHeader,
-        _tx: &RpcTransaction,
+        tx: &RpcTransaction,
     ) -> anyhow::Result<()> {
-        todo!("Handle transaction");
-        // todo we mustn't overwrite already processed tx. use fetch_update
+        let tx_id = match &tx.verbose_data {
+            Some(data) => data.transaction_id,
+            None => Transaction::try_from(tx.clone())?.id(),
+        };
+        let Some(_op) = parse_sealed_operation(&tx.payload).inspect(|op| {
+            trace!(%tx_id, kind = op.op_type_name(), "Parsed sealed operation");
+        }) else {
+            return Ok(());
+        };
+
+        todo!("Handle op");
     }
 
     fn select_input(&self) -> anyhow::Result<NotificationOrGapResult> {
