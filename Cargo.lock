@@ -1598,6 +1598,9 @@ dependencies = [
  "anyhow",
  "arrayref",
  "fjall",
+ "kaspa-addresses",
+ "kaspa-consensus-core",
+ "kaspa-txscript",
  "tracing",
  "zerocopy",
 ]
