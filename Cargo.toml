@@ -3,6 +3,7 @@ members = [
     "indexer-lib",
     "protocol",
     "indexer",
+    "cli",
 ]
 resolver = "3"
 
@@ -42,6 +43,7 @@ workflow-serializer = "0.18.0"
 dotenv = "0.15.0"
 envy = "0.4"
 serde_with = "3.14.0"
+clap = "4.5.42"
 
 protocol = { path = "protocol" }
 indexer-lib = { path = "indexer-lib" }
