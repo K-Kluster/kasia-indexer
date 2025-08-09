@@ -7,7 +7,7 @@ use tracing::warn;
 pub const PROTOCOL_PREFIX: &str = "ciph_msg:";
 pub const VERSION_1_PART: &str = "1:";
 
-pub fn parse_sealed_operation(payload_bytes: &[u8]) -> Option<SealedOperation> {
+pub fn parse_sealed_operation(payload_bytes: &[u8]) -> Option<SealedOperation<'_>> {
     let payload_without_protocol = payload_bytes.strip_prefix(PROTOCOL_PREFIX.as_bytes())?;
     if payload_without_protocol.is_empty() {
         return None;
