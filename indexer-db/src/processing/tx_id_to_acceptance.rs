@@ -152,4 +152,21 @@ impl TxIDToAcceptancePartition {
 
         Ok(())
     }
+
+    pub fn acceptance_by_tx_id_rtx(
+        &self,
+        rtx: &ReadTransaction,
+        tx_id: &[u8; 32],
+    ) -> anyhow::Result<Option<SharedImmutable<AcceptanceValueResolved>>> {
+        let mut iter = rtx.prefix(&self.0, tx_id);
+        let kv = iter.next().transpose()?;
+        let r = match kv {
+            None => Ok(None),
+            Some((_k, v)) if v[0] == 1 => Ok(None),
+            Some((_k, v)) if v[0] == 0 => Ok(Some(SharedImmutable::new(v))),
+            Some(_) => bail!("Invalid value"),
+        };
+        assert!(iter.next().is_none()); // we should not have more than one entry
+        r
+    }
 }
