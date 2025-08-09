@@ -53,7 +53,7 @@ impl ContextualMessageBySenderPartition {
         version: u8,
         tx_id: [u8; 32],
         sealed_hex: &[u8],
-    ) -> Result<()> {
+    ) -> Result<ContextualMessageBySenderKey> {
         // todo no need to perform insertion if we already have entry with sender
         if alias.len() > 16 {
             bail!("Alias length cannot exceed 16 bytes, got {}", alias.len());
@@ -72,7 +72,7 @@ impl ContextualMessageBySenderPartition {
         };
 
         wtx.insert(&self.0, key.as_bytes(), sealed_hex);
-        Ok(())
+        Ok(key)
     }
 
     /// Get all contextual messages for a sender (prefix search)

@@ -62,6 +62,7 @@ pub struct Entry<'a> {
 pub enum Action {
     ReplaceByKeySender,
     UpdateValueSender,
+    InsertByKeySender,
 }
 
 pub struct InsertionEntry<'a> {
