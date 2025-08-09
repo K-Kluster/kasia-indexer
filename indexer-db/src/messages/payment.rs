@@ -2,7 +2,7 @@ use crate::{AddressPayload, SharedImmutable};
 use anyhow::bail;
 use fjall::{PartitionCreateOptions, ReadTransaction, WriteTransaction};
 use zerocopy::big_endian::U64;
-use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, TryFromBytes, Unaligned};
 
 #[repr(C)]
 #[derive(
@@ -87,9 +87,20 @@ impl PaymentByReceiverPartition {
         wtx: &mut WriteTransaction,
         key: &PaymentKeyByReceiver,
         sender: Option<AddressPayload>,
-    ) {
+    ) -> anyhow::Result<()> {
         let sender = sender.unwrap_or_default();
-        wtx.insert(&self.0, key.as_bytes(), sender.as_bytes());
+        wtx.update_fetch(&self.0, key.as_bytes(), |old| match old {
+            None => Some(sender.as_bytes().into()),
+            Some(old) => {
+                let old_sender = AddressPayload::try_ref_from_bytes(old.as_bytes()).unwrap();
+                if old_sender != &AddressPayload::default() {
+                    Some(old.clone())
+                } else {
+                    Some(sender.as_bytes().into())
+                }
+            }
+        })?;
+        Ok(())
     }
 
     pub fn get_by_receiver_from_block_time(
@@ -154,7 +165,7 @@ impl TxIdToPaymentPartition {
     pub fn insert_wtx(
         &self,
         wtx: &mut WriteTransaction,
-        tx_id: &[u8;32],
+        tx_id: &[u8; 32],
         amount: u64,
         sealed_hex: &[u8],
     ) -> anyhow::Result<()> {
@@ -167,7 +178,7 @@ impl TxIdToPaymentPartition {
         Ok(())
     }
 
-    pub fn get(&self, tx_id: &[u8;32]) -> anyhow::Result<Option<(u64, Vec<u8>)>> {
+    pub fn get(&self, tx_id: &[u8; 32]) -> anyhow::Result<Option<(u64, Vec<u8>)>> {
         if let Some(value_bytes) = self.0.get(tx_id)? {
             if value_bytes.len() >= 8 {
                 // Split at position 8: first 8 bytes = amount, rest = sealed_hex
@@ -198,7 +209,7 @@ impl TxIdToPaymentPartition {
         }
 
         if let Some(value_bytes) = rtx.get(&self.0, tx_id)? {
-            Ok(Some( SharedImmutable::new(value_bytes)))
+            Ok(Some(SharedImmutable::new(value_bytes)))
         } else {
             Ok(None)
         }

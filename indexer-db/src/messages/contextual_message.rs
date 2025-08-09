@@ -54,6 +54,7 @@ impl ContextualMessageBySenderPartition {
         tx_id: [u8; 32],
         sealed_hex: &[u8],
     ) -> Result<()> {
+        // todo no need to perform insertion if we already have entry with sender
         if alias.len() > 16 {
             bail!("Alias length cannot exceed 16 bytes, got {}", alias.len());
         }
