@@ -11,4 +11,5 @@ pub enum VccNotification {
     Disconnected,
     Shutdown,
     Notification(VirtualChainChangedNotification),
+    // todo add historical notification with channel to submit feedback when notificaiton is processed
 }

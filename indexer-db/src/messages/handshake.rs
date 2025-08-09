@@ -171,7 +171,9 @@ impl TxIdToHandshakePartition {
         &self,
         rtx: &ReadTransaction,
         tx_id: &[u8; 32],
-    ) -> anyhow::Result<Option<impl AsRef<[u8]>>> {
-        rtx.get(&self.0, tx_id).map_err(anyhow::Error::from)
+    ) -> anyhow::Result<Option<SharedImmutable<[u8]>>> {
+        rtx.get(&self.0, tx_id)
+            .map(|bts| bts.map(SharedImmutable::new))
+            .map_err(anyhow::Error::from)
     }
 }

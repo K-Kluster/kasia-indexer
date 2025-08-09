@@ -82,7 +82,7 @@ impl TryFrom<&Address> for AddressPayload {
 
 #[repr(transparent)]
 #[derive(Clone, PartialEq, Eq)]
-pub struct SharedImmutable<T> {
+pub struct SharedImmutable<T: ?Sized> {
     inner: UserKey,
     phantom: PhantomData<T>,
 }
@@ -95,7 +95,7 @@ where
         self.as_ref().fmt(f)
     }
 }
-impl<T> SharedImmutable<T> {
+impl<T: ?Sized> SharedImmutable<T> {
     pub(crate) fn new(inner: UserKey) -> Self {
         Self {
             inner,
