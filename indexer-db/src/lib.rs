@@ -13,6 +13,8 @@ pub mod headers;
 pub mod messages;
 pub mod metadata;
 
+pub mod processing;
+
 pub const EMPTY_VERSION: u8 = 0; // used when we don't know address at all
 
 #[repr(C)]
@@ -89,7 +91,7 @@ pub struct SharedImmutable<T: ?Sized> {
 
 impl<T> Debug for SharedImmutable<T>
 where
-    T: Debug + AsRef<T> + TryFromBytes + KnownLayout + Immutable,
+    T: Debug + AsRef<T> + FromBytes + KnownLayout + Immutable,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.as_ref().fmt(f)
@@ -104,19 +106,41 @@ impl<T: ?Sized> SharedImmutable<T> {
     }
 }
 
-impl<T: TryFromBytes + KnownLayout + Immutable> Deref for SharedImmutable<T> {
+impl<T: FromBytes + KnownLayout + Immutable> Deref for SharedImmutable<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        T::try_ref_from_bytes(self.inner.as_ref()).unwrap()
+        T::ref_from_bytes(self.inner.as_ref()).unwrap()
     }
 }
 
 impl<T> AsRef<T> for SharedImmutable<T>
 where
-    T: TryFromBytes + KnownLayout + Immutable,
+    T: FromBytes + KnownLayout + Immutable,
 {
     fn as_ref(&self) -> &T {
-        T::try_ref_from_bytes(self.inner.as_ref()).unwrap()
+        T::ref_from_bytes(self.inner.as_ref()).unwrap()
     }
+}
+
+#[repr(u8)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, TryFromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
+)]
+pub enum PartitionId {
+    Metadata = 1,
+    BlockCompactHeaders = 2,
+    BlockDaaIndex = 3,
+    BlockGaps = 4,
+    HandshakeByReceiver = 5,
+    HandshakeBySender = 6,
+    TxIdToHandshake = 7,
+    ContextualMessageBySender = 8,
+    PaymentByReceiver = 9,
+    PaymentBySender = 10,
+    TxIdToPayment = 11,
+    AcceptingBlockToTxIds = 12,
+    TxIdToAcceptance = 13,
+
+    PendingSenders = 14,
 }
