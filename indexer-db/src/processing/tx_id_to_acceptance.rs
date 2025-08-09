@@ -1,8 +1,7 @@
 use crate::{AddressPayload, PartitionId, SharedImmutable};
-use anyhow::bail;
 use fjall::{PartitionCreateOptions, ReadTransaction, WriteTransaction};
-use tracing::warn;
-use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, TryFromBytes, Unaligned};
+use std::ops::Deref;
+use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes, KnownLayout, TryFromBytes, Unaligned};
 
 #[derive(Clone)]
 pub struct TxIDToAcceptancePartition(fjall::TxPartition);
@@ -15,16 +14,42 @@ pub struct AcceptanceKey {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Immutable, IntoBytes, FromBytes, Unaligned, KnownLayout)]
-pub struct AcceptanceValueResolved {
-    zero_byte: u8,
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Immutable,
+    IntoBytes,
+    FromBytes,
+    Unaligned,
+    KnownLayout,
+    Eq,
+    PartialEq,
+)]
+pub struct AcceptanceValueHeader {
     pub accepting_block_hash: [u8; 32],
     pub accepting_daa: zerocopy::U64<zerocopy::LE>,
 }
 
 #[repr(C)]
+#[derive(Debug, Immutable, Unaligned, KnownLayout, FromBytes)]
+pub struct AcceptanceValueHeaderWithSuffix {
+    pub header: AcceptanceValueHeader,
+    pub suffix: [u8],
+}
+
+impl Deref for AcceptanceValueHeaderWithSuffix {
+    type Target = AcceptanceValueHeader;
+
+    fn deref(&self) -> &Self::Target {
+        &self.header
+    }
+}
+
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct UnresolvedEntry<'a> {
+pub struct Entry<'a> {
     pub partition_id: PartitionId,
     pub action: Action,
     pub key: &'a [u8],
@@ -63,8 +88,8 @@ impl TxIDToAcceptancePartition {
             .iter()
             .map(|entry| (entry.partition_key)().len() + 2)
             .sum();
-        let mut v = Vec::with_capacity(1 + value_size);
-        v.push(1);
+        let mut v = Vec::with_capacity(size_of::<AcceptanceValueHeader>() + value_size);
+        v.extend_from_slice(AcceptanceValueHeader::new_zeroed().as_bytes());
         entries.iter().for_each(|entry| {
             v.extend_from_slice(entry.partition_id.as_bytes());
             v.extend_from_slice(entry.action.as_bytes());
@@ -100,56 +125,44 @@ impl TxIDToAcceptancePartition {
         Ok(r.map(|(k, _)| SharedImmutable::new(k)))
     }
 
-    pub fn resolve_wtx(
-        &mut self,
+    pub fn update_acceptance_wtx(
+        &self,
         wtx: &mut WriteTransaction,
         k: &AcceptanceKey,
         accepting_block_hash: [u8; 32],
         acceptance_daa: u64,
         key_len_fn: impl Fn(PartitionId) -> usize,
-        resolve_fn: impl for<'a, 'b> Fn(
-            &'a mut WriteTransaction,
-            UnresolvedEntry<'b>,
-        ) -> anyhow::Result<()>,
+        entry_cb_fn: impl for<'a, 'b> Fn(&'a mut WriteTransaction, Entry<'b>) -> anyhow::Result<()>,
     ) -> anyhow::Result<()> {
-        let mut value = None;
-        wtx.fetch_update(&self.0, k.as_bytes(), |old_value| {
-            value = old_value.cloned();
-            Some(
-                AcceptanceValueResolved {
-                    zero_byte: 0,
-                    accepting_block_hash,
-                    accepting_daa: acceptance_daa.into(),
-                }
-                .as_bytes()
-                .into(),
-            )
+        let updated_value = wtx.update_fetch(&self.0, k.as_bytes(), |old_value| {
+            let old_value = old_value?;
+            let mut v = Vec::with_capacity(old_value.len());
+            let h = AcceptanceValueHeader {
+                accepting_block_hash,
+                accepting_daa: acceptance_daa.into(),
+            };
+            v.extend_from_slice(h.as_bytes());
+            v.extend_from_slice(old_value[size_of::<AcceptanceValueHeader>()..].as_ref());
+            Some(v.into())
         })?;
-        let value = value.unwrap();
-        let value = value.as_bytes();
-        if value.first() == Some(&0u8) {
-            warn!("Value already resolved: tx_id={:?}", k.tx_id);
+        let Some(updated_value) = updated_value else {
             return Ok(());
-        }
-        if value.first() != Some(&1u8) {
-            bail!("Invalid value: tx_id={:?}, expected 0 or 1", k.tx_id);
-        }
-        let mut entries = &value[1..];
+        };
+        let mut entries = &updated_value[size_of::<AcceptanceValueHeader>()..];
         while !entries.is_empty() {
             let partition_id = PartitionId::try_read_from_bytes(&entries[..1])
                 .map_err(|_| anyhow::anyhow!("Invalid partition id: {}", entries[0]))?;
             let key_len = key_len_fn(partition_id);
             let action = Action::try_read_from_bytes(&entries[1..2])
                 .map_err(|_| anyhow::anyhow!("Invalid action: {}", entries[1]))?;
-            let entry = UnresolvedEntry {
+            let entry = Entry {
                 partition_id,
                 action,
                 key: &entries[2..2 + key_len],
             };
-            resolve_fn(wtx, entry)?;
+            entry_cb_fn(wtx, entry)?;
             entries = &entries[2 + key_len..];
         }
-
         Ok(())
     }
 
@@ -157,14 +170,19 @@ impl TxIDToAcceptancePartition {
         &self,
         rtx: &ReadTransaction,
         tx_id: &[u8; 32],
-    ) -> anyhow::Result<Option<SharedImmutable<AcceptanceValueResolved>>> {
+    ) -> anyhow::Result<Option<SharedImmutable<AcceptanceValueHeaderWithSuffix>>> {
         let mut iter = rtx.prefix(&self.0, tx_id);
         let kv = iter.next().transpose()?;
         let r = match kv {
             None => Ok(None),
-            Some((_k, v)) if v[0] == 1 => Ok(None),
-            Some((_k, v)) if v[0] == 0 => Ok(Some(SharedImmutable::new(v))),
-            Some(_) => bail!("Invalid value"),
+            Some((_k, v)) => {
+                let r = SharedImmutable::<AcceptanceValueHeaderWithSuffix>::new(v);
+                if r.header == AcceptanceValueHeader::new_zeroed() {
+                    Ok(None)
+                } else {
+                    Ok(Some(r))
+                }
+            }
         };
         assert!(iter.next().is_none()); // we should not have more than one entry
         r

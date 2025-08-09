@@ -106,7 +106,10 @@ impl<T: ?Sized> SharedImmutable<T> {
     }
 }
 
-impl<T: FromBytes + KnownLayout + Immutable> Deref for SharedImmutable<T> {
+impl<T> Deref for SharedImmutable<T>
+where
+    T: FromBytes + KnownLayout + Immutable + ?Sized,
+{
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -116,7 +119,7 @@ impl<T: FromBytes + KnownLayout + Immutable> Deref for SharedImmutable<T> {
 
 impl<T> AsRef<T> for SharedImmutable<T>
 where
-    T: FromBytes + KnownLayout + Immutable,
+    T: FromBytes + KnownLayout + Immutable + ?Sized,
 {
     fn as_ref(&self) -> &T {
         T::ref_from_bytes(self.inner.as_ref()).unwrap()
