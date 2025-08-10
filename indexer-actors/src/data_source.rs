@@ -1,5 +1,5 @@
 use crate::block_processor::BlockNotification;
-use crate::virtual_chain_processor::VccNotification;
+use crate::virtual_chain_processor::RealTimeVccNotification;
 use anyhow::Context;
 use futures_util::future::FutureExt;
 use kaspa_consensus_core::tx::TransactionId;
@@ -11,7 +11,6 @@ use kaspa_rpc_core::{
     BlockAddedNotification, GetBlocksRequest, GetBlocksResponse, GetUtxoReturnAddressRequest,
     GetUtxoReturnAddressResponse, GetVirtualChainFromBlockRequest,
     GetVirtualChainFromBlockResponse, Notification, RpcAddress, RpcBlock, RpcHash,
-    VirtualChainChangedNotification,
 };
 use kaspa_wrpc_client::KaspaRpcClient;
 use kaspa_wrpc_client::client::ConnectOptions;
@@ -34,7 +33,7 @@ pub struct DataSource {
     /// Channel to send processed blocks to handler
     block_sender: flume::Sender<BlockNotification>,
     block_sender_closed: bool,
-    vcc_sender: flume::Sender<VccNotification>,
+    vcc_sender: flume::Sender<RealTimeVccNotification>,
     vcc_sender_closed: bool,
     shutting_down: bool,
     // vcc_sender
@@ -62,7 +61,7 @@ impl DataSource {
                         .inspect(|_| info!("Shutdown signal received, stopping subscriber task"))
                         .inspect_err(|e| warn!("Shutdown receiver error: {}", e))?;
                     self.handle_shutdown().await?;
-                    return Ok(())
+                    // no need to return, we are waiting for command to mark other processor closed
                 }
                 msg = rpc_ctl_channel.receiver.recv().fuse() => {
                     // this will never occur if the RpcClient is owned and properly managed. This can
@@ -124,7 +123,7 @@ impl DataSource {
             },
             async {
                 self.vcc_sender
-                    .send_async(VccNotification::Connected {
+                    .send_async(RealTimeVccNotification::Connected {
                         sink: info.sink.as_bytes(),
                         sink_blue_work,
                         pp: info.pruning_point_hash.as_bytes(),
@@ -224,7 +223,7 @@ impl DataSource {
             },
             async {
                 self.vcc_sender
-                    .send_async(VccNotification::Disconnected)
+                    .send_async(RealTimeVccNotification::Disconnected)
                     .await
                     .context("vcc handler disconnect send failed")
             },
@@ -260,7 +259,7 @@ impl DataSource {
                     return Ok(());
                 }
                 self.vcc_sender
-                    .send_async(VccNotification::Notification(vcc))
+                    .send_async(RealTimeVccNotification::Notification(vcc))
                     .await
                     .context("vcc send failed")?;
             }
@@ -292,7 +291,7 @@ impl DataSource {
             },
             async {
                 self.vcc_sender
-                    .send_async(VccNotification::Shutdown)
+                    .send_async(RealTimeVccNotification::Shutdown)
                     .await
                     .context("vcc handler `Shutdown` send failed")
             },
@@ -442,19 +441,8 @@ impl DataSource {
                         {
                             Ok(res) => {
                                 let res: Serializable<GetVirtualChainFromBlockResponse> = res;
-                                let vcc = VirtualChainChangedNotification {
-                                    removed_chain_block_hashes: Arc::new(
-                                        res.0.removed_chain_block_hashes,
-                                    ),
-                                    added_chain_block_hashes: Arc::new(
-                                        res.0.added_chain_block_hashes,
-                                    ),
-                                    accepted_transaction_ids: Arc::new(
-                                        res.0.accepted_transaction_ids,
-                                    ),
-                                };
                                 _ = response_channel
-                                    .send(Ok(vcc))
+                                    .send(Ok(res.0))
                                     .inspect_err(|_err| error!("sending vcc result err"));
                             }
                             Err(workflow_rpc::client::error::Error::Disconnect) => {
@@ -496,7 +484,7 @@ pub enum Request {
     RequestVirtualChain {
         vc_from: [u8; 32],
         response_channel:
-            tokio::sync::oneshot::Sender<Result<VirtualChainChangedNotification, RequestError>>,
+            tokio::sync::oneshot::Sender<Result<GetVirtualChainFromBlockResponse, RequestError>>,
     },
     RequestSender {
         daa_score: u64,

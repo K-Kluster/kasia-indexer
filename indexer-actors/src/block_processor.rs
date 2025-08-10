@@ -33,11 +33,13 @@ use protocol::operation::{
 use std::collections::HashMap;
 use tracing::{debug, error, info, trace};
 
+type DaaScore = u64;
+
 pub struct BlockProcessor {
     notification_rx: flume::Receiver<BlockNotification>,
     gap_result_rx: flume::Receiver<GapFillingProgress>,
     gap_result_tx: flume::Sender<GapFillingProgress>,
-    processed_block_tx: flume::Sender<[u8; 32]>,
+    processed_block_tx: flume::Sender<([u8; 32], DaaScore)>,
     command_tx: workflow_core::channel::Sender<Command>,
     tx_keyspace: TxKeyspace,
     blocks_gap_partition: BlockGapsPartition,
@@ -137,10 +139,11 @@ impl BlockProcessor {
                     let mut wtx = self.tx_keyspace.write_tx()?;
                     self.handle_block(&mut wtx, &block)?;
                     let hash = block.header.hash.as_bytes();
+                    let daa_score = block.header.daa_score;
                     last_processed_block = Some(hash);
                     self.update_block(&mut wtx, hash);
                     wtx.commit()??;
-                    self.processed_block_tx.send(hash)?;
+                    self.processed_block_tx.send((hash, daa_score))?;
                 }
                 NotificationOrGapResult::GapFilling(GapFillingProgress::Interrupted { to }) => {
                     gaps_fillers.remove(&to);
@@ -163,7 +166,8 @@ impl BlockProcessor {
                             },
                         );
                         wtx.commit()??;
-                        self.processed_block_tx.send(block.header.hash.as_bytes())?;
+                        self.processed_block_tx
+                            .send((block.header.hash.as_bytes(), block.header.daa_score))?;
                         Ok(())
                     })?;
                 }
@@ -185,13 +189,15 @@ impl BlockProcessor {
                                     },
                                 );
                                 wtx.commit()??;
-                                self.processed_block_tx.send(block.header.hash.as_bytes())?;
+                                self.processed_block_tx
+                                    .send((block.header.hash.as_bytes(), block.header.daa_score))?;
                             } else {
                                 let mut wtx = self.tx_keyspace.write_tx()?;
                                 self.handle_block(&mut wtx, block)?;
                                 self.blocks_gap_partition.remove_gap_wtx(&mut wtx, &to);
                                 wtx.commit()??;
-                                self.processed_block_tx.send(block.header.hash.as_bytes())?;
+                                self.processed_block_tx
+                                    .send((block.header.hash.as_bytes(), block.header.daa_score))?;
                             }
                             Ok(())
                         },
@@ -201,6 +207,7 @@ impl BlockProcessor {
                 }
             }
             if is_shutdown && gaps_filling_in_progress == 0 {
+                info!("Block worker stopped");
                 return Ok(());
             }
         }
@@ -454,6 +461,15 @@ impl BlockProcessor {
         self.payment_by_receiver_partition
             .insert_wtx(wtx, &pm_key, None)?;
         Ok(pm_key)
+    }
+}
+
+impl Drop for BlockProcessor {
+    fn drop(&mut self) {
+        _ = self
+            .command_tx
+            .send_blocking(Command::MarkBlockSenderClosed)
+            .inspect_err(|_| error!("Error sending command to mark block sender closed"));
     }
 }
 
