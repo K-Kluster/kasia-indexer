@@ -22,8 +22,9 @@ pub struct ContextualMessageBySenderKey {
     pub alias: [u8; 16],        // alias for prefix search, zero-padded
     pub block_time: U64,        // u64 BE for chronological ordering
     pub block_hash: [u8; 32],   // block hash for uniqueness
-    pub version: u8,            // message version
-    pub tx_id: [u8; 32],        // transaction id
+    pub receiver: AddressPayload,
+    pub version: u8,     // message version
+    pub tx_id: [u8; 32], // transaction id
 }
 
 impl ContextualMessageBySenderPartition {
@@ -50,6 +51,7 @@ impl ContextualMessageBySenderPartition {
         alias: &[u8],
         block_time: u64,
         block_hash: [u8; 32],
+        receiver: AddressPayload,
         version: u8,
         tx_id: [u8; 32],
         sealed_hex: &[u8],
@@ -67,6 +69,7 @@ impl ContextualMessageBySenderPartition {
             alias: alias_bytes,
             block_time: block_time.into(),
             block_hash,
+            receiver,
             version,
             tx_id,
         };

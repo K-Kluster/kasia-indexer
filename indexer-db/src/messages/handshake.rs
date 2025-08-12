@@ -41,13 +41,8 @@ impl HandshakeBySenderPartition {
             .map(|r| r.map_err(anyhow::Error::from).map(SharedImmutable::new))
     }
 
-    pub fn insert_wtx(
-        &self,
-        wtx: &mut WriteTransaction,
-        key: &HandshakeKeyBySender,
-    ) -> anyhow::Result<()> {
-        wtx.insert(&self.0, key.as_bytes(), []);
-        Ok(())
+    pub fn insert_wtx(&self, wtx: &mut WriteTransaction, key: &HandshakeKeyBySender) {
+        wtx.insert(&self.0, key.as_bytes(), [])
     }
 
     pub fn iter_by_sender_from_block_time_rtx(

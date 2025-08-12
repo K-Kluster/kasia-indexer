@@ -12,11 +12,12 @@ use indexer_db::messages::contextual_message::{
     ContextualMessageBySenderKey, ContextualMessageBySenderPartition,
 };
 use indexer_db::messages::handshake::{
-    HandshakeByReceiverPartition, HandshakeKeyByReceiver, HandshakeKeyBySender,
-    TxIdToHandshakePartition,
+    HandshakeByReceiverPartition, HandshakeBySenderPartition, HandshakeKeyByReceiver,
+    HandshakeKeyBySender, TxIdToHandshakePartition,
 };
 use indexer_db::messages::payment::{
-    PaymentByReceiverPartition, PaymentKeyByReceiver, PaymentKeyBySender, TxIdToPaymentPartition,
+    PaymentByReceiverPartition, PaymentBySenderPartition, PaymentKeyByReceiver, PaymentKeyBySender,
+    TxIdToPaymentPartition,
 };
 use indexer_db::metadata::MetadataPartition;
 use indexer_db::processing::tx_id_to_acceptance::{
@@ -47,9 +48,11 @@ pub struct BlockProcessor {
     block_compact_header_partition: BlockCompactHeaderPartition,
     daa_index_partition: DaaIndexPartition,
     handshake_by_receiver_partition: HandshakeByReceiverPartition,
+    handshake_by_sender_partition: HandshakeBySenderPartition,
     tx_id_to_handshake_partition: TxIdToHandshakePartition,
     contextual_message_by_sender_partition: ContextualMessageBySenderPartition,
     payment_by_receiver_partition: PaymentByReceiverPartition,
+    payment_by_sender_partition: PaymentBySenderPartition,
     tx_id_to_payment_partition: TxIdToPaymentPartition,
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
 }
@@ -250,14 +253,23 @@ impl BlockProcessor {
             .map(|o| AddressPayload::try_from(&o.script_public_key).map(|addr| (o.value, addr)))
             .transpose()?
             .unwrap_or_default();
-        debug!(receiver=?receiver, "Inserting handshake by receiver");
-
-        match op {
-            SealedOperation::SealedMessageOrSealedHandshakeVNone(hk) => {
+        debug!(receiver=?receiver, "Handling transaction");
+        let sender_outpoint = tx.inputs.first().unwrap().previous_outpoint;
+        let sender = if sender_outpoint.index == 0
+            && let Some(acceptance_key) = self
+                .tx_id_to_acceptance_partition
+                .key_by_tx_id(sender_outpoint.transaction_id.as_ref())?
+        {
+            Some(acceptance_key.receiver)
+        } else {
+            None
+        };
+        match (op, sender) {
+            (SealedOperation::SealedMessageOrSealedHandshakeVNone(hk), None) => {
                 let by_receiver_key =
-                    self.handle_handshake(wtx, block_header, tx_id, hk, receiver)?;
+                    self.handle_handshake(wtx, block_header, tx_id, hk, receiver, None)?;
                 let by_sender_key = HandshakeKeyBySender {
-                    sender: Default::default(),
+                    sender: sender.unwrap_or_default(),
                     block_time: by_receiver_key.block_time,
                     block_hash: by_receiver_key.block_hash,
                     receiver,
@@ -284,8 +296,9 @@ impl BlockProcessor {
                     ],
                 )?;
             }
-            SealedOperation::ContextualMessageV1(cm) => {
-                let key = self.handle_contextual_message(wtx, block_header, tx_id, cm, receiver)?;
+            (SealedOperation::ContextualMessageV1(cm), None) => {
+                let key =
+                    self.handle_contextual_message(wtx, sender, block_header, tx_id, cm, receiver)?;
                 self.tx_id_to_acceptance_partition.insert_wtx(
                     wtx,
                     &AcceptanceKey {
@@ -299,11 +312,11 @@ impl BlockProcessor {
                     }],
                 )?;
             }
-            SealedOperation::PaymentV1(pm) => {
+            (SealedOperation::PaymentV1(pm), None) => {
                 let by_receiver_key =
-                    self.handle_payment(wtx, block_header, tx_id, receiver, amount, pm)?;
+                    self.handle_payment(wtx, block_header, tx_id, receiver, amount, pm, None)?;
                 let by_sender_key = PaymentKeyBySender {
-                    sender: Default::default(),
+                    sender: sender.unwrap_or_default(),
                     block_time: by_receiver_key.block_time,
                     block_hash: by_receiver_key.block_hash,
                     receiver,
@@ -330,7 +343,48 @@ impl BlockProcessor {
                     ],
                 )?;
             }
-        };
+            (SealedOperation::SealedMessageOrSealedHandshakeVNone(hk), Some(sender)) => {
+                self.handle_handshake(wtx, block_header, tx_id, hk, receiver, Some(sender))?;
+                self.tx_id_to_acceptance_partition.insert_wtx(
+                    wtx,
+                    &AcceptanceKey {
+                        tx_id: tx_id.as_bytes(),
+                        receiver,
+                    },
+                    &[],
+                )?;
+            }
+            (SealedOperation::ContextualMessageV1(cm), Some(sender)) => {
+                self.handle_contextual_message(
+                    wtx,
+                    Some(sender),
+                    block_header,
+                    tx_id,
+                    cm,
+                    receiver,
+                )?;
+                self.tx_id_to_acceptance_partition.insert_wtx(
+                    wtx,
+                    &AcceptanceKey {
+                        tx_id: tx_id.as_bytes(),
+                        receiver,
+                    },
+                    &[],
+                )?;
+            }
+            (SealedOperation::PaymentV1(pm), Some(sender)) => {
+                self.handle_payment(wtx, block_header, tx_id, receiver, amount, pm, Some(sender))?;
+                self.tx_id_to_acceptance_partition.insert_wtx(
+                    wtx,
+                    &AcceptanceKey {
+                        tx_id: tx_id.as_bytes(),
+                        receiver,
+                    },
+                    &[],
+                )?;
+            }
+        }
+
         Ok(())
     }
 
@@ -399,6 +453,7 @@ impl BlockProcessor {
         tx_id: RpcTransactionId,
         op: SealedMessageOrSealedHandshakeVNone,
         receiver: AddressPayload,
+        sender: Option<AddressPayload>,
     ) -> anyhow::Result<HandshakeKeyByReceiver> {
         self.tx_id_to_handshake_partition
             .insert_wtx(wtx, tx_id.as_ref(), op.sealed_hex);
@@ -410,24 +465,39 @@ impl BlockProcessor {
             tx_id: tx_id.as_bytes(),
         };
         self.handshake_by_receiver_partition
-            .insert_wtx(wtx, &hs_key, None)?;
+            .insert_wtx(wtx, &hs_key, sender)?;
+
+        if let Some(sender) = sender {
+            let by_sender_key = HandshakeKeyBySender {
+                sender,
+                block_time: hs_key.block_time,
+                block_hash: hs_key.block_hash,
+                receiver,
+                version: hs_key.version,
+                tx_id: hs_key.tx_id,
+            };
+            self.handshake_by_sender_partition
+                .insert_wtx(wtx, &by_sender_key);
+        }
         Ok(hs_key)
     }
 
     fn handle_contextual_message(
         &self,
         wtx: &mut WriteTransaction,
+        sender: Option<AddressPayload>,
         header: &RpcHeader,
         tx_id: RpcTransactionId,
         cm: SealedContextualMessageV1,
-        _receiver: AddressPayload,
+        receiver: AddressPayload,
     ) -> anyhow::Result<ContextualMessageBySenderKey> {
         self.contextual_message_by_sender_partition.insert(
             wtx,
-            Default::default(),
+            sender.unwrap_or_default(),
             cm.alias,
             header.timestamp,
             header.hash.as_bytes(),
+            receiver,
             1,
             tx_id.as_bytes(),
             cm.sealed_hex,
@@ -442,6 +512,7 @@ impl BlockProcessor {
         receiver: AddressPayload,
         amount: u64,
         pm: SealedPaymentV1,
+        sender: Option<AddressPayload>,
     ) -> anyhow::Result<PaymentKeyByReceiver> {
         debug!(%tx_id, "Handling PaymentV1");
         self.tx_id_to_payment_partition
@@ -454,7 +525,19 @@ impl BlockProcessor {
             tx_id: tx_id.as_bytes(),
         };
         self.payment_by_receiver_partition
-            .insert_wtx(wtx, &pm_key, None)?;
+            .insert_wtx(wtx, &pm_key, sender)?;
+        if let Some(sender) = sender {
+            let by_sender_key = PaymentKeyBySender {
+                sender,
+                block_time: pm_key.block_time,
+                block_hash: pm_key.block_hash,
+                receiver,
+                version: pm_key.version,
+                tx_id: pm_key.tx_id,
+            };
+            self.payment_by_sender_partition
+                .insert_wtx(wtx, &by_sender_key);
+        }
         Ok(pm_key)
     }
 }
