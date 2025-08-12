@@ -2,25 +2,29 @@ pub mod message;
 
 use crate::data_source::Command;
 use crate::virtual_chain_syncer::{NotificationAck, VirtualChainSyncer};
+use fjall::{TxKeyspace, WriteTransaction};
 use indexer_db::metadata::{Cursor as DbCursor, MetadataPartition};
 use kaspa_consensus_core::BlueWorkType;
-use kaspa_rpc_core::{GetVirtualChainFromBlockResponse, VirtualChainChangedNotification};
+use kaspa_rpc_core::{
+    GetVirtualChainFromBlockResponse, RpcAcceptedTransactionIds, RpcHash,
+    VirtualChainChangedNotification,
+};
 pub use message::*;
 use std::collections::VecDeque;
-use tokio::runtime::Runtime;
 use tracing::error;
 use workflow_core::channel::Sender;
 
 pub struct VirtualProcessor {
     synced_capacity: usize,
     unsynced_capacity: usize,
-    processed_block_tx: flume::Receiver<([u8; 32], DaaScore)>,
+    processed_block_tx: flume::Receiver<CompactHeader>,
     realtime_vcc_tx: flume::Receiver<RealTimeVccNotification>,
 
     syncer_rx: flume::Receiver<SyncVccNotification>,
     syncer_tx: flume::Sender<SyncVccNotification>,
     command_tx: workflow_core::channel::Sender<Command>,
 
+    tx_keyspace: TxKeyspace,
     metadata_partition: MetadataPartition,
     runtime: tokio::runtime::Handle,
 }
@@ -41,7 +45,7 @@ impl State {
 
 struct StateShared {
     shutting_down: bool,
-    processed_blocks: ringmap::RingMap<[u8; 32], DaaScore>, // when we get synced keep only blocks in ~10 mins interval. realloc it
+    processed_blocks: ringmap::RingMap<[u8; 32], (DaaScore, BlueWorkType)>, // when we get synced keep only blocks in ~10 mins interval. realloc it
     realtime_queue_vcc: VecDeque<VirtualChainChangedNotification>, // perform realloc when sync is finished if queue is too big
 }
 
@@ -85,7 +89,7 @@ impl VirtualProcessor {
                     self.handle_connect(state, sink, sink_blue_work, pp)?;
                 }
                 ProcessedBlockOrVccOrSyncer::Vcc(RealTimeVccNotification::Disconnected) => {
-                    // do nothing
+                    state.shared_state.realtime_queue_vcc.clear();
                 }
                 ProcessedBlockOrVccOrSyncer::Syncer(SyncVccNotification::VirtualChain {
                     syncer_id,
@@ -112,9 +116,9 @@ impl VirtualProcessor {
                 // ProcessedBlockOrVccOrSyncer::Block { hash, daa_score } => {
                 //     self.handle_processed_block(hash, daa_score, synced);
                 // }
-                // ProcessedBlockOrVccOrSyncer::Vcc(RealTimeVccNotification::Notification(vcc)) => {
-                //     self.handle_realtime_vcc(vcc, synced)
-                // }
+                ProcessedBlockOrVccOrSyncer::Vcc(RealTimeVccNotification::Notification(vcc)) => {
+                    self.handle_realtime_vcc(state, vcc)?;
+                }
                 _ => {
                     todo!()
                 }
@@ -252,63 +256,80 @@ impl VirtualProcessor {
             syncer.send_blocking(NotificationAck::Continue)?;
             return Ok(());
         }
-        if vcc.added_chain_block_hashes.iter().all(|hash| {
-            state
+        if vcc.added_chain_block_hashes.iter().any(|hash| {
+            !state
                 .shared_state
                 .processed_blocks
                 .contains_key(&hash.as_bytes())
         }) {
-            let last = vcc.added_chain_block_hashes.last().unwrap().as_bytes();
-            if &last == target_block {
-                // todo shrink queues
-                syncer.send_blocking(NotificationAck::Stop)?;
-                state.sync_state = SyncState::Synced {
-                    last_syncer_id: *syncer_id,
-                    last_accepting_block: *last_accepting_block,
-                };
-                todo!("handle sync vcc");
-                return Ok(());
-            };
-            let blue_work = self.get_blue_work(&last)?.unwrap();
-            if blue_work > target_blue_work.to_be_bytes() {
-                // todo shrink queues
-                syncer.send_blocking(NotificationAck::Stop)?;
-                state.sync_state = SyncState::Synced {
-                    last_syncer_id: *syncer_id,
-                    last_accepting_block: *last_accepting_block,
-                };
-                todo!("handle sync vcc");
-                return Ok(());
-            }
-            todo!("handle sync vcc");
-            syncer.send_blocking(NotificationAck::Continue)?;
-        } else {
             assert!(sync_queue.is_none());
             sync_queue.replace(vcc);
+            return Ok(());
         }
+
+        let last = vcc.added_chain_block_hashes.last().unwrap().as_bytes();
+        if &last == target_block
+            || state.shared_state.processed_blocks.get(&last).unwrap().1 > *target_blue_work
+        {
+            // todo shrink queues
+            syncer.send_blocking(NotificationAck::Stop)?;
+            let last_accepting_block = self.handle_vc_resp(&state.shared_state, vcc)?;
+            state.sync_state = SyncState::Synced {
+                last_syncer_id: *syncer_id,
+                last_accepting_block,
+            };
+        } else {
+            let last = self.handle_vc_resp(&state.shared_state, vcc)?;
+            *last_accepting_block = last;
+            syncer.send_blocking(NotificationAck::Continue)?;
+        }
+
         Ok(())
     }
 
-    // fn handle_realtime_vcc(
-    //     &mut self,
-    //     VirtualChainChangedNotification {
-    //         removed_chain_block_hashes,
-    //         added_chain_block_hashes,
-    //         accepted_transaction_ids,
-    //     }: VirtualChainChangedNotification,
-    //     synced: bool,
-    // ) -> anyhow::Result<()> {
-    //     todo!()
-    // }
+    fn handle_realtime_vcc(
+        &self,
+        state: &mut State,
+        vcc: VirtualChainChangedNotification,
+    ) -> anyhow::Result<()> {
+        match &mut state.sync_state {
+            SyncState::Initial => unreachable!(),
+            SyncState::Synced {
+                last_accepting_block: (last_accepting_block, last_accepting_blue_work),
+                ..
+            } => {
+                if vcc.removed_chain_block_hashes.is_empty()
+                    && vcc.added_chain_block_hashes.is_empty()
+                {
+                    return Ok(());
+                }
+                if !state.shared_state.realtime_queue_vcc.is_empty()
+                    || vcc.added_chain_block_hashes.iter().any(|hash| {
+                        !state
+                            .shared_state
+                            .processed_blocks
+                            .contains_key(&hash.as_bytes())
+                    })
+                {
+                    state.shared_state.realtime_queue_vcc.push_back(vcc);
+                } else {
+                    let (last_block, last_blue_work) =
+                        self.handle_vcc(&state.shared_state, &vcc)?;
+                    *last_accepting_block = last_block;
+                    *last_accepting_blue_work = last_blue_work;
+                }
+            }
+            SyncState::Syncing { .. } => {
+                state.shared_state.realtime_queue_vcc.push_back(vcc);
+            }
+        }
+        Ok(())
+    }
 
     fn last_accepting_block_db(&self) -> anyhow::Result<Option<Cursor>> {
         self.metadata_partition
             .get_latest_accepting_block_cursor()
             .map(|opt| opt.map(Into::into))
-    }
-
-    fn get_blue_work(&self, _block: &[u8; 32]) -> anyhow::Result<Option<[u8; 24]>> {
-        todo!()
     }
 
     fn handle_syncer_stopped(&self, state: &mut State, syncer_id: u64) -> anyhow::Result<Continue> {
@@ -349,6 +370,75 @@ impl VirtualProcessor {
         });
         ack_tx
     }
+
+    fn handle_vcc(
+        &self,
+        state: &StateShared,
+        vcc: &VirtualChainChangedNotification,
+    ) -> anyhow::Result<([u8; 32], BlueWorkType)> {
+        let mut wtx = self.tx_keyspace.write_tx()?;
+        for block in vcc.removed_chain_block_hashes.as_slice() {
+            self.handle_vcc_removal(&mut wtx, block)?;
+        }
+        for block in vcc.accepted_transaction_ids.as_slice() {
+            self.handle_vcc_addition(&mut wtx, block)?;
+        }
+        let last_block = vcc.added_chain_block_hashes.last().unwrap().as_bytes();
+        let (last_daa, last_blue_work) = state.processed_blocks.get(&last_block).unwrap();
+        self.metadata_partition.set_latest_accepting_block_cursor(
+            &mut wtx,
+            Cursor {
+                blue_work: *last_blue_work,
+                block_hash: last_block,
+                daa_score: *last_daa,
+            }
+            .into(),
+        )?;
+        wtx.commit()??;
+        Ok((last_block, *last_blue_work))
+    }
+    fn handle_vc_resp(
+        &self,
+        state: &StateShared,
+        vcc: GetVirtualChainFromBlockResponse,
+    ) -> anyhow::Result<([u8; 32], BlueWorkType)> {
+        let mut wtx = self.tx_keyspace.write_tx()?;
+        for block in vcc.removed_chain_block_hashes.as_slice() {
+            self.handle_vcc_removal(&mut wtx, block)?;
+        }
+        for block in vcc.accepted_transaction_ids.as_slice() {
+            self.handle_vcc_addition(&mut wtx, block)?;
+        }
+        let last_block = vcc.added_chain_block_hashes.last().unwrap().as_bytes();
+        let (last_daa, last_blue_work) = state.processed_blocks.get(&last_block).unwrap();
+        self.metadata_partition.set_latest_accepting_block_cursor(
+            &mut wtx,
+            Cursor {
+                blue_work: *last_blue_work,
+                block_hash: last_block,
+                daa_score: *last_daa,
+            }
+            .into(),
+        )?;
+        wtx.commit()??;
+        Ok((last_block, *last_blue_work))
+    }
+
+    fn handle_vcc_removal(
+        &self,
+        _wtx: &mut WriteTransaction,
+        _block: &RpcHash,
+    ) -> anyhow::Result<()> {
+        todo!()
+    }
+
+    fn handle_vcc_addition(
+        &self,
+        _wtx: &mut WriteTransaction,
+        _block: &RpcAcceptedTransactionIds,
+    ) -> anyhow::Result<()> {
+        todo!()
+    }
 }
 
 impl Drop for VirtualProcessor {
@@ -361,14 +451,14 @@ impl Drop for VirtualProcessor {
 }
 
 enum ProcessedBlockOrVccOrSyncer {
-    Block { hash: [u8; 32], daa_score: u64 },
+    Block(CompactHeader),
     Vcc(RealTimeVccNotification),
     Syncer(SyncVccNotification),
 }
 
-impl From<([u8; 32], u64)> for ProcessedBlockOrVccOrSyncer {
-    fn from((hash, daa_score): ([u8; 32], u64)) -> Self {
-        Self::Block { hash, daa_score }
+impl From<CompactHeader> for ProcessedBlockOrVccOrSyncer {
+    fn from(value: CompactHeader) -> Self {
+        Self::Block(value)
     }
 }
 
@@ -395,6 +485,16 @@ impl From<DbCursor> for Cursor {
     fn from(value: DbCursor) -> Self {
         Cursor {
             blue_work: BlueWorkType::from_be_bytes(value.blue_work),
+            block_hash: value.block_hash,
+            daa_score: value.daa_score.into(),
+        }
+    }
+}
+
+impl From<Cursor> for DbCursor {
+    fn from(value: Cursor) -> Self {
+        DbCursor {
+            blue_work: value.blue_work.to_be_bytes(),
             block_hash: value.block_hash,
             daa_score: value.daa_score.into(),
         }

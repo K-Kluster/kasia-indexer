@@ -1,5 +1,7 @@
 use kaspa_consensus_core::BlueWorkType;
-use kaspa_rpc_core::{GetVirtualChainFromBlockResponse, VirtualChainChangedNotification};
+use kaspa_rpc_core::{
+    GetVirtualChainFromBlockResponse, RpcHeader, VirtualChainChangedNotification,
+};
 
 #[derive(Debug)]
 pub enum RealTimeVccNotification {
@@ -21,4 +23,21 @@ pub enum SyncVccNotification {
     Stopped {
         syncer_id: u64,
     },
+}
+
+#[derive(Clone, Debug, Copy, PartialEq, Eq, PartialOrd)]
+pub struct CompactHeader {
+    pub block_hash: [u8; 32],
+    pub blue_work: BlueWorkType,
+    pub daa_score: u64,
+}
+
+impl From<&RpcHeader> for CompactHeader {
+    fn from(value: &RpcHeader) -> Self {
+        Self {
+            block_hash: value.hash.as_bytes(),
+            blue_work: value.blue_work,
+            daa_score: value.daa_score,
+        }
+    }
 }

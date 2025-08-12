@@ -3,6 +3,7 @@ mod message;
 use crate::BlockGap;
 use crate::block_gap_filler::BlockGapFiller;
 use crate::data_source::Command;
+use crate::virtual_chain_processor::CompactHeader;
 use fjall::{TxKeyspace, WriteTransaction};
 use indexer_db::headers::block_compact_headers::BlockCompactHeaderPartition;
 use indexer_db::headers::block_gaps::BlockGapsPartition;
@@ -33,13 +34,11 @@ use protocol::operation::{
 use std::collections::HashMap;
 use tracing::{debug, error, info, trace};
 
-type DaaScore = u64;
-
 pub struct BlockProcessor {
     notification_rx: flume::Receiver<BlockNotification>,
     gap_result_rx: flume::Receiver<GapFillingProgress>,
     gap_result_tx: flume::Sender<GapFillingProgress>,
-    processed_block_tx: flume::Sender<([u8; 32], DaaScore)>,
+    processed_block_tx: flume::Sender<CompactHeader>,
     command_tx: workflow_core::channel::Sender<Command>,
     tx_keyspace: TxKeyspace,
     blocks_gap_partition: BlockGapsPartition,
@@ -139,11 +138,10 @@ impl BlockProcessor {
                     let mut wtx = self.tx_keyspace.write_tx()?;
                     self.handle_block(&mut wtx, &block)?;
                     let hash = block.header.hash.as_bytes();
-                    let daa_score = block.header.daa_score;
                     last_processed_block = Some(hash);
                     self.update_block(&mut wtx, hash);
                     wtx.commit()??;
-                    self.processed_block_tx.send((hash, daa_score))?;
+                    self.processed_block_tx.send(block.header.as_ref().into())?;
                 }
                 NotificationOrGapResult::GapFilling(GapFillingProgress::Interrupted { to }) => {
                     gaps_fillers.remove(&to);
@@ -166,8 +164,7 @@ impl BlockProcessor {
                             },
                         );
                         wtx.commit()??;
-                        self.processed_block_tx
-                            .send((block.header.hash.as_bytes(), block.header.daa_score))?;
+                        self.processed_block_tx.send(block.header.as_ref().into())?;
                         Ok(())
                     })?;
                 }
@@ -189,15 +186,13 @@ impl BlockProcessor {
                                     },
                                 );
                                 wtx.commit()??;
-                                self.processed_block_tx
-                                    .send((block.header.hash.as_bytes(), block.header.daa_score))?;
+                                self.processed_block_tx.send(block.header.as_ref().into())?;
                             } else {
                                 let mut wtx = self.tx_keyspace.write_tx()?;
                                 self.handle_block(&mut wtx, block)?;
                                 self.blocks_gap_partition.remove_gap_wtx(&mut wtx, &to);
                                 wtx.commit()??;
-                                self.processed_block_tx
-                                    .send((block.header.hash.as_bytes(), block.header.daa_score))?;
+                                self.processed_block_tx.send(block.header.as_ref().into())?;
                             }
                             Ok(())
                         },

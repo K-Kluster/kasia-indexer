@@ -1,12 +1,5 @@
-use kaspa_consensus_core::BlueWorkType;
 use kaspa_rpc_core::RpcBlock;
 use std::sync::Arc;
-
-#[derive(Clone, Debug, Copy, PartialEq, Eq, PartialOrd)]
-pub struct CompactHeader {
-    pub blue_work: BlueWorkType,
-    pub daa_score: u64,
-}
 
 #[derive(Debug)]
 pub enum BlockNotification {
