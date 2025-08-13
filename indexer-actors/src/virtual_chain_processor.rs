@@ -184,6 +184,19 @@ impl VirtualProcessor {
     ) -> anyhow::Result<()> {
         match &mut state.sync_state {
             SyncState::Initial => {
+                self.pending_sender_resolution_partition
+                    .get_all_pending()
+                    .try_for_each(|r| -> anyhow::Result<()> {
+                        let key = r?;
+                        self.command_tx.send_blocking(Command::Request(
+                            Request::RequestSender {
+                                daa_score: key.accepting_daa_score.get(),
+                                tx_id: key.tx_id,
+                            },
+                        ))?;
+                        Ok(())
+                    })?;
+
                 let last_accepting_block = self.last_accepting_block_db()?;
                 match last_accepting_block {
                     None => {

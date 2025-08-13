@@ -1,14 +1,25 @@
 use crate::SharedImmutable;
 use fjall::{PartitionCreateOptions, WriteTransaction};
 use zerocopy::big_endian::U64;
-use zerocopy::{FromBytes, Immutable, IntoBytes, Unaligned};
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
 
 #[derive(Clone)]
 pub struct PendingSenderResolutionPartition(fjall::TxPartition);
 
 #[repr(C)]
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Unaligned, Immutable, IntoBytes, FromBytes,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Unaligned,
+    Immutable,
+    IntoBytes,
+    FromBytes,
+    KnownLayout,
 )]
 pub struct PendingResolutionKey {
     pub accepting_daa_score: U64,
