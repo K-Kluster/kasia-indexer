@@ -13,6 +13,7 @@ pub enum RealTimeVccNotification {
     Disconnected,
     Shutdown,
     Notification(VirtualChainChangedNotification),
+    // todo rename enum because of it
     SenderResolution(RpcAddress),
 }
 
