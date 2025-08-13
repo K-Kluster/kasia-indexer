@@ -1,3 +1,4 @@
+use crate::virtual_chain_processor::DaaScore;
 use kaspa_consensus_core::BlueWorkType;
 use kaspa_rpc_core::{
     GetVirtualChainFromBlockResponse, RpcAddress, RpcHeader, VirtualChainChangedNotification,
@@ -14,7 +15,11 @@ pub enum RealTimeVccNotification {
     Shutdown,
     Notification(VirtualChainChangedNotification),
     // todo rename enum because of it
-    SenderResolution(RpcAddress),
+    SenderResolution {
+        sender: RpcAddress,
+        tx_id: [u8; 32],
+        daa: DaaScore,
+    },
 }
 
 pub enum SyncVccNotification {

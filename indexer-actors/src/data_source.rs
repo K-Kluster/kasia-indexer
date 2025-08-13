@@ -402,7 +402,11 @@ impl DataSource {
                                 let address = res.0.return_address;
                                 _ = self
                                     .vcc_sender
-                                    .send_async(RealTimeVccNotification::SenderResolution(address))
+                                    .send_async(RealTimeVccNotification::SenderResolution {
+                                        sender: address,
+                                        tx_id,
+                                        daa: daa_score,
+                                    })
                                     .await
                                     .inspect_err(|_err| error!("sending sender result err"));
                             }

@@ -3,12 +3,25 @@ pub mod message;
 use crate::data_source::{Command, Request};
 use crate::virtual_chain_syncer::{NotificationAck, VirtualChainSyncer};
 use fjall::{TxKeyspace, WriteTransaction};
+use indexer_db::messages::contextual_message::{
+    ContextualMessageBySenderKey, ContextualMessageBySenderPartition,
+};
+use indexer_db::messages::handshake::{
+    HandshakeByReceiverPartition, HandshakeBySenderPartition, HandshakeKeyByReceiver,
+    HandshakeKeyBySender,
+};
+use indexer_db::messages::payment::{
+    PaymentByReceiverPartition, PaymentBySenderPartition, PaymentKeyByReceiver, PaymentKeyBySender,
+};
 use indexer_db::metadata::{Cursor as DbCursor, MetadataPartition};
 use indexer_db::processing::accepting_block_to_txs::AcceptingBlockToTxIDPartition;
 use indexer_db::processing::pending_senders::{
     PendingResolutionKey, PendingSenderResolutionPartition,
 };
-use indexer_db::processing::tx_id_to_acceptance::{LookupOutput, TxIDToAcceptancePartition};
+use indexer_db::processing::tx_id_to_acceptance::{
+    Action, LookupOutput, TxIDToAcceptancePartition,
+};
+use indexer_db::{AddressPayload, PartitionId, TryFromBytes};
 use kaspa_consensus_core::BlueWorkType;
 use kaspa_rpc_core::{
     GetVirtualChainFromBlockResponse, RpcAcceptedTransactionIds, RpcAddress, RpcHash,
@@ -34,6 +47,14 @@ pub struct VirtualProcessor {
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
     accepting_block_to_tx_id_partition: AcceptingBlockToTxIDPartition,
     pending_sender_resolution_partition: PendingSenderResolutionPartition,
+
+    handshake_by_receiver_partition: HandshakeByReceiverPartition,
+    handshake_by_sender_partition: HandshakeBySenderPartition,
+
+    contextual_message_by_sender_partition: ContextualMessageBySenderPartition,
+    payment_by_receiver_partition: PaymentByReceiverPartition,
+    payment_by_sender_partition: PaymentBySenderPartition,
+
     runtime: tokio::runtime::Handle,
 }
 
@@ -129,10 +150,12 @@ impl VirtualProcessor {
                 ProcessedBlockOrVccOrSyncer::Vcc(RealTimeVccNotification::Notification(vcc)) => {
                     self.handle_realtime_vcc(state, vcc)?;
                 }
-                ProcessedBlockOrVccOrSyncer::Vcc(RealTimeVccNotification::SenderResolution(
-                    address,
-                )) => {
-                    self.handle_sender_address(address)?;
+                ProcessedBlockOrVccOrSyncer::Vcc(RealTimeVccNotification::SenderResolution {
+                    sender,
+                    tx_id,
+                    daa,
+                }) => {
+                    self.handle_sender_address(sender, tx_id, daa)?;
                 }
             }
         }
@@ -594,8 +617,117 @@ impl VirtualProcessor {
         Ok(())
     }
 
-    fn handle_sender_address(&self, _sender: RpcAddress) -> anyhow::Result<()> {
-        todo!()
+    fn handle_sender_address(
+        &self,
+        sender: RpcAddress,
+        tx_id: [u8; 32],
+        daa: DaaScore,
+    ) -> anyhow::Result<()> {
+        let sender = AddressPayload::try_from(&sender)?;
+        let key = self
+            .tx_id_to_acceptance_partition
+            .key_by_tx_id(&tx_id)?
+            .expect("Key must exists");
+        let mut wtx = self.tx_keyspace.write_tx()?;
+        self.pending_sender_resolution_partition.remove_wtx(
+            &mut wtx,
+            &PendingResolutionKey {
+                accepting_daa_score: daa.into(),
+                tx_id,
+            },
+        );
+        self.tx_id_to_acceptance_partition.resolve_entries_wtx(
+            &mut wtx,
+            &key,
+            |partition_id| match partition_id {
+                PartitionId::Metadata
+                | PartitionId::BlockCompactHeaders
+                | PartitionId::BlockDaaIndex
+                | PartitionId::BlockGaps
+                | PartitionId::TxIdToHandshake
+                | PartitionId::TxIdToPayment
+                | PartitionId::AcceptingBlockToTxIds
+                | PartitionId::TxIdToAcceptance
+                | PartitionId::PendingSenders => {
+                    panic!("Unexpected partition id")
+                }
+                PartitionId::HandshakeByReceiver => size_of::<HandshakeKeyByReceiver>(),
+                PartitionId::HandshakeBySender => size_of::<HandshakeKeyBySender>(),
+                PartitionId::ContextualMessageBySender => size_of::<ContextualMessageBySenderKey>(),
+                PartitionId::PaymentByReceiver => size_of::<PaymentKeyByReceiver>(),
+                PartitionId::PaymentBySender => size_of::<PaymentKeyBySender>(),
+            },
+            |wtx, entry| match entry.partition_id {
+                PartitionId::Metadata
+                | PartitionId::BlockCompactHeaders
+                | PartitionId::BlockDaaIndex
+                | PartitionId::BlockGaps
+                | PartitionId::TxIdToHandshake
+                | PartitionId::TxIdToPayment
+                | PartitionId::AcceptingBlockToTxIds
+                | PartitionId::TxIdToAcceptance
+                | PartitionId::PendingSenders => {
+                    panic!("Unexpected partition id")
+                }
+                PartitionId::HandshakeByReceiver => {
+                    if !matches!(entry.action, Action::UpdateValueSender) {
+                        panic!("Unexpected action")
+                    }
+                    self.handshake_by_receiver_partition.insert_wtx(
+                        wtx,
+                        HandshakeKeyByReceiver::try_ref_from_bytes(entry.key)
+                            .map_err(|_| anyhow::anyhow!("Key conversion error"))?,
+                        Some(sender),
+                    )?;
+                    Ok(())
+                }
+                PartitionId::HandshakeBySender => {
+                    if !matches!(entry.action, Action::InsertByKeySender) {
+                        panic!("Unexpected action")
+                    }
+                    let mut key = HandshakeKeyBySender::try_read_from_bytes(entry.key)
+                        .map_err(|_| anyhow::anyhow!("Key conversion error"))?;
+                    key.sender = sender;
+                    self.handshake_by_sender_partition.insert_wtx(wtx, &key);
+                    Ok(())
+                }
+                PartitionId::ContextualMessageBySender => {
+                    if !matches!(entry.action, Action::ReplaceByKeySender) {
+                        panic!("Unexpected action")
+                    }
+                    self.contextual_message_by_sender_partition.update_sender(
+                        wtx,
+                        ContextualMessageBySenderKey::try_ref_from_bytes(entry.key)
+                            .map_err(|_| anyhow::anyhow!("Key conversion error"))?,
+                        sender,
+                    )
+                }
+                PartitionId::PaymentByReceiver => {
+                    if !matches!(entry.action, Action::UpdateValueSender) {
+                        panic!("Unexpected action")
+                    }
+                    self.payment_by_receiver_partition.insert_wtx(
+                        wtx,
+                        PaymentKeyByReceiver::try_ref_from_bytes(entry.key)
+                            .map_err(|_| anyhow::anyhow!("Key conversion error"))?,
+                        Some(sender),
+                    )
+                }
+                PartitionId::PaymentBySender => {
+                    if !matches!(entry.action, Action::InsertByKeySender) {
+                        panic!("Unexpected action")
+                    }
+                    let mut key = PaymentKeyBySender::try_read_from_bytes(entry.key)
+                        .map_err(|_| anyhow::anyhow!("Key conversion error"))?;
+                    key.sender = sender;
+                    self.payment_by_sender_partition.insert_wtx(wtx, &key);
+                    Ok(())
+                }
+            },
+        )?;
+
+        wtx.commit()??;
+        Ok(())
     }
 }
 
