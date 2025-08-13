@@ -1,6 +1,6 @@
 pub mod message;
 
-use crate::data_source::Command;
+use crate::data_source::{Command, Request};
 use crate::virtual_chain_syncer::{NotificationAck, VirtualChainSyncer};
 use fjall::{TxKeyspace, WriteTransaction};
 use indexer_db::metadata::{Cursor as DbCursor, MetadataPartition};
@@ -11,7 +11,7 @@ use indexer_db::processing::pending_senders::{
 use indexer_db::processing::tx_id_to_acceptance::{LookupOutput, TxIDToAcceptancePartition};
 use kaspa_consensus_core::BlueWorkType;
 use kaspa_rpc_core::{
-    GetVirtualChainFromBlockResponse, RpcAcceptedTransactionIds, RpcHash,
+    GetVirtualChainFromBlockResponse, RpcAcceptedTransactionIds, RpcAddress, RpcHash,
     VirtualChainChangedNotification,
 };
 pub use message::*;
@@ -128,6 +128,11 @@ impl VirtualProcessor {
                 }
                 ProcessedBlockOrVccOrSyncer::Vcc(RealTimeVccNotification::Notification(vcc)) => {
                     self.handle_realtime_vcc(state, vcc)?;
+                }
+                ProcessedBlockOrVccOrSyncer::Vcc(RealTimeVccNotification::SenderResolution(
+                    address,
+                )) => {
+                    self.handle_sender_address(address)?;
                 }
             }
         }
@@ -478,6 +483,11 @@ impl VirtualProcessor {
                 }
                 LookupOutput::KeysExistsWithEntries => {
                     tracked_tx_ids.push(key.tx_id);
+                    self.command_tx
+                        .send_blocking(Command::Request(Request::RequestSender {
+                            daa_score: daa,
+                            tx_id: tx.as_bytes(),
+                        }))?;
                     self.pending_sender_resolution_partition.insert_wtx(
                         wtx,
                         &PendingResolutionKey {
@@ -582,6 +592,10 @@ impl VirtualProcessor {
             }
         }
         Ok(())
+    }
+
+    fn handle_sender_address(&self, _sender: RpcAddress) -> anyhow::Result<()> {
+        todo!()
     }
 }
 

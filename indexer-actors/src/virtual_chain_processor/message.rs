@@ -1,6 +1,6 @@
 use kaspa_consensus_core::BlueWorkType;
 use kaspa_rpc_core::{
-    GetVirtualChainFromBlockResponse, RpcHeader, VirtualChainChangedNotification,
+    GetVirtualChainFromBlockResponse, RpcAddress, RpcHeader, VirtualChainChangedNotification,
 };
 
 #[derive(Debug)]
@@ -13,6 +13,7 @@ pub enum RealTimeVccNotification {
     Disconnected,
     Shutdown,
     Notification(VirtualChainChangedNotification),
+    SenderResolution(RpcAddress),
 }
 
 pub enum SyncVccNotification {

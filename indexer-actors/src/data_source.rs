@@ -10,7 +10,7 @@ use kaspa_rpc_core::notify::connection::{ChannelConnection, ChannelType};
 use kaspa_rpc_core::{
     BlockAddedNotification, GetBlocksRequest, GetBlocksResponse, GetUtxoReturnAddressRequest,
     GetUtxoReturnAddressResponse, GetVirtualChainFromBlockRequest,
-    GetVirtualChainFromBlockResponse, Notification, RpcAddress, RpcBlock, RpcHash,
+    GetVirtualChainFromBlockResponse, Notification, RpcBlock, RpcHash,
 };
 use kaspa_wrpc_client::KaspaRpcClient;
 use kaspa_wrpc_client::client::ConnectOptions;
@@ -329,12 +329,11 @@ impl DataSource {
                                 error!("Error sending response to get blocks request")
                             });
                     }
-                    Request::RequestSender {
-                        response_channel, ..
-                    } if self.shutting_down => {
-                        _ = response_channel
-                            .send(Err(RequestError::ShuttingDown))
-                            .inspect_err(|_err| error!("Error sending response to sender request"));
+                    Request::RequestSender { .. } if self.shutting_down => {
+                        // do nothing
+                        // _ = response_channel
+                        //     .send(Err(RequestError::ShuttingDown))
+                        //     .inspect_err(|_err| error!("Error sending response to sender request"));
                     }
                     Request::RequestVirtualChain {
                         response_channel, ..
@@ -385,11 +384,7 @@ impl DataSource {
                             }
                         }
                     }
-                    Request::RequestSender {
-                        daa_score,
-                        tx_id,
-                        response_channel,
-                    } => {
+                    Request::RequestSender { daa_score, tx_id } => {
                         match self
                             .rpc_client
                             .rpc_client()
@@ -405,21 +400,18 @@ impl DataSource {
                             Ok(res) => {
                                 let res: Serializable<GetUtxoReturnAddressResponse> = res;
                                 let address = res.0.return_address;
-                                _ = response_channel
-                                    .send(Ok(address))
+                                _ = self
+                                    .vcc_sender
+                                    .send_async(RealTimeVccNotification::SenderResolution(address))
+                                    .await
                                     .inspect_err(|_err| error!("sending sender result err"));
                             }
                             Err(workflow_rpc::client::error::Error::Disconnect) => {
-                                self.requests_queue.push_front(Request::RequestSender {
-                                    daa_score,
-                                    tx_id,
-                                    response_channel,
-                                });
+                                self.requests_queue
+                                    .push_front(Request::RequestSender { daa_score, tx_id });
                             }
                             Err(e) => {
-                                _ = response_channel
-                                    .send(Err(e.into()))
-                                    .inspect_err(|_err| error!("sending sender result err"));
+                                warn!("Error getting sender address: {e}");
                             }
                         }
                     }
@@ -489,7 +481,6 @@ pub enum Request {
     RequestSender {
         daa_score: u64,
         tx_id: [u8; 32],
-        response_channel: flume::Sender<Result<RpcAddress, RequestError>>,
     },
 }
 
