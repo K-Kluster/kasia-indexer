@@ -96,6 +96,7 @@ impl VirtualProcessor {
                     virtual_chain,
                 }) => {
                     self.handle_syncer_vc(state, syncer_id, virtual_chain)?;
+                    // todo: process real time queue if get synced
                 }
                 ProcessedBlockOrVccOrSyncer::Vcc(RealTimeVccNotification::Shutdown) => {
                     let cont = self.handle_shutdown(state)?;
@@ -113,14 +114,12 @@ impl VirtualProcessor {
                         return Ok(());
                     }
                 }
-                // ProcessedBlockOrVccOrSyncer::Block { hash, daa_score } => {
-                //     self.handle_processed_block(hash, daa_score, synced);
-                // }
+                ProcessedBlockOrVccOrSyncer::Block(ch) => {
+                    self.handle_processed_block(state, ch)?;
+                    // todo: process real time queue if get synced
+                }
                 ProcessedBlockOrVccOrSyncer::Vcc(RealTimeVccNotification::Notification(vcc)) => {
                     self.handle_realtime_vcc(state, vcc)?;
-                }
-                _ => {
-                    todo!()
                 }
             }
         }
@@ -438,6 +437,96 @@ impl VirtualProcessor {
         _block: &RpcAcceptedTransactionIds,
     ) -> anyhow::Result<()> {
         todo!()
+    }
+
+    fn handle_processed_block(
+        &self,
+        state: &mut State,
+        compact_header: CompactHeader,
+    ) -> anyhow::Result<()> {
+        match &mut state.sync_state {
+            SyncState::Initial => {
+                state.shared_state.processed_blocks.push_back(
+                    compact_header.block_hash,
+                    (compact_header.daa_score, compact_header.blue_work),
+                );
+            }
+            SyncState::Synced {
+                last_accepting_block,
+                ..
+            } => {
+                let need_to_delete = (state.shared_state.processed_blocks.len() + 1)
+                    .saturating_sub(self.synced_capacity);
+                (0..need_to_delete).for_each(|_| {
+                    state.shared_state.processed_blocks.pop_front();
+                });
+                state.shared_state.processed_blocks.push_back(
+                    compact_header.block_hash,
+                    (compact_header.daa_score, compact_header.blue_work),
+                );
+                while let Some(vcc) = state.shared_state.realtime_queue_vcc.pop_front() {
+                    if vcc.added_chain_block_hashes.iter().any(|hash| {
+                        !state
+                            .shared_state
+                            .processed_blocks
+                            .contains_key(&hash.as_bytes())
+                    }) {
+                        state.shared_state.realtime_queue_vcc.push_front(vcc);
+                        break;
+                    }
+                    let (last_block, last_blue_work) =
+                        self.handle_vcc(&state.shared_state, &vcc)?;
+                    *last_accepting_block = (last_block, last_blue_work);
+                }
+            }
+            SyncState::Syncing {
+                last_accepting_block,
+                syncer,
+                syncer_id,
+                target_block: (target_block, target_blue_work),
+                sync_queue,
+            } => {
+                let need_to_delete = (state.shared_state.processed_blocks.len() + 1)
+                    .saturating_sub(self.unsynced_capacity);
+                (0..need_to_delete).for_each(|_| {
+                    state.shared_state.processed_blocks.pop_front();
+                });
+                state.shared_state.processed_blocks.push_back(
+                    compact_header.block_hash,
+                    (compact_header.daa_score, compact_header.blue_work),
+                );
+                let Some(vcc) = sync_queue.take() else {
+                    return Ok(());
+                };
+                if vcc.added_chain_block_hashes.iter().any(|hash| {
+                    !state
+                        .shared_state
+                        .processed_blocks
+                        .contains_key(&hash.as_bytes())
+                }) {
+                    assert!(sync_queue.is_none());
+                    sync_queue.replace(vcc);
+                    return Ok(());
+                }
+                let last = vcc.added_chain_block_hashes.last().unwrap().as_bytes();
+                if &last == target_block
+                    || state.shared_state.processed_blocks.get(&last).unwrap().1 > *target_blue_work
+                {
+                    // todo shrink queues
+                    syncer.send_blocking(NotificationAck::Stop)?;
+                    let last_accepting_block = self.handle_vc_resp(&state.shared_state, vcc)?;
+                    state.sync_state = SyncState::Synced {
+                        last_syncer_id: *syncer_id,
+                        last_accepting_block,
+                    };
+                } else {
+                    let last = self.handle_vc_resp(&state.shared_state, vcc)?;
+                    *last_accepting_block = last;
+                    syncer.send_blocking(NotificationAck::Continue)?;
+                }
+            }
+        }
+        Ok(())
     }
 }
 
