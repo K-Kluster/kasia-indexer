@@ -372,7 +372,7 @@ impl VirtualProcessor {
     ) -> anyhow::Result<([u8; 32], BlueWorkType)> {
         let mut wtx = self.tx_keyspace.write_tx()?;
         for block in vcc.removed_chain_block_hashes.as_slice() {
-            self.handle_vcc_removal(&mut wtx, block)?;
+            self.handle_vcc_removal(&mut wtx, block, state)?;
         }
         for block in vcc.accepted_transaction_ids.as_slice() {
             self.handle_vcc_addition(&mut wtx, block, state)?;
@@ -398,7 +398,7 @@ impl VirtualProcessor {
     ) -> anyhow::Result<([u8; 32], BlueWorkType)> {
         let mut wtx = self.tx_keyspace.write_tx()?;
         for block in vcc.removed_chain_block_hashes.as_slice() {
-            self.handle_vcc_removal(&mut wtx, block)?;
+            self.handle_vcc_removal(&mut wtx, block, state)?;
         }
         for block in vcc.accepted_transaction_ids.as_slice() {
             self.handle_vcc_addition(&mut wtx, block, state)?;
@@ -420,10 +420,36 @@ impl VirtualProcessor {
 
     fn handle_vcc_removal(
         &self,
-        _wtx: &mut WriteTransaction,
-        _block: &RpcHash,
+        wtx: &mut WriteTransaction,
+        block: &RpcHash,
+        state_shared: &StateShared,
     ) -> anyhow::Result<()> {
-        todo!()
+        let block = block.as_bytes();
+        let tracked_tx_ids = self
+            .accepting_block_to_tx_id_partition
+            .remove_wtx(wtx, &block)?
+            .expect("RemovedBlock must exists");
+        let daa = state_shared.processed_blocks.get(&block).unwrap().0;
+
+        for tx_id in tracked_tx_ids.as_ref() {
+            let key = self
+                .tx_id_to_acceptance_partition
+                .key_by_tx_id(tx_id)?
+                .expect("Key must exists");
+            let lookup_results = self
+                .tx_id_to_acceptance_partition
+                .update_acceptance_wtx(wtx, &key, block, daa)?;
+            if let LookupOutput::KeysExistsWithEntries = lookup_results {
+                self.pending_sender_resolution_partition.remove_wtx(
+                    wtx,
+                    &PendingResolutionKey {
+                        accepting_daa_score: daa.into(),
+                        tx_id: *tx_id,
+                    },
+                )
+            }
+        }
+        Ok(())
     }
 
     fn handle_vcc_addition(
