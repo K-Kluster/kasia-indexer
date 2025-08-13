@@ -4,6 +4,11 @@ use crate::data_source::Command;
 use crate::virtual_chain_syncer::{NotificationAck, VirtualChainSyncer};
 use fjall::{TxKeyspace, WriteTransaction};
 use indexer_db::metadata::{Cursor as DbCursor, MetadataPartition};
+use indexer_db::processing::accepting_block_to_txs::AcceptingBlockToTxIDPartition;
+use indexer_db::processing::pending_senders::{
+    PendingResolutionKey, PendingSenderResolutionPartition,
+};
+use indexer_db::processing::tx_id_to_acceptance::{LookupOutput, TxIDToAcceptancePartition};
 use kaspa_consensus_core::BlueWorkType;
 use kaspa_rpc_core::{
     GetVirtualChainFromBlockResponse, RpcAcceptedTransactionIds, RpcHash,
@@ -26,6 +31,9 @@ pub struct VirtualProcessor {
 
     tx_keyspace: TxKeyspace,
     metadata_partition: MetadataPartition,
+    tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
+    accepting_block_to_tx_id_partition: AcceptingBlockToTxIDPartition,
+    pending_sender_resolution_partition: PendingSenderResolutionPartition,
     runtime: tokio::runtime::Handle,
 }
 
@@ -138,19 +146,6 @@ impl VirtualProcessor {
             })
             .wait()?)
     }
-
-    // fn handle_processed_block(&mut self, block: [u8; 32], daa_score: DaaScore, synced: bool) {
-    // let capacity_target = if synced {
-    //     self.synced_capacity
-    // } else {
-    //     self.unsynced_capacity
-    // };
-    // let need_to_delete = (self.processed_blocks.len() + 1).saturating_sub(capacity_target);
-    // (0..need_to_delete).for_each(|_| {
-    //     self.processed_blocks.pop_front();
-    // });
-    // self.processed_blocks.push_back(block, daa_score);
-    // }
 
     fn handle_connect(
         &self,
@@ -380,7 +375,7 @@ impl VirtualProcessor {
             self.handle_vcc_removal(&mut wtx, block)?;
         }
         for block in vcc.accepted_transaction_ids.as_slice() {
-            self.handle_vcc_addition(&mut wtx, block)?;
+            self.handle_vcc_addition(&mut wtx, block, state)?;
         }
         let last_block = vcc.added_chain_block_hashes.last().unwrap().as_bytes();
         let (last_daa, last_blue_work) = state.processed_blocks.get(&last_block).unwrap();
@@ -406,7 +401,7 @@ impl VirtualProcessor {
             self.handle_vcc_removal(&mut wtx, block)?;
         }
         for block in vcc.accepted_transaction_ids.as_slice() {
-            self.handle_vcc_addition(&mut wtx, block)?;
+            self.handle_vcc_addition(&mut wtx, block, state)?;
         }
         let last_block = vcc.added_chain_block_hashes.last().unwrap().as_bytes();
         let (last_daa, last_blue_work) = state.processed_blocks.get(&last_block).unwrap();
@@ -433,10 +428,44 @@ impl VirtualProcessor {
 
     fn handle_vcc_addition(
         &self,
-        _wtx: &mut WriteTransaction,
-        _block: &RpcAcceptedTransactionIds,
+        wtx: &mut WriteTransaction,
+        block: &RpcAcceptedTransactionIds,
+        state: &StateShared,
     ) -> anyhow::Result<()> {
-        todo!()
+        let mut tracked_tx_ids = Vec::new();
+        let block_hash = block.accepting_block_hash.as_bytes();
+        let daa = state.processed_blocks.get(&block_hash).unwrap().0;
+        for tx in &block.accepted_transaction_ids {
+            let Some(key) = self
+                .tx_id_to_acceptance_partition
+                .key_by_tx_id(tx.as_ref())?
+            else {
+                continue;
+            };
+            let lookup_results = self
+                .tx_id_to_acceptance_partition
+                .update_acceptance_wtx(wtx, &key, block_hash, daa)?;
+            match lookup_results {
+                LookupOutput::KeyDoesNotExist => {}
+                LookupOutput::KeyExistsNoEntries => {
+                    tracked_tx_ids.push(key.tx_id);
+                }
+                LookupOutput::KeysExistsWithEntries => {
+                    tracked_tx_ids.push(key.tx_id);
+                    self.pending_sender_resolution_partition.insert_wtx(
+                        wtx,
+                        &PendingResolutionKey {
+                            accepting_daa_score: daa.into(),
+                            tx_id: tx.as_bytes(),
+                        },
+                    )
+                }
+            }
+        }
+        self.accepting_block_to_tx_id_partition
+            .insert_wtx(wtx, &block_hash, &tracked_tx_ids);
+
+        Ok(())
     }
 
     fn handle_processed_block(

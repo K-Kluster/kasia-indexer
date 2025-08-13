@@ -132,10 +132,8 @@ impl TxIDToAcceptancePartition {
         k: &AcceptanceKey,
         accepting_block_hash: [u8; 32],
         acceptance_daa: u64,
-        key_len_fn: impl Fn(PartitionId) -> usize,
-        entry_cb_fn: impl for<'a, 'b> Fn(&'a mut WriteTransaction, Entry<'b>) -> anyhow::Result<()>,
-    ) -> anyhow::Result<()> {
-        let updated_value = wtx.update_fetch(&self.0, k.as_bytes(), |old_value| {
+    ) -> anyhow::Result<LookupOutput> {
+        let old_value = wtx.fetch_update(&self.0, k.as_bytes(), |old_value| {
             let old_value = old_value?;
             let mut v = Vec::with_capacity(old_value.len());
             let h = AcceptanceValueHeader {
@@ -146,10 +144,32 @@ impl TxIDToAcceptancePartition {
             v.extend_from_slice(old_value[size_of::<AcceptanceValueHeader>()..].as_ref());
             Some(v.into())
         })?;
-        let Some(updated_value) = updated_value else {
-            return Ok(());
+        Ok(match old_value {
+            None => LookupOutput::KeyDoesNotExist,
+            Some(value) if value.len() > size_of::<AcceptanceValueHeader>() => {
+                LookupOutput::KeysExistsWithEntries
+            }
+            Some(_) => LookupOutput::KeyExistsNoEntries,
+        })
+    }
+
+    pub fn resolve_entries_wtx(
+        &self,
+        wtx: &mut WriteTransaction,
+        k: &AcceptanceKey,
+        key_len_fn: impl Fn(PartitionId) -> usize,
+        entry_cb_fn: impl for<'a, 'b> Fn(&'a mut WriteTransaction, Entry<'b>) -> anyhow::Result<()>,
+    ) -> anyhow::Result<KeyExists> {
+        let old_value = wtx.fetch_update(&self.0, k.as_bytes(), |old_value| {
+            let old_value = old_value?;
+            let new_value = &old_value.as_ref()[..size_of::<AcceptanceValueHeader>()];
+            Some(new_value.into())
+        })?;
+
+        let Some(old_value) = old_value else {
+            return Ok(false);
         };
-        let mut entries = &updated_value[size_of::<AcceptanceValueHeader>()..];
+        let mut entries = &old_value[size_of::<AcceptanceValueHeader>()..];
         while !entries.is_empty() {
             let partition_id = PartitionId::try_read_from_bytes(&entries[..1])
                 .map_err(|_| anyhow::anyhow!("Invalid partition id: {}", entries[0]))?;
@@ -164,7 +184,7 @@ impl TxIDToAcceptancePartition {
             entry_cb_fn(wtx, entry)?;
             entries = &entries[2 + key_len..];
         }
-        Ok(())
+        Ok(true)
     }
 
     pub fn acceptance_by_tx_id_rtx(
@@ -188,4 +208,13 @@ impl TxIDToAcceptancePartition {
         assert!(iter.next().is_none()); // we should not have more than one entry
         r
     }
+}
+
+type KeyExists = bool;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LookupOutput {
+    KeyDoesNotExist,
+    KeyExistsNoEntries,
+    KeysExistsWithEntries,
 }
