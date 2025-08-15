@@ -5,6 +5,8 @@ pub mod fifo_set;
 pub mod virtual_chain_processor;
 pub mod virtual_chain_syncer;
 
+pub(crate) mod util;
+
 #[derive(Debug, Clone, Copy)]
 pub struct BlockGap {
     pub from_block: [u8; 32],

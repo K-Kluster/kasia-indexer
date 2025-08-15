@@ -5,25 +5,20 @@ edition = "2024"
 
 [dependencies]
 anyhow.workspace = true
-arc-swap.workspace = true
 bon.workspace = true
 fjall.workspace = true
+faster-hex.workspace = true
 flume.workspace = true
 futures-util.workspace = true
-itertools.workspace = true
-kaspa-addresses.workspace = true
 kaspa-consensus-core.workspace = true
-kaspa-math.workspace = true
 kaspa-rpc-core.workspace = true
-kaspa-txscript.workspace = true
 kaspa-wrpc-client.workspace = true
-parking_lot.workspace = true
 ringmap.workspace = true
-serde = { workspace = true, optional = true }
+#serde = { workspace = true, optional = true }
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+tokio = { workspace = true, features = ["time"] }
 tracing.workspace = true
-utoipa = { workspace = true, optional = true }
+#utoipa = { workspace = true, optional = true }
 workflow-core.workspace = true
 workflow-rpc.workspace = true
 workflow-serializer.workspace = true
