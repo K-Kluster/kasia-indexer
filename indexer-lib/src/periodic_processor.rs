@@ -503,6 +503,22 @@ impl PeriodicProcessor {
                             found_resolution = true;
                             processed_any = true;
                         }
+                        AcceptingBlockResolutionData::SelfStashKey(ssk) => {
+                            assert_eq!(key.partition_id, PartitionId::SelfStashByOwner as u8);
+                            self.tx_id_to_acceptance_partition
+                                .remove(&mut wtx, key.clone());
+                            self.tx_id_to_acceptance_partition.insert_self_stash_wtx(
+                                &mut wtx,
+                                key.tx_id,
+                                &ssk,
+                                None,
+                                Some(accepting_block_hash.as_bytes()),
+                            );
+
+                            extended_daa_requests.push_self_stash(*tx_id, &ssk);
+                            found_resolution = true;
+                            processed_any = true;
+                        }
                         AcceptingBlockResolutionData::None => {
                             warn!(tx_id = %RpcTransactionId::from_bytes(key.tx_id), "No resolution data found for transaction");
                         }

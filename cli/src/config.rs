@@ -15,6 +15,7 @@ pub struct CliConfig {
     pub kasia_indexer_db_root: PathBuf,
     #[serde(default = "default_network_type")]
     pub network_type: NetworkType,
+    pub kaspa_node_wborsh_url: Option<String>,
 }
 
 fn default_rust_log() -> LevelFilter {

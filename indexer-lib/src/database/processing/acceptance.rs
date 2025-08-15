@@ -1,7 +1,8 @@
 use crate::database::resolution_keys::{
     ContextualMessageKeyForResolution, HandshakeKeyForResolution,
     LikeContextualMessageKeyForResolution, LikeHandshakeKeyForResolution,
-    LikePaymentKeyForResolution, PaymentKeyForResolution, SelfStashKeyForResolution,
+    LikePaymentKeyForResolution, LikeSelfStashKeyForResolution, PaymentKeyForResolution,
+    SelfStashKeyForResolution,
 };
 use crate::database::{LikeTxIds, PartitionId};
 use anyhow::Result;
@@ -22,6 +23,7 @@ pub enum AcceptingBlockResolutionData {
     HandshakeKey(LikeHandshakeKeyForResolution<UserKey>),
     ContextualMessageKey(LikeContextualMessageKeyForResolution<UserKey>),
     PaymentKey(LikePaymentKeyForResolution<UserKey>),
+    SelfStashKey(LikeSelfStashKeyForResolution<UserKey>),
     None,
 }
 
@@ -244,6 +246,7 @@ impl TxIDToAcceptancePartition {
                 AcceptingBlockResolutionData::HandshakeKey(hk) => hk.inner(),
                 AcceptingBlockResolutionData::ContextualMessageKey(cmk) => cmk.inner(),
                 AcceptingBlockResolutionData::PaymentKey(pmk) => pmk.inner(),
+                AcceptingBlockResolutionData::SelfStashKey(ssk) => ssk.inner(),
             },
         )
     }
@@ -292,6 +295,7 @@ impl TxIDToAcceptancePartition {
                         PartitionId::ContextualMessageBySender
                     }
                     x if x == PartitionId::PaymentBySender as u8 => PartitionId::PaymentBySender,
+                    x if x == PartitionId::SelfStashByOwner as u8 => PartitionId::SelfStashByOwner,
                     _ => {
                         return Err(anyhow::anyhow!(
                             "Invalid partition ID: {}",
@@ -317,6 +321,11 @@ impl TxIDToAcceptancePartition {
                         PartitionId::PaymentBySender => AcceptingBlockResolutionData::PaymentKey(
                             LikePaymentKeyForResolution::new(value_bytes),
                         ),
+                        PartitionId::SelfStashByOwner => {
+                            AcceptingBlockResolutionData::SelfStashKey(
+                                LikeSelfStashKeyForResolution::new(value_bytes),
+                            )
+                        }
                         _ => {
                             return Err(anyhow::anyhow!(
                                 "Invalid partition ID for accepting block resolution: {:?}",
