@@ -1,5 +1,8 @@
 use crate::BlockOrMany;
 use crate::database::headers::{BlockCompactHeaderPartition, DaaIndexPartition};
+use crate::database::messages::self_stashes::{
+    SelfStashByOwnerPartition, SelfStashKeyByOwner, TxIdToSelfStashPartition,
+};
 use crate::database::messages::{
     AddressPayload, ContextualMessageBySenderPartition, HandshakeByReceiverPartition,
     HandshakeKeyByReceiver, PaymentByReceiverPartition, PaymentKeyByReceiver,
@@ -11,6 +14,7 @@ use crate::database::processing::{
 };
 use crate::database::resolution_keys::{
     ContextualMessageKeyForResolution, HandshakeKeyForResolution, PaymentKeyForResolution,
+    SelfStashKeyForResolution,
 };
 use crate::fifo_set::FifoSet;
 use crate::historical_syncer::Cursor;
@@ -18,6 +22,7 @@ use crate::metrics::SharedMetrics;
 use fjall::{TxKeyspace, WriteTransaction};
 use kaspa_consensus_core::tx::{Transaction, TransactionId};
 use kaspa_rpc_core::{RpcBlock, RpcHash, RpcTransaction};
+use protocol::operation::SealedSelfStashV1;
 use protocol::operation::{
     SealedContextualMessageV1, SealedMessageOrSealedHandshakeVNone, SealedOperation,
     SealedPaymentV1, deserializer::parse_sealed_operation,
@@ -42,6 +47,9 @@ pub struct BlockProcessor {
 
     payment_by_receiver_partition: PaymentByReceiverPartition,
     tx_id_to_payment_partition: TxIdToPaymentPartition,
+
+    self_stash_by_owner_partition: SelfStashByOwnerPartition,
+    tx_id_to_self_stash_partition: TxIdToSelfStashPartition,
 
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
 
@@ -162,6 +170,10 @@ impl BlockProcessor {
             }
             Some(SealedOperation::PaymentV1(op)) => {
                 self.handle_payment(wtx, block, tx, &tx_id, op)?;
+                None
+            }
+            Some(SealedOperation::SelfStashV1(op)) => {
+                self.handle_self_stash(wtx, block, tx, &tx_id, op)?;
                 None
             }
             None => {
@@ -307,6 +319,68 @@ impl BlockProcessor {
             None,
         );
 
+        Ok(())
+    }
+
+    fn handle_self_stash(
+        &mut self,
+        wtx: &mut WriteTransaction,
+        block: &RpcBlock,
+        _tx: &RpcTransaction,
+        tx_id: &TransactionId,
+        op: SealedSelfStashV1,
+    ) -> anyhow::Result<()> {
+        debug!(%tx_id, "Handling SelfStashV1");
+
+        debug!(scope=?op.key, op.sealed_hex, "Inserting SelfStash by owner");
+        self.tx_id_to_self_stash_partition.insert_wtx(
+            wtx,
+            tx_id.as_ref(),
+            op.key,
+            op.sealed_hex,
+        )?;
+
+        // pad with zeros
+        let mut fixed_scope = [0u8; 255];
+        match op.key {
+            Some(scope) => {
+                let scope_length = scope.len().min(255);
+                fixed_scope[..scope_length].copy_from_slice(&scope[..scope_length]); // cap at 255,
+            }
+            None => (),
+        };
+
+        self.self_stash_by_owner_partition.insert_wtx(
+            wtx,
+            &SelfStashKeyByOwner {
+                // @QUESTION: not sure about populating default value here
+                owner: AddressPayload::default(),
+                scope: fixed_scope,
+                block_time: block.header.timestamp.to_be_bytes(),
+                block_hash: block.header.hash.as_bytes(),
+                version: 1,
+                tx_id: tx_id.as_bytes(),
+            },
+            None,
+        );
+
+        let self_stash_for_resolution = SelfStashKeyForResolution {
+            scope: fixed_scope,
+            block_time: block.header.timestamp.to_be_bytes(),
+            block_hash: block.header.hash.as_bytes(),
+            version: 1,
+            tx_id: tx_id.as_bytes(),
+            attempt_count: 10,
+        };
+        self.tx_id_to_acceptance_partition.insert_self_stash_wtx(
+            wtx,
+            tx_id.as_bytes(),
+            &self_stash_for_resolution,
+            None,
+            None,
+        );
+        // @QUESTION: should we remove this instead and use resolution metrics, like payment and handshake?
+        self.metrics.increment_self_stash_count();
         Ok(())
     }
 }

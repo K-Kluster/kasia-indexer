@@ -1,7 +1,7 @@
 use crate::database::resolution_keys::{
     ContextualMessageKeyForResolution, HandshakeKeyForResolution,
     LikeContextualMessageKeyForResolution, LikeHandshakeKeyForResolution,
-    LikePaymentKeyForResolution, PaymentKeyForResolution,
+    LikePaymentKeyForResolution, PaymentKeyForResolution, SelfStashKeyForResolution,
 };
 use crate::database::{LikeTxIds, PartitionId};
 use anyhow::Result;
@@ -201,6 +201,28 @@ impl TxIDToAcceptancePartition {
             &self.0,
             bytemuck::bytes_of(&key),
             bytemuck::bytes_of(payment_key),
+        );
+    }
+
+    /// Insert a SelfStash ForResolution key
+    pub fn insert_self_stash_wtx(
+        &self,
+        wtx: &mut WriteTransaction,
+        tx_id: [u8; 32],
+        self_stash_for_resolution_key: &SelfStashKeyForResolution,
+        accepted_at_daa: Option<u64>,
+        accepted_by_block_hash: Option<[u8; 32]>,
+    ) {
+        let key = AcceptanceTxKey {
+            tx_id,
+            accepted_at_daa: accepted_at_daa.unwrap_or_default().to_be_bytes(),
+            accepted_by_block_hash: accepted_by_block_hash.unwrap_or_default(),
+            partition_id: PartitionId::PaymentBySender as u8,
+        };
+        wtx.insert(
+            &self.0,
+            bytemuck::bytes_of(&key),
+            bytemuck::bytes_of(self_stash_for_resolution_key),
         );
     }
 

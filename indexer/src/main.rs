@@ -3,6 +3,9 @@ use fjall::Config;
 use indexer_lib::database::headers::{
     BlockCompactHeaderPartition, BlockGapsPartition, DaaIndexPartition,
 };
+use indexer_lib::database::messages::self_stashes::{
+    SelfStashByOwnerPartition, TxIdToSelfStashPartition,
+};
 use indexer_lib::database::messages::{
     ContextualMessageBySenderPartition, HandshakeByReceiverPartition, HandshakeBySenderPartition,
     PaymentByReceiverPartition, PaymentBySenderPartition, TxIdToHandshakePartition,
@@ -69,6 +72,8 @@ async fn main() -> anyhow::Result<()> {
     let contextual_message_partition = ContextualMessageBySenderPartition::new(&tx_keyspace)?;
     let payment_by_receiver_partition = PaymentByReceiverPartition::new(&tx_keyspace)?;
     let tx_id_to_payment_partition = TxIdToPaymentPartition::new(&tx_keyspace)?;
+    let self_stash_by_owner_partition = SelfStashByOwnerPartition::new(&tx_keyspace)?;
+    let tx_id_to_self_stash_partition = TxIdToSelfStashPartition::new(&tx_keyspace)?;
     let tx_id_to_acceptance_partition = TxIDToAcceptancePartition::new(&tx_keyspace)?;
     let skip_tx_partition = SkipTxPartition::new(&tx_keyspace)?;
     let skip_tx_by_block_partition = SkipTxByBlockPartition::new(&tx_keyspace)?;
@@ -95,6 +100,7 @@ async fn main() -> anyhow::Result<()> {
         payments_by_receiver: tx_id_to_payment_partition.approximate_len() as u64,
         contextual_messages: contextual_message_partition.len()? as u64,
         blocks_processed: block_compact_header_partition.len()? as u64,
+        self_stashes: self_stash_by_owner_partition.approximate_len() as u64,
         latest_block: metadata_partition
             .get_latest_block_cursor_rtx(&tx_keyspace.read_tx())?
             .unwrap_or_default()
@@ -127,6 +133,8 @@ async fn main() -> anyhow::Result<()> {
         .tx_id_to_handshake_partition(tx_id_to_handshake_partition.clone())
         .contextual_message_partition(contextual_message_partition.clone())
         .payment_by_receiver_partition(payment_by_receiver_partition.clone())
+        .self_stash_by_owner_partition(self_stash_by_owner_partition.clone())
+        .tx_id_to_self_stash_partition(tx_id_to_self_stash_partition.clone())
         .tx_id_to_payment_partition(tx_id_to_payment_partition.clone())
         .tx_id_to_acceptance_partition(tx_id_to_acceptance_partition.clone())
         .skip_tx_partition(skip_tx_partition.clone())
@@ -199,6 +207,7 @@ async fn main() -> anyhow::Result<()> {
         .payment_by_sender_partition(payment_by_sender_partition.clone())
         .tx_id_to_payment_partition(tx_id_to_payment_partition.clone())
         .tx_id_to_handshake_partition(tx_id_to_handshake_partition.clone())
+        .self_stash_by_owner_partition(self_stash_by_owner_partition.clone())
         .metrics(metrics.clone())
         .metrics_snapshot_interval(Duration::from_secs(10))
         .metadata_partition(metadata_partition.clone())

@@ -185,31 +185,6 @@ impl ContextualMessageBySenderPartition {
         let mut range_end = [0xFF; 58]; // 34 + 16 + 8
         range_end[..34].copy_from_slice(bytemuck::bytes_of(sender));
         range_end[34..50].copy_from_slice(alias);
-
-        rtx.range(&self.0, range_start..=range_end).map(|item| {
-            let (key_bytes, value_bytes) = item?;
-            Ok((
-                LikeContextualMessageBySenderKey::new(key_bytes),
-                value_bytes,
-            ))
-        })
-    }
-
-    // Get contextual message by transaction ID
-    pub fn get_by_tx_id(
-        &self,
-        rtx: &ReadTransaction,
-        tx_id: &[u8; 32],
-    ) -> impl DoubleEndedIterator<
-        Item = Result<(LikeContextualMessageBySenderKey<UserKey>, impl AsRef<[u8]>)>,
-    > + '_ {
-        println!("{:?}", tx_id);
-        let mut range_start = [0x00; 123];
-        let mut range_end = [0xFF; 123];
-
-        range_start[91..123].copy_from_slice(tx_id);
-        range_end[91..123].copy_from_slice(tx_id);
-
         rtx.range(&self.0, range_start..=range_end).map(|item| {
             let (key_bytes, value_bytes) = item?;
             Ok((

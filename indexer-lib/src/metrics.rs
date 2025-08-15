@@ -25,6 +25,8 @@ pub struct IndexerMetricsSnapshot {
     pub payments_by_receiver: u64,
     /// Number of contextual messages indexed
     pub contextual_messages: u64,
+    /// Number of self stash indexed
+    pub self_stashes: u64,
     /// Number of blocks processed
     pub blocks_processed: u64,
     /// Latest block hash processed
@@ -55,6 +57,7 @@ impl Display for IndexerMetricsSnapshot {
         writeln!(f, "  Payments by sender: {}", self.payments_by_sender)?;
         writeln!(f, "  Payments by receiver: {}", self.payments_by_receiver)?;
         writeln!(f, "  Contextual messages: {}", self.contextual_messages)?;
+        writeln!(f, "  Self Stashes: {}", self.self_stashes)?;
         writeln!(f, "  Blocks processed: {}", self.blocks_processed)?;
         writeln!(f, "  Latest block: {}", self.latest_block)?;
         writeln!(
@@ -87,6 +90,8 @@ pub struct IndexerMetrics {
     pub payments_by_receiver: AtomicU64,
     /// Number of contextual messages indexed
     pub contextual_messages: AtomicU64,
+    /// Number of self stash indexed
+    pub self_stashes: AtomicU64,
     /// Number of blocks processed
     pub blocks_processed: AtomicU64,
     /// Latest block hash processed
@@ -112,6 +117,7 @@ impl IndexerMetrics {
             payments_by_sender: AtomicU64::new(0),
             payments_by_receiver: AtomicU64::new(0),
             contextual_messages: AtomicU64::new(0),
+            self_stashes: AtomicU64::new(0),
             blocks_processed: AtomicU64::new(0),
             latest_block: ArcSwap::new(Arc::new(RpcHash::default())),
             latest_accepting_block: ArcSwap::new(Arc::new(RpcHash::default())),
@@ -131,6 +137,7 @@ impl IndexerMetrics {
             payments_by_sender: AtomicU64::new(snapshot.payments_by_sender),
             payments_by_receiver: AtomicU64::new(snapshot.payments_by_receiver),
             contextual_messages: AtomicU64::new(snapshot.contextual_messages),
+            self_stashes: AtomicU64::new(snapshot.self_stashes),
             blocks_processed: AtomicU64::new(snapshot.blocks_processed),
             latest_block: ArcSwap::new(Arc::new(snapshot.latest_block)),
             latest_accepting_block: ArcSwap::new(Arc::new(snapshot.latest_accepting_block)),
@@ -150,6 +157,7 @@ impl IndexerMetrics {
             payments_by_sender: self.payments_by_sender.load(Ordering::Relaxed),
             payments_by_receiver: self.payments_by_receiver.load(Ordering::Relaxed),
             contextual_messages: self.contextual_messages.load(Ordering::Relaxed),
+            self_stashes: self.self_stashes.load(Ordering::Relaxed),
             blocks_processed: self.blocks_processed.load(Ordering::Relaxed),
             latest_block: *self.latest_block.load().as_ref(),
             latest_accepting_block: *self.latest_accepting_block.load().as_ref(),
@@ -184,6 +192,11 @@ impl IndexerMetrics {
     /// Update contextual messages count
     pub fn increment_contextual_messages_count(&self) {
         self.contextual_messages.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Update self stash count
+    pub fn increment_self_stash_count(&self) {
+        self.self_stashes.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Increment blocks processed count by 1
@@ -239,6 +252,11 @@ impl IndexerMetrics {
     /// Get current contextual messages count
     pub fn get_contextual_messages(&self) -> u64 {
         self.contextual_messages.load(Ordering::Relaxed)
+    }
+
+    /// Get current self stash count
+    pub fn get_self_stash(&self) -> u64 {
+        self.self_stashes.load(Ordering::Relaxed)
     }
 
     /// Get current blocks processed count

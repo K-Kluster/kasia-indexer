@@ -49,6 +49,10 @@ pub enum PartitionId {
     PaymentBySender,
     PaymentByReceiver,
     TxIdToPayment,
+
+    // Self Stash
+    SelfStashByOwner,
+    TxIdToSelfStash,
 }
 
 use fjall::UserValue;
