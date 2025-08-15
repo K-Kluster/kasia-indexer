@@ -40,6 +40,8 @@ workflow-core = "0.18.0"
 workflow-rpc = "0.18.0"
 workflow-serializer = "0.18.0"
 dotenv = "0.15.0"
+envy = "0.4"
+serde_with = "3.14.0"
 
 protocol = { path = "protocol" }
 indexer-lib = { path = "indexer-lib" }
