@@ -73,14 +73,14 @@ impl Api {
             handshake_by_receiver_partition,
             tx_id_to_acceptance_partition.clone(),
             tx_id_to_handshake_partition,
-            context.clone()
+            context.clone(),
         );
 
         let contextual_message_api = ContextualMessageApi::new(
             tx_keyspace.clone(),
             contextual_message_by_sender_partition,
             tx_id_to_acceptance_partition.clone(),
-            context.clone()
+            context.clone(),
         );
 
         let payment_api = PaymentApi::new(
@@ -89,7 +89,7 @@ impl Api {
             payment_by_receiver_partition,
             tx_id_to_payment_partition,
             tx_id_to_acceptance_partition,
-            context.clone()
+            context.clone(),
         );
 
         Self {
