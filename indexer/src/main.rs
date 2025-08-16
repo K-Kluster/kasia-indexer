@@ -193,7 +193,7 @@ async fn main() -> anyhow::Result<()> {
         virtual_daa.clone(),
         command_channel,
     );
-    let limit = if gaps.len() == 0 {
+    let limit = if gaps.is_empty() {
         1_000_000
     } else {
         3_000_000
@@ -209,7 +209,7 @@ async fn main() -> anyhow::Result<()> {
         .par_iter()
         .map(|hash| {
             block_compact_header_partition
-                .get_compact_header(&hash)
+                .get_compact_header(hash)
                 .transpose()
                 .unwrap()
                 .map(|db_compact_header| CompactHeader {
