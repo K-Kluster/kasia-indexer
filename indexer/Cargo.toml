@@ -6,8 +6,8 @@ edition = "2024"
 [dependencies]
 anyhow = { workspace = true }
 axum.workspace = true
-tracing-appender.workspace = true
 dotenv = { workspace = true }
+envy = { workspace = true }
 faster-hex = { workspace = true }
 fjall = { workspace = true }
 flume = { workspace = true }
@@ -15,21 +15,18 @@ futures-util = { workspace = true }
 kaspa-addresses = { workspace = true }
 kaspa-rpc-core = { workspace = true }
 kaspa-wrpc-client = { workspace = true }
-parking_lot = { workspace = true }
 rolling-file = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+serde_with = { workspace = true }
 time = { workspace = true , features = ["macros"]}
 tokio = { workspace = true, features = ["signal"] }
 tower-http = { workspace = true, features = ["cors"] }
 tracing = { workspace = true }
+tracing-appender.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter", "local-time"] }
 utoipa = { workspace = true, features = ["axum_extras"] }
 utoipa-swagger-ui = { workspace = true, features = ["axum"] }
 workflow-core = { workspace = true }
 
 indexer-db = { path = "../indexer-db" }
-bon = "0.1.0"
-serde_with = { workspace = true }
-envy = { workspace = true }
-
 indexer-actors = { path = "../indexer-actors", features = ["serde", "utoipa"] }

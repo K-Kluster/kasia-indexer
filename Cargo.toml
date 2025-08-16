@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "indexer-lib",
     "protocol",
     "indexer",
     "indexer-db",
@@ -14,20 +13,16 @@ arrayref = "0.3.9"
 arc-swap = "1.7.1"
 axum = "0.8.4"
 bon = "3.*"
-bytemuck = "1.23.1"
 faster-hex = "0.10.0"
 fjall = { version = "2.11.2", default-features = false, features = ["lz4", "miniz", "ssi_tx"] }
 flume = "0.11.1"
 fstr = "0.2.13"
 futures-util = "0.3.31"
-itertools = "0.14.0"
 kaspa-addresses = "1.*"
 kaspa-consensus-core = "1.*"
-kaspa-math = "1.*"
 kaspa-rpc-core = "1.*"
 kaspa-txscript = "1.*"
 kaspa-wrpc-client = "1.*"
-parking_lot = "0.12.4"
 ringmap = "0.1.4"
 rolling-file = "0.2.0"
 serde = "1.0"
@@ -51,7 +46,6 @@ envy = "0.4"
 protocol = { path = "protocol" }
 
 indexer-actors = { path = "indexer-actors" }
-indexer-lib = { path = "indexer-lib" }
 indexer-db = { path = "indexer-db" }
 
 [patch.crates-io]
