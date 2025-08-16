@@ -130,7 +130,7 @@ async fn get_handshakes_by_sender(
             let tx_id = faster_hex::hex_string(&handshake.tx_id);
             let sender_str = match to_rpc_address(&handshake.sender, RpcNetworkType::Mainnet) {
                 Ok(Some(addr)) => addr.to_string(),
-                Ok(None) => bail!("Database consistency error: sender address has EMPTY_VERSION"),
+                Ok(None) => String::new(),
                 Err(e) => bail!("Address conversion error: {}", e),
             };
             let receiver_str = match to_rpc_address(&handshake.receiver, RpcNetworkType::Mainnet) {
@@ -254,7 +254,7 @@ async fn get_handshakes_by_receiver(
             let tx_id = faster_hex::hex_string(&handshake.tx_id);
             let sender_str = match to_rpc_address(&sender_payload, RpcNetworkType::Mainnet) {
                 Ok(Some(addr)) => addr.to_string(),
-                Ok(None) => bail!("Database consistency error: sender address has EMPTY_VERSION"),
+                Ok(None) => String::new(),
                 Err(e) => bail!("Address conversion error: {}", e),
             };
             let receiver_str = match to_rpc_address(&handshake.receiver, RpcNetworkType::Mainnet) {
