@@ -3,8 +3,15 @@ name = "indexer-actors"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+serde = ["dep:serde"]
+utoipa = ["serde", "dep:utoipa"]
+
+
 [dependencies]
 anyhow.workspace = true
+arc-swap.workspace = true
 bon.workspace = true
 fjall.workspace = true
 faster-hex.workspace = true
@@ -14,11 +21,11 @@ kaspa-consensus-core.workspace = true
 kaspa-rpc-core.workspace = true
 kaspa-wrpc-client.workspace = true
 ringmap.workspace = true
-#serde = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["time"] }
 tracing.workspace = true
-#utoipa = { workspace = true, optional = true }
+utoipa = { workspace = true, optional = true }
 workflow-core.workspace = true
 workflow-rpc.workspace = true
 workflow-serializer.workspace = true

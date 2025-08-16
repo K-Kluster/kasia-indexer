@@ -3,6 +3,7 @@ mod message;
 use crate::BlockGap;
 use crate::block_gap_filler::BlockGapFiller;
 use crate::data_source::Command;
+use crate::metrics::SharedMetrics;
 use crate::virtual_chain_processor::CompactHeader;
 use fjall::{TxKeyspace, WriteTransaction};
 use indexer_db::headers::block_compact_headers::BlockCompactHeaderPartition;
@@ -55,6 +56,7 @@ pub struct BlockProcessor {
     payment_by_sender_partition: PaymentBySenderPartition,
     tx_id_to_payment_partition: TxIdToPaymentPartition,
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
+    shared_metrics: SharedMetrics,
 }
 
 impl BlockProcessor {
@@ -216,16 +218,20 @@ impl BlockProcessor {
         wtx: &mut WriteTransaction,
         block: &RpcBlock,
     ) -> anyhow::Result<()> {
-        self.block_compact_header_partition.insert_compact_header(
+        let already_processed = self.block_compact_header_partition.insert_compact_header(
             block.header.hash.as_ref(),
             block.header.blue_work.to_le_bytes(),
             block.header.daa_score,
         )?;
+        if already_processed {
+            return Ok(());
+        }
         self.daa_index_partition
             .insert(block.header.daa_score, block.header.hash.as_ref())?;
         for tx in &block.transactions {
             self.handle_transaction(wtx, &block.header, tx)?;
         }
+        self.shared_metrics.increment_blocks_processed();
         Ok(())
     }
 
@@ -299,6 +305,7 @@ impl BlockProcessor {
             (SealedOperation::ContextualMessageV1(cm), None) => {
                 let key =
                     self.handle_contextual_message(wtx, sender, block_header, tx_id, cm, receiver)?;
+                self.shared_metrics.increment_contextual_messages_count();
                 self.tx_id_to_acceptance_partition.insert_wtx(
                     wtx,
                     &AcceptanceKey {

@@ -1565,6 +1565,7 @@ name = "indexer-actors"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "bon",
  "faster-hex 0.10.0",
  "fjall",
@@ -1576,9 +1577,11 @@ dependencies = [
  "kaspa-wrpc-client",
  "protocol",
  "ringmap",
+ "serde",
  "thiserror 2.0.12",
  "tokio",
  "tracing",
+ "utoipa",
  "workflow-core",
  "workflow-rpc",
  "workflow-serializer",

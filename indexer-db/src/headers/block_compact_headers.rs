@@ -36,16 +36,21 @@ impl BlockCompactHeaderPartition {
         block_hash: &[u8; 32],
         blue_work: [u8; 24],
         daa_score: impl Into<U64>,
-    ) -> Result<()> {
-        self.0.insert(
-            block_hash.as_bytes(),
-            CompactHeader {
-                blue_work,
-                daa_score: daa_score.into(),
-            }
-            .as_bytes(),
-        )?;
-        Ok(())
+    ) -> Result<AlreadyExist> {
+        let daa_score: U64 = daa_score.into();
+        Ok(self
+            .0
+            .fetch_update(block_hash, move |_| {
+                Some(
+                    CompactHeader {
+                        blue_work,
+                        daa_score,
+                    }
+                    .as_bytes()
+                    .into(),
+                )
+            })?
+            .is_some())
     }
 
     pub fn get_compact_header_rtx(
@@ -97,3 +102,5 @@ impl BlockCompactHeaderPartition {
         Ok(())
     }
 }
+
+type AlreadyExist = bool;

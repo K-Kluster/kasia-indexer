@@ -547,7 +547,7 @@ impl VirtualProcessor {
     ) -> anyhow::Result<()> {
         match &mut state.sync_state {
             SyncState::Initial => {
-                state.shared_state.processed_blocks.push_back(
+                state.shared_state.processed_blocks.insert(
                     compact_header.block_hash,
                     (compact_header.daa_score, compact_header.blue_work),
                 );
@@ -561,7 +561,7 @@ impl VirtualProcessor {
                 (0..need_to_delete).for_each(|_| {
                     state.shared_state.processed_blocks.pop_front();
                 });
-                state.shared_state.processed_blocks.push_back(
+                state.shared_state.processed_blocks.insert(
                     compact_header.block_hash,
                     (compact_header.daa_score, compact_header.blue_work),
                 );
@@ -592,7 +592,7 @@ impl VirtualProcessor {
                 (0..need_to_delete).for_each(|_| {
                     state.shared_state.processed_blocks.pop_front();
                 });
-                state.shared_state.processed_blocks.push_back(
+                state.shared_state.processed_blocks.insert(
                     compact_header.block_hash,
                     (compact_header.daa_score, compact_header.blue_work),
                 );

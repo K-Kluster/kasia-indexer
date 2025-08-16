@@ -18,7 +18,18 @@ pub enum MetadataKey {
 
 #[repr(C)]
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, Ord, PartialOrd, IntoBytes, FromBytes, Immutable, Unaligned,
+    Clone,
+    Copy,
+    Default,
+    Debug,
+    PartialEq,
+    Eq,
+    Ord,
+    PartialOrd,
+    IntoBytes,
+    FromBytes,
+    Immutable,
+    Unaligned,
 )]
 pub struct Cursor {
     pub blue_work: [u8; 24], // Uint192 serialized as 24 be bytes
