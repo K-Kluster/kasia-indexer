@@ -151,7 +151,7 @@ impl ContextualMessageBySenderPartition {
     }
 
     /// Update sender address (when resolved from zeros)
-    pub fn update_sender(
+    pub fn replace_sender(
         &self,
         wtx: &mut WriteTransaction,
         old_key: &ContextualMessageBySenderKey,
@@ -162,6 +162,7 @@ impl ContextualMessageBySenderPartition {
             value = old_value.unwrap().clone();
             None
         })?;
+        wtx.remove(&self.0, old_key.as_bytes());
         let k = ContextualMessageBySenderKey {
             sender: new_sender,
             ..*old_key

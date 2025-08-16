@@ -26,6 +26,7 @@ use indexer_db::processing::tx_id_to_acceptance::TxIDToAcceptancePartition;
 use kaspa_rpc_core::RpcBlueWorkType;
 use kaspa_wrpc_client::client::{ConnectOptions, ConnectStrategy};
 use kaspa_wrpc_client::prelude::NetworkType;
+use rayon::prelude::*;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
@@ -100,7 +101,6 @@ async fn main() -> anyhow::Result<()> {
         resolved_senders: 0,
         pruned_blocks: 0,
     });
-
     let (block_intake_tx, block_intake_rx) = flume::bounded(4096);
     let (vcc_intake_tx, vcc_intake_rx) = flume::bounded(4096);
     let (gap_result_tx, gap_result_rx) = flume::bounded(1024);
@@ -140,7 +140,6 @@ async fn main() -> anyhow::Result<()> {
         .tx_id_to_acceptance_partition(tx_id_to_acceptance_partition.clone())
         .shared_metrics(metrics.clone())
         .build();
-
     let mut virtual_processor = VirtualProcessor::builder()
         .synced_capacity(500_000)
         .unsynced_capacity(3_000_000)
@@ -194,26 +193,32 @@ async fn main() -> anyhow::Result<()> {
         virtual_daa.clone(),
         command_channel,
     );
+    let limit = if gaps.len() == 0 {
+        1_000_000
+    } else {
+        3_000_000
+    };
     let rtx = tx_keyspace.read_tx();
-    let processed_blocks = block_daa_index_partition
+    let processed_daa_blocks = block_daa_index_partition
         .iter_lt(&rtx, u64::MAX)
         .rev()
-        .take(3_000_000)
-        .map(|r| {
-            r.and_then(|(_daa, hash)| {
-                block_compact_header_partition
-                    .get_compact_header(&hash)
-                    .transpose()
-                    .unwrap()
-                    .map(|db_compact_header| CompactHeader {
-                        block_hash: hash,
-                        blue_work: RpcBlueWorkType::from_le_bytes(db_compact_header.blue_work),
-                        daa_score: db_compact_header.daa_score.into(),
-                    })
-            })
+        .take(limit)
+        .map(|r| r.map(|(_daa, hash)| hash))
+        .collect::<Result<Vec<_>, _>>()?;
+    let processed_blocks = processed_daa_blocks
+        .par_iter()
+        .map(|hash| {
+            block_compact_header_partition
+                .get_compact_header(&hash)
+                .transpose()
+                .unwrap()
+                .map(|db_compact_header| CompactHeader {
+                    block_hash: *hash,
+                    blue_work: RpcBlueWorkType::from_le_bytes(db_compact_header.blue_work),
+                    daa_score: db_compact_header.daa_score.into(),
+                })
         })
         .collect::<Result<Vec<_>, _>>()?;
-
     let block_processor_handle = std::thread::spawn(move || block_processor.process());
     let virtual_processor_handle =
         std::thread::spawn(move || virtual_processor.process(processed_blocks));
@@ -293,7 +298,7 @@ async fn main() -> anyhow::Result<()> {
     _ = virtual_processor_handle
         .join()
         .expect("failed to join virtual_processor thread")
-        .inspect_err(|err| error!("periodic_processor stopped error: {}", err));
+        .inspect_err(|err| error!("virtual_processor stopped error: {}", err));
 
     info!("waiting for block processor finish");
     _ = block_processor_handle

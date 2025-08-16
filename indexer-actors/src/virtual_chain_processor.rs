@@ -161,6 +161,7 @@ impl VirtualProcessor {
                     if cont {
                         continue;
                     } else {
+                        info!("shutting down virtual chain processor");
                         return Ok(());
                     }
                 }
@@ -397,7 +398,11 @@ impl VirtualProcessor {
             SyncState::Initial => {
                 unreachable!()
             }
-            SyncState::Synced { last_syncer_id, .. } if syncer_id == *last_syncer_id => Ok(false),
+            SyncState::Synced { last_syncer_id, .. }
+                if syncer_id == *last_syncer_id && state.shared_state.shutting_down =>
+            {
+                Ok(false)
+            }
             SyncState::Syncing {
                 syncer_id: current_syncer_id,
                 ..
@@ -544,6 +549,7 @@ impl VirtualProcessor {
                 }
                 LookupOutput::KeysExistsWithEntries => {
                     tracked_tx_ids.push(key.tx_id);
+                    debug!("request sender for: {} {}", daa, tx);
                     self.command_tx
                         .send_blocking(Command::Request(Request::RequestSender {
                             daa_score: daa,
@@ -733,7 +739,7 @@ impl VirtualProcessor {
                     if !matches!(entry.action, Action::ReplaceByKeySender) {
                         panic!("Unexpected action")
                     }
-                    self.contextual_message_by_sender_partition.update_sender(
+                    self.contextual_message_by_sender_partition.replace_sender(
                         wtx,
                         ContextualMessageBySenderKey::try_ref_from_bytes(entry.key)
                             .map_err(|_| anyhow::anyhow!("Key conversion error"))?,
