@@ -30,7 +30,7 @@ use kaspa_rpc_core::{
 };
 pub use message::*;
 use std::collections::VecDeque;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info};
 use workflow_core::channel::Sender;
 
 #[derive(bon::Builder)]
@@ -66,9 +66,9 @@ struct State {
 }
 
 impl State {
-    fn new() -> Self {
+    fn new(processed_blocks: Vec<CompactHeader>) -> Self {
         Self {
-            shared_state: StateShared::new(),
+            shared_state: StateShared::new(processed_blocks),
             sync_state: SyncState::default(),
         }
     }
@@ -81,10 +81,23 @@ struct StateShared {
 }
 
 impl StateShared {
-    fn new() -> Self {
+    fn new(processed_blocks: Vec<CompactHeader>) -> Self {
+        let mut latest_known_block = (Default::default(), Default::default());
+        let processed_blocks = ringmap::RingMap::from_iter(processed_blocks.into_iter().map(
+            |CompactHeader {
+                 blue_work,
+                 block_hash,
+                 daa_score,
+             }| {
+                if blue_work > latest_known_block.1 {
+                    latest_known_block = (block_hash, blue_work);
+                }
+                (block_hash, (daa_score, blue_work))
+            },
+        ));
         Self {
             shutting_down: false,
-            processed_blocks: ringmap::RingMap::new(),
+            processed_blocks,
             realtime_queue_vcc: VecDeque::new(),
         }
     }
@@ -108,9 +121,9 @@ enum SyncState {
 }
 
 impl VirtualProcessor {
-    pub fn process(&mut self) -> anyhow::Result<()> {
+    pub fn process(&mut self, processed_blocks: Vec<CompactHeader>) -> anyhow::Result<()> {
         info!("Virtual chain processor started");
-        let state = &mut State::new();
+        let state = &mut State::new(processed_blocks);
         loop {
             match self.select_input()? {
                 ProcessedBlockOrVccOrSyncer::Vcc(RealTimeVccNotification::Connected {
@@ -152,7 +165,7 @@ impl VirtualProcessor {
                     }
                 }
                 ProcessedBlockOrVccOrSyncer::Block(ch) => {
-                    trace!(hash = %ch.block_hash.to_hex_64(), daa_score = ch.daa_score, "Processing block header");
+                    // trace!(hash = %ch.block_hash.to_hex_64(), daa_score = ch.daa_score, "Processing block header");
                     self.handle_processed_block(state, ch)?;
                     // todo: process real time queue if get synced
                 }

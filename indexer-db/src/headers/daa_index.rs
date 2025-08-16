@@ -52,7 +52,7 @@ impl DaaIndexPartition {
         &'a self,
         rtx: &'a ReadTransaction,
         max_daa: u64,
-    ) -> impl Iterator<Item = Result<(u64, [u8; 32])>> + 'a {
+    ) -> impl DoubleEndedIterator<Item = Result<(u64, [u8; 32])>> + 'a {
         let max_prefix = max_daa.to_be_bytes();
         rtx.range(&self.0, ..max_prefix).map(move |res| {
             let (key, value) = res?;

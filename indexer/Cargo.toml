@@ -17,7 +17,6 @@ kaspa-rpc-core = { workspace = true }
 kaspa-wrpc-client = { workspace = true }
 rolling-file = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_with = { workspace = true }
 time = { workspace = true , features = ["macros"]}
 tokio = { workspace = true, features = ["signal"] }
 tower-http = { workspace = true, features = ["cors"] }

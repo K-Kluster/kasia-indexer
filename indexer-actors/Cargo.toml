@@ -5,9 +5,8 @@ edition = "2024"
 
 [features]
 default = []
-serde = ["dep:serde", "dep:serde_with"]
+serde = ["dep:serde", "fstr/serde"]
 utoipa = ["serde", "dep:utoipa"]
-
 
 [dependencies]
 anyhow.workspace = true
@@ -23,7 +22,6 @@ kaspa-rpc-core.workspace = true
 kaspa-wrpc-client.workspace = true
 ringmap.workspace = true
 serde = { workspace = true, optional = true }
-serde_with = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["time"] }
 tracing.workspace = true

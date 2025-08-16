@@ -20,27 +20,22 @@ impl BlockGapsPartition {
 
     /// Add a block gap that needs to be filled
     pub fn add_gap_wtx(&self, wtx: &mut WriteTransaction, BlockGap { from, to }: BlockGap) {
-        wtx.insert(&self.0, from, to);
+        wtx.insert(&self.0, to, from);
     }
 
     /// Add a block gap that needs to be filled
     pub fn add_gap(&self, BlockGap { from, to }: BlockGap) -> Result<()> {
-        self.0.insert(from, to)?;
+        self.0.insert(to, from)?;
         Ok(())
     }
 
     /// Remove a gap (when it's been filled)
-    pub fn remove_gap_wtx(&self, wtx: &mut WriteTransaction, from: &[u8; 32]) {
-        wtx.remove(&self.0, from);
-    }
-
-    /// Remove a gap (when it's been filled)
-    pub fn remove_gap(&self, from: &[u8; 32]) -> Result<()> {
-        Ok(self.0.remove(from)?)
+    pub fn remove_gap_wtx(&self, wtx: &mut WriteTransaction, to: &[u8; 32]) {
+        wtx.remove(&self.0, to);
     }
 
     pub fn update_gap_wtx(&self, wtx: &mut WriteTransaction, BlockGap { from, to }: BlockGap) {
-        wtx.insert(&self.0, from, to)
+        wtx.insert(&self.0, to, from)
     }
 
     /// Get all block gaps that need to be filled
@@ -52,8 +47,8 @@ impl BlockGapsPartition {
             let (key, value) = item?;
             if key.len() == 32 && value.len() == 32 {
                 Ok(BlockGap {
-                    from: *array_ref![key, 0, 32],
-                    to: *array_ref![value, 0, 32],
+                    from: *array_ref![value, 0, 32],
+                    to: *array_ref![key, 0, 32],
                 })
             } else {
                 Err(anyhow::anyhow!(
@@ -68,8 +63,8 @@ impl BlockGapsPartition {
             let (key, value) = item?;
             if key.len() == 32 && value.len() == 32 {
                 Ok(BlockGap {
-                    from: *array_ref![key, 0, 32],
-                    to: *array_ref![value, 0, 32],
+                    from: *array_ref![value, 0, 32],
+                    to: *array_ref![key, 0, 32],
                 })
             } else {
                 Err(anyhow::anyhow!(

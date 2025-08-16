@@ -35,7 +35,7 @@ use protocol::operation::{
     SealedPaymentV1,
 };
 use std::collections::HashMap;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 
 #[derive(bon::Builder)]
 pub struct BlockProcessor {
@@ -59,6 +59,8 @@ pub struct BlockProcessor {
     tx_id_to_payment_partition: TxIdToPaymentPartition,
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
     shared_metrics: SharedMetrics,
+    #[builder(default)]
+    gaps_filling_in_progress: usize,
 }
 
 impl BlockProcessor {
@@ -68,7 +70,7 @@ impl BlockProcessor {
         let mut gaps_fillers = HashMap::new();
         let mut is_shutdown = false;
         let mut last_processed_block: Option<[u8; 32]> = None;
-        let mut gaps_filling_in_progress = 0;
+        // let mut gaps_filling_in_progress = 0;
         loop {
             match self.select_input()? {
                 NotificationOrGapResult::Notification(BlockNotification::Connected {
@@ -102,8 +104,8 @@ impl BlockProcessor {
                                 (gap.to_block, interrupt_tx)
                             })
                             .collect();
-                        gaps_filling_in_progress = gaps_fillers.len();
-                        info!(gaps_filling_in_progress, "Started gap filling tasks");
+                        self.gaps_filling_in_progress = gaps_fillers.len();
+                        info!(self.gaps_filling_in_progress, "Started gap filling tasks");
                     } else if let Some(last_processed_block) = last_processed_block.take() {
                         info!(from = %last_processed_block.to_hex_64(), to = %sink.to_hex_64(), "Creating gap for reconnection");
                         self.insert_gap(last_processed_block, sink)?;
@@ -124,7 +126,8 @@ impl BlockProcessor {
                             }
                         });
                         gaps_fillers.insert(sink, interrupt_tx);
-                        gaps_filling_in_progress += 1;
+                        self.gaps_filling_in_progress += 1;
+                        info!(self.gaps_filling_in_progress, "New block gap added");
                     }
                 }
                 NotificationOrGapResult::Notification(BlockNotification::Disconnected) => {
@@ -132,6 +135,7 @@ impl BlockProcessor {
                     std::mem::take(&mut gaps_fillers)
                         .into_iter()
                         .for_each(|(_to, interrupt_tx)| {
+                            info!("send interruption signal");
                             let _ = interrupt_tx.send(()).inspect_err(|_err| {
                                 error!("Error sending interrupt to block gap filler")
                             });
@@ -143,6 +147,7 @@ impl BlockProcessor {
                     std::mem::take(&mut gaps_fillers)
                         .into_iter()
                         .for_each(|(_to, interrupt_tx)| {
+                            info!("send interruption signal");
                             let _ = interrupt_tx.send(()).inspect_err(|_err| {
                                 error!("Error sending interrupt to block gap filler")
                             });
@@ -156,20 +161,33 @@ impl BlockProcessor {
                     last_processed_block = Some(hash);
                     self.update_block(&mut wtx, hash);
                     wtx.commit()??;
-                    self.processed_block_tx.send(block.header.as_ref().into())?;
+                    if !is_shutdown {
+                        _ = self
+                            .processed_block_tx
+                            .send(block.header.as_ref().into())
+                            .inspect_err(|_err| warn!("Error sending block notification"));
+                    }
                     trace!(hash = %hash.to_hex_64(), "Block processed successfully");
                 }
-                NotificationOrGapResult::GapFilling(GapFillingProgress::Interrupted { to }) => {
-                    debug!(to = %to.to_hex_64(), "Gap filler interrupted");
+                NotificationOrGapResult::GapFilling(GapFillingProgress::Interrupted {
+                    target: to,
+                }) => {
+                    info!(to = %to.to_hex_64(), "Gap filler interrupted");
                     gaps_fillers.remove(&to);
-                    gaps_filling_in_progress -= 1;
+                    self.gaps_filling_in_progress -= 1;
                 }
-                NotificationOrGapResult::GapFilling(GapFillingProgress::Error { to, err }) => {
+                NotificationOrGapResult::GapFilling(GapFillingProgress::Error {
+                    target: to,
+                    err,
+                }) => {
                     error!(to = %to.to_hex_64(), %err, "Error in block gap filler");
                     gaps_fillers.remove(&to);
-                    gaps_filling_in_progress -= 1;
+                    self.gaps_filling_in_progress -= 1;
                 }
-                NotificationOrGapResult::GapFilling(GapFillingProgress::Update { to, blocks }) => {
+                NotificationOrGapResult::GapFilling(GapFillingProgress::Update {
+                    target: to,
+                    blocks,
+                }) => {
                     debug!(to = %to.to_hex_64(), block_count = blocks.len(), "Processing gap filling update");
                     blocks.iter().try_for_each(|block| -> anyhow::Result<()> {
                         let mut wtx = self.tx_keyspace.write_tx()?;
@@ -182,12 +200,17 @@ impl BlockProcessor {
                             },
                         );
                         wtx.commit()??;
-                        self.processed_block_tx.send(block.header.as_ref().into())?;
+                        if !is_shutdown {
+                            _ = self
+                                .processed_block_tx
+                                .send(block.header.as_ref().into())
+                                .inspect_err(|_err| warn!("Error sending block notification"));
+                        }
                         Ok(())
                     })?;
                 }
                 NotificationOrGapResult::GapFilling(GapFillingProgress::Finished {
-                    to,
+                    target: to,
                     blocks,
                 }) => {
                     let last_index = blocks.len() - 1; // todo is it possible that blocks are empty?
@@ -204,22 +227,40 @@ impl BlockProcessor {
                                     },
                                 );
                                 wtx.commit()??;
-                                self.processed_block_tx.send(block.header.as_ref().into())?;
+                                if !is_shutdown {
+                                    _ = self
+                                        .processed_block_tx
+                                        .send(block.header.as_ref().into())
+                                        .inspect_err(|_err| {
+                                            warn!("Error sending block notification")
+                                        });
+                                }
                             } else {
                                 let mut wtx = self.tx_keyspace.write_tx()?;
                                 self.handle_block(&mut wtx, block)?;
                                 self.blocks_gap_partition.remove_gap_wtx(&mut wtx, &to);
                                 wtx.commit()??;
-                                self.processed_block_tx.send(block.header.as_ref().into())?;
+                                if !is_shutdown {
+                                    _ = self
+                                        .processed_block_tx
+                                        .send(block.header.as_ref().into())
+                                        .inspect_err(|_err| {
+                                            warn!("Error sending block notification")
+                                        });
+                                }
                             }
                             Ok(())
                         },
                     )?;
                     gaps_fillers.remove(&to);
-                    gaps_filling_in_progress -= 1;
+                    self.gaps_filling_in_progress -= 1;
+                    info!(
+                        self.gaps_filling_in_progress,
+                        "Gap filling finished successfully"
+                    );
                 }
             }
-            if is_shutdown && gaps_filling_in_progress == 0 {
+            if is_shutdown && self.gaps_filling_in_progress == 0 {
                 info!("Block worker stopped");
                 return Ok(());
             }
@@ -233,7 +274,7 @@ impl BlockProcessor {
     ) -> anyhow::Result<()> {
         let already_processed = self.block_compact_header_partition.insert_compact_header(
             block.header.hash.as_ref(),
-            block.header.blue_work.to_le_bytes(),
+            block.header.blue_work.to_be_bytes(),
             block.header.daa_score,
         )?;
         if already_processed {
@@ -576,6 +617,7 @@ impl BlockProcessor {
 
 impl Drop for BlockProcessor {
     fn drop(&mut self) {
+        debug!(self.gaps_filling_in_progress, "Dropping block processor");
         _ = self
             .command_tx
             .send_blocking(Command::MarkBlockSenderClosed)

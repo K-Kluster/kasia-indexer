@@ -33,7 +33,14 @@ impl Ticker {
         let mut t = tokio::time::interval(self.interval);
         loop {
             tokio::select! {
-                _ = t.tick() => {
+                biased;
+                _ = self.shutdown.recv().fuse() => {
+                    info!("Ticker shutdown signal received");
+                    shutting_down = true;
+                    debug!("Sending shutdown signal to periodic processor");
+                    _ = self.job_trigger_tx.send(Intake::Shutdown).await.inspect_err(|err| error!("Error sending shutdown signal: {}", err));
+                }
+                _ = t.tick().fuse() => {
                     if need_to_send {
                         debug!("Ticker interval elapsed, triggering periodic job");
                         _ = self.job_trigger_tx.send(Intake::DoJob).await.inspect_err(|err| error!("Error sending `DoJob`: {}", err));
@@ -59,12 +66,6 @@ impl Ticker {
                             }
                         }
                     }
-                }
-                _ = self.shutdown.recv().fuse() => {
-                    info!("Ticker shutdown signal received");
-                    shutting_down = true;
-                    debug!("Sending shutdown signal to periodic processor");
-                    _ = self.job_trigger_tx.send(Intake::Shutdown).await.inspect_err(|err| error!("Error sending shutdown signal: {}", err));
                 }
             }
         }

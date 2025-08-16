@@ -1,9 +1,8 @@
 use crate::block_processor::GapFillingProgress;
 use crate::data_source::{Command, Request, RequestError};
-use anyhow::bail;
 use kaspa_rpc_core::RpcHash;
 use tokio::sync::oneshot::error::TryRecvError;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// Manages historical data synchronization from Kaspa node
 pub struct BlockGapFiller {
@@ -40,19 +39,28 @@ impl BlockGapFiller {
             to = %RpcHash::from_bytes(self.target_block),
             "Starting historical data synchronization",
         );
+
         loop {
             match self.interrupt_rx.try_recv() {
                 Ok(()) => {
                     info!("Received shutdown signal, stopping sync");
                     self.gap_result_tx
                         .send_async(GapFillingProgress::Interrupted {
-                            to: self.target_block,
+                            target: self.target_block,
                         })
                         .await?;
+                    return Ok(());
                 }
                 Err(TryRecvError::Closed) => {
-                    error!("Interrupt receiver closed");
-                    bail!("oneshot channel is closed");
+                    warn!("Received shutdown signal closed, stopping sync");
+                    _ = self
+                        .gap_result_tx
+                        .send_async(GapFillingProgress::Interrupted {
+                            target: self.target_block,
+                        })
+                        .await
+                        .inspect_err(|err| error!(%err, "Error sending interrupted notification"));
+                    return Ok(());
                 }
                 Err(TryRecvError::Empty) => {
                     // all good try sync
@@ -69,7 +77,7 @@ impl BlockGapFiller {
                 Err(RequestError::RpcError(err)) => {
                     self.gap_result_tx
                         .send_async(GapFillingProgress::Error {
-                            to: self.target_block,
+                            target: self.target_block,
                             err,
                         })
                         .await?;
@@ -85,7 +93,7 @@ impl BlockGapFiller {
                 {
                     self.gap_result_tx
                         .send_async(GapFillingProgress::Finished {
-                            to: self.target_block,
+                            target: self.target_block,
                             blocks,
                         })
                         .await?;
@@ -103,7 +111,7 @@ impl BlockGapFiller {
                         .unwrap();
                     self.gap_result_tx
                         .send_async(GapFillingProgress::Update {
-                            to: from_block,
+                            target: self.target_block,
                             blocks,
                         })
                         .await?;

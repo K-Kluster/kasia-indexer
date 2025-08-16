@@ -22,7 +22,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use thiserror::Error;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 use workflow_core::channel::Channel;
 use workflow_serializer::prelude::Serializable;
 
@@ -38,7 +38,7 @@ pub struct DataSource {
     shutting_down: bool,
     // vcc_sender
     /// Shutdown signal receiver
-    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+    shutdown_rx: tokio::sync::mpsc::Receiver<()>,
     // channel supplied to the notification subsystem to receive the node
     // notifications we subscribe to
     notification_channel: Channel<Notification>,
@@ -55,7 +55,7 @@ impl DataSource {
         rpc_client: KaspaRpcClient,
         block_sender: flume::Sender<BlockNotification>,
         vcc_sender: flume::Sender<RealTimeVccNotification>,
-        shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+        shutdown_rx: tokio::sync::mpsc::Receiver<()>,
         virtual_daa: Arc<AtomicU64>,
         command_rx: workflow_core::channel::Channel<Command>,
     ) -> Self {
@@ -81,16 +81,35 @@ impl DataSource {
         info!("Data source task started");
         let rpc_ctl_channel = self.rpc_client.rpc_ctl().multiplexer().channel();
         loop {
+            trace!("Data source select loop iteration");
             tokio::select! {
                 biased;
-                shutdown_result = (&mut self.shutdown_rx).fuse() => {
-                    shutdown_result
-                        .inspect(|_| info!("Shutdown signal received, stopping subscriber task"))
-                        .inspect_err(|e| warn!("Shutdown receiver error: {}", e))?;
-                    self.handle_shutdown().await?;
-                    // no need to return, we are waiting for command to mark other processor closed
+                command = self.command_rx.receiver.recv().fuse() => {
+                    debug!("Received command in data source");
+                    let con = self
+                        .handle_command(command.inspect_err(|e| error!("RPC command channel error: {}", e))?)
+                        .await?;
+                    if !con {
+                        info!("Data source task terminating due to command response");
+                        return Ok(())
+                    }
+                }
+                shutdown_result = self.shutdown_rx.recv().fuse() => {
+                    match shutdown_result {
+                        Some(()) => {
+                            info!("Shutdown signal received, initiating data source shutdown");
+                            self.handle_shutdown().await?;
+                            info!("Data source shutdown initiated, waiting for processors to close");
+                            // no need to return, we are waiting for command to mark other processor closed
+                        }
+                        None => {
+                            warn!("Shutdown channel closed unexpectedly");
+                            return Err(anyhow::anyhow!("Shutdown channel closed"));
+                        }
+                    }
                 }
                 msg = rpc_ctl_channel.receiver.recv().fuse() => {
+                    debug!("Received RPC control message in data source");
                     // this will never occur if the RpcClient is owned and properly managed. This can
                     // only occur if RpcClient is deleted while this task is still running.
                     match msg.inspect_err(|e| error!("RPC CTL channel error: {}", e))? {
@@ -115,14 +134,6 @@ impl DataSource {
                             .await
                             .inspect_err(|err| error!("Error while handling notification: {err}"));
                 },
-                command = self.command_rx.recv().fuse() => {
-                    let con = self
-                        .handle_command(command.inspect_err(|e| error!("RPC command channel error: {}", e))?)
-                        .await?;
-                    if !con {
-                        return Ok(())
-                    }
-                }
             }
         }
     }
@@ -311,6 +322,9 @@ impl DataSource {
     }
 
     async fn handle_shutdown(&mut self) -> anyhow::Result<()> {
+        if self.shutting_down {
+            return Ok(());
+        };
         self.shutting_down = true;
         _ = self
             .rpc_client
@@ -318,22 +332,19 @@ impl DataSource {
             .await
             .inspect_err(|err| error!("Error disconnecting: {err}"));
 
-        let pair = futures_util::future::join(
-            async {
-                self.block_sender
-                    .send_async(BlockNotification::Shutdown)
-                    .await
-                    .context("block handler `Shutdown` send failed")
-            },
-            async {
-                self.vcc_sender
-                    .send_async(RealTimeVccNotification::Shutdown)
-                    .await
-                    .context("vcc handler `Shutdown` send failed")
-            },
-        )
-        .await;
-        pair.0.and(pair.1)?;
+        info!("Sending shutdown signals to block and VCC processors");
+
+        debug!("Sending shutdown to block processor");
+        self.block_sender
+            .send_async(BlockNotification::Shutdown)
+            .await
+            .context("block handler `Shutdown` send failed")?;
+        debug!("Sending shutdown to VCC processor");
+        self.vcc_sender
+            .send_async(RealTimeVccNotification::Shutdown)
+            .await
+            .context("vcc handler `Shutdown` send failed")?;
+        info!("Shutdown signals sent to both processors successfully");
         Ok(())
     }
 
@@ -341,18 +352,32 @@ impl DataSource {
     async fn handle_command(&mut self, command: Command) -> anyhow::Result<Continue> {
         match command {
             Command::MarkBlockSenderClosed => {
+                info!("Block processor has closed");
                 if !self.shutting_down {
                     warn!("MarkBlockSenderClosed called but not shutting down");
                 }
                 self.block_sender_closed = true;
-                Ok(!self.vcc_sender_closed)
+                let continue_running = !self.vcc_sender_closed;
+                if !continue_running {
+                    info!("Both processors closed, data source can now terminate");
+                } else {
+                    info!("Block processor closed, waiting for VCC processor");
+                }
+                Ok(continue_running)
             }
             Command::MarkVccSenderClosed => {
+                info!("VCC processor has closed");
                 if !self.shutting_down {
                     warn!("MarkVccSenderClosed called but not shutting down");
                 }
                 self.vcc_sender_closed = true;
-                Ok(!self.block_sender_closed)
+                let continue_running = !self.block_sender_closed;
+                if !continue_running {
+                    info!("Both processors closed, data source can now terminate");
+                } else {
+                    info!("VCC processor closed, waiting for block processor");
+                }
+                Ok(continue_running)
             }
             Command::Request(request) => {
                 match request {
@@ -436,6 +461,7 @@ impl DataSource {
                             Ok(res) => {
                                 let res: Serializable<GetUtxoReturnAddressResponse> = res;
                                 let address = res.0.return_address;
+                                debug!("get sender");
                                 _ = self
                                     .vcc_sender
                                     .send_async(RealTimeVccNotification::SenderResolution {

@@ -2,15 +2,15 @@ use crate::config::get_indexer_config;
 use crate::context::{IndexerContext, get_indexer_context};
 use dotenv::dotenv;
 use fjall::Config;
-use futures_util::TryFutureExt;
 use indexer_actors::block_processor::BlockProcessor;
 use indexer_actors::data_source::DataSource;
 use indexer_actors::metrics::{IndexerMetricsSnapshot, create_shared_metrics_from_snapshot};
 use indexer_actors::periodic_processor::PeriodicProcessor;
 use indexer_actors::ticker::Ticker;
-use indexer_actors::virtual_chain_processor::VirtualProcessor;
+use indexer_actors::util::ToHex64;
+use indexer_actors::virtual_chain_processor::{CompactHeader, VirtualProcessor};
 use indexer_db::headers::block_compact_headers::BlockCompactHeaderPartition;
-use indexer_db::headers::block_gaps::BlockGapsPartition;
+use indexer_db::headers::block_gaps::{BlockGap, BlockGapsPartition};
 use indexer_db::headers::daa_index::DaaIndexPartition;
 use indexer_db::messages::contextual_message::ContextualMessageBySenderPartition;
 use indexer_db::messages::handshake::{
@@ -23,15 +23,17 @@ use indexer_db::metadata::MetadataPartition;
 use indexer_db::processing::accepting_block_to_txs::AcceptingBlockToTxIDPartition;
 use indexer_db::processing::pending_senders::PendingSenderResolutionPartition;
 use indexer_db::processing::tx_id_to_acceptance::TxIDToAcceptancePartition;
+use kaspa_rpc_core::RpcBlueWorkType;
 use kaspa_wrpc_client::client::{ConnectOptions, ConnectStrategy};
 use kaspa_wrpc_client::prelude::NetworkType;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use time::macros::format_description;
+use tracing::level_filters::LevelFilter;
 use tracing::{error, info};
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt, util::SubscriberInitExt};
 use workflow_core::channel::Channel;
 
 mod api;
@@ -72,13 +74,11 @@ async fn main() -> anyhow::Result<()> {
     let payment_by_sender_partition = PaymentBySenderPartition::new(&tx_keyspace)?;
     let block_gaps_partition = BlockGapsPartition::new(&tx_keyspace)?;
     let block_daa_index_partition = DaaIndexPartition::new(&tx_keyspace)?;
-    info!(
-        "Gaps exist: {:?}",
-        block_gaps_partition
-            .get_all_gaps()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap()
-    );
+
+    let gaps = block_gaps_partition
+        .get_all_gaps()
+        .collect::<Result<Vec<_>, _>>()?;
+    print_gaps(&gaps);
 
     let metrics = create_shared_metrics_from_snapshot(IndexerMetricsSnapshot {
         handshakes_by_sender: handshake_by_sender_partition.approximate_len() as u64,
@@ -89,11 +89,13 @@ async fn main() -> anyhow::Result<()> {
         blocks_processed: block_compact_header_partition.len()? as u64,
         latest_block: metadata_partition
             .get_latest_block_cursor_rtx(&tx_keyspace.read_tx())?
-            .unwrap_or_default(),
+            .unwrap_or_default()
+            .to_hex_64(),
         latest_accepting_block: metadata_partition
             .get_latest_accepting_block_cursor()?
             .unwrap_or_default()
-            .block_hash,
+            .block_hash
+            .to_hex_64(),
         unknown_sender_entries: pending_sender_resolution_partition.len()? as u64,
         resolved_senders: 0,
         pruned_blocks: 0,
@@ -111,13 +113,13 @@ async fn main() -> anyhow::Result<()> {
         }
     };
     let (syncer_tx, syncer_rx) = flume::bounded(4);
-    let (shutdown_data_source_tx, shutdown_data_source_rx) = tokio::sync::oneshot::channel();
+    let (shutdown_data_source_tx, shutdown_data_source_rx) = tokio::sync::mpsc::channel(1);
     let (periodic_intake_tx, periodic_intake_rx) = workflow_core::channel::bounded(1);
     let (periodic_resp_tx, periodic_resp_rx) = workflow_core::channel::bounded(1);
     let (shutdown_ticker_tx, shutdown_ticker_rx) = tokio::sync::mpsc::channel(1);
 
     let mut block_processor = BlockProcessor::builder()
-        .notification_rx(block_intake_rx)
+        .notification_rx(block_intake_rx.clone())
         .gap_result_rx(gap_result_rx)
         .gap_result_tx(gap_result_tx)
         .processed_block_tx(processed_block_tx)
@@ -192,9 +194,29 @@ async fn main() -> anyhow::Result<()> {
         virtual_daa.clone(),
         command_channel,
     );
+    let rtx = tx_keyspace.read_tx();
+    let processed_blocks = block_daa_index_partition
+        .iter_lt(&rtx, u64::MAX)
+        .rev()
+        .take(3_000_000)
+        .map(|r| {
+            r.and_then(|(_daa, hash)| {
+                block_compact_header_partition
+                    .get_compact_header(&hash)
+                    .transpose()
+                    .unwrap()
+                    .map(|db_compact_header| CompactHeader {
+                        block_hash: hash,
+                        blue_work: RpcBlueWorkType::from_le_bytes(db_compact_header.blue_work),
+                        daa_score: db_compact_header.daa_score.into(),
+                    })
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     let block_processor_handle = std::thread::spawn(move || block_processor.process());
-    let virtual_processor_handle = std::thread::spawn(move || virtual_processor.process());
+    let virtual_processor_handle =
+        std::thread::spawn(move || virtual_processor.process(processed_blocks));
     let periodic_processor_handle = std::thread::spawn(move || periodic_processor.process());
     let data_source_handle = tokio::spawn(async move { data_source.task().await });
     let ticker_handle = tokio::spawn(async move { ticker.process().await });
@@ -238,38 +260,52 @@ async fn main() -> anyhow::Result<()> {
         .send(())
         .inspect_err(|_err| error!("failed to shutdown api"));
 
+    info!("Sending shutdown signal to data source");
     _ = shutdown_data_source_tx
         .send(())
+        .await
+        .inspect(|_| info!("Shutdown signal sent to data source successfully"))
         .inspect_err(|_err| error!("failed to shutdown data source"));
     _ = shutdown_ticker_tx
         .send(())
+        .await
         .inspect_err(|_err| error!("failed to shutdown ticker"));
     // Await on all tasks to complete
     info!("waiting for api finish");
-    _ = api_handle.await.inspect(|_| info!("api has stopped"));
+    _ = api_handle
+        .await
+        .inspect(|_| info!("api has stopped"))
+        .inspect_err(|err| error!("api has stopped with error: {}", err));
 
     info!("waiting for data source finish");
     _ = data_source_handle
         .await
-        .inspect(|_| info!("data source has stopped"));
+        .inspect(|_| info!("data source has stopped"))
+        .inspect_err(|err| error!("data_source finished with err: {}", err));
 
     info!("waiting for ticker finish");
-    _ = ticker_handle.await.inspect(|_| info!("ticker has stopped"));
-
-    info!("waiting for block processor finish");
-    _ = block_processor_handle
-        .join()
-        .expect("failed to join block_processor thread");
+    _ = ticker_handle
+        .await
+        .inspect(|_| info!("ticker has stopped"))
+        .inspect_err(|err| error!("ticker processing error: {}", err));
 
     info!("waiting for virtual processor finish");
     _ = virtual_processor_handle
         .join()
-        .expect("failed to join virtual_processor thread");
+        .expect("failed to join virtual_processor thread")
+        .inspect_err(|err| error!("periodic_processor stopped error: {}", err));
+
+    info!("waiting for block processor finish");
+    _ = block_processor_handle
+        .join()
+        .expect("failed to join block_processor thread")
+        .inspect_err(|err| error!("block_processor stopped error: {}", err));
 
     info!("waiting for periodic processor finish");
     _ = periodic_processor_handle
         .join()
-        .expect("failed to join periodic_processor thread");
+        .expect("failed to join periodic_processor thread")
+        .inspect_err(|err| error!("periodic_processor stopped error: {}", err));
 
     info!("All tasks shut down.");
 
@@ -292,14 +328,24 @@ pub fn init_logs(context: &IndexerContext) -> anyhow::Result<(WorkerGuard, Worke
     let file_subscriber = tracing_subscriber::fmt::layer()
         .with_ansi(false)
         .with_writer(non_blocking_appender)
-        .with_filter(context.config.rust_log_file);
+        .with_filter(
+            EnvFilter::builder()
+                .with_env_var("RUST_LOG_FILE")
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy(),
+        );
     let (non_blocking_appender, guard_stdout) = tracing_appender::non_blocking(std::io::stdout());
     let stdout_subscriber = tracing_subscriber::fmt::layer()
         .with_timer(tracing_subscriber::fmt::time::LocalTime::new(
             format_description!("[year]-[month]-[day] [hour]:[minute]:[second]"),
         ))
         .with_writer(non_blocking_appender)
-        .with_filter(context.config.rust_log);
+        .with_filter(
+            EnvFilter::builder()
+                .with_env_var("RUST_LOG_FILE")
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy(),
+        );
 
     tracing_subscriber::registry()
         .with(file_subscriber)
@@ -307,4 +353,18 @@ pub fn init_logs(context: &IndexerContext) -> anyhow::Result<(WorkerGuard, Worke
         .init();
 
     Ok((guard_file, guard_stdout))
+}
+
+fn print_gaps(gaps: &[BlockGap]) {
+    let gaps = gaps.iter().map(format_gap).collect::<Vec<_>>();
+    let gaps = gaps.join(", ");
+    info!("Block Gaps found: {gaps}");
+}
+
+fn format_gap(bg: &BlockGap) -> String {
+    format!(
+        "BlockGap(from: {}, to: {})",
+        bg.from.to_hex_64(),
+        bg.to.to_hex_64()
+    )
 }

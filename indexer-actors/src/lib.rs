@@ -8,7 +8,7 @@ pub mod ticker;
 pub mod virtual_chain_processor;
 pub mod virtual_chain_syncer;
 
-pub(crate) mod util;
+pub mod util;
 
 #[derive(Debug, Clone, Copy)]
 pub struct BlockGap {

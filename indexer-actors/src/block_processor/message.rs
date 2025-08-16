@@ -12,18 +12,18 @@ pub enum BlockNotification {
 #[derive(Debug)]
 pub enum GapFillingProgress {
     Update {
-        to: [u8; 32],
+        target: [u8; 32],
         blocks: Vec<RpcBlock>,
     },
     Interrupted {
-        to: [u8; 32],
+        target: [u8; 32],
     },
     Finished {
-        to: [u8; 32],
+        target: [u8; 32],
         blocks: Vec<RpcBlock>,
     },
     Error {
-        to: [u8; 32],
+        target: [u8; 32],
         err: workflow_rpc::client::error::Error,
     },
 }

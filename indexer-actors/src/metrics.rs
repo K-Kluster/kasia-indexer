@@ -1,9 +1,9 @@
+use crate::util::ToHex64;
 use arc_swap::ArcSwap;
+use fstr::FStr;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-
-use crate::util::ToHex64;
 
 #[cfg(feature = "serde")]
 use serde::Serialize;
@@ -13,7 +13,7 @@ use utoipa::{ToSchema, schema};
 /// A snapshot of the indexer metrics.
 /// This structure contains a copy of all metric counters as simple u64 values.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", serde_with::serde_as, derive(Serialize))]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 #[cfg_attr(feature = "utoipa", derive(ToSchema))]
 pub struct IndexerMetricsSnapshot {
     /// Number of handshakes indexed by sender
@@ -30,12 +30,10 @@ pub struct IndexerMetricsSnapshot {
     pub blocks_processed: u64,
     /// Latest block hash processed
     #[cfg_attr(feature = "utoipa", schema(value_type = String, format = "hex"))]
-    #[cfg_attr(feature = "serde", serde_as(as = "serde_with::hex::Hex"))]
-    pub latest_block: [u8; 32],
+    pub latest_block: FStr<64>,
     /// Latest accepting block hash
     #[cfg_attr(feature = "utoipa", schema(value_type = String, format = "hex"))]
-    #[cfg_attr(feature = "serde", serde_as(as = "serde_with::hex::Hex"))]
-    pub latest_accepting_block: [u8; 32],
+    pub latest_accepting_block: FStr<64>,
     /// Number of unknown sender entries
     pub unknown_sender_entries: u64,
     pub resolved_senders: u64,
@@ -55,11 +53,11 @@ impl Display for IndexerMetricsSnapshot {
         writeln!(f, "  Payments by receiver: {}", self.payments_by_receiver)?;
         writeln!(f, "  Contextual messages: {}", self.contextual_messages)?;
         writeln!(f, "  Blocks processed: {}", self.blocks_processed)?;
-        writeln!(f, "  Latest block: {}", self.latest_block.to_hex_64())?;
+        writeln!(f, "  Latest block: {}", self.latest_block)?;
         writeln!(
             f,
             "  Latest accepting block: {}",
-            self.latest_accepting_block.to_hex_64()
+            self.latest_accepting_block
         )?;
         writeln!(
             f,
@@ -86,9 +84,9 @@ pub struct IndexerMetrics {
     /// Number of blocks processed
     pub blocks_processed: AtomicU64,
     /// Latest block hash processed
-    pub latest_block: ArcSwap<[u8; 32]>,
+    pub latest_block: ArcSwap<FStr<64>>,
     /// Latest accepting block hash
-    pub latest_accepting_block: ArcSwap<[u8; 32]>,
+    pub latest_accepting_block: ArcSwap<FStr<64>>,
     /// Number of unknown sender entries
     pub unknown_sender_entries: AtomicU64,
     pub resolved_sender: AtomicU64,
@@ -179,12 +177,13 @@ impl IndexerMetrics {
 
     /// Set latest block hash
     pub fn set_latest_block(&self, hash: [u8; 32]) {
-        self.latest_block.store(Arc::new(hash));
+        self.latest_block.store(Arc::new(hash.to_hex_64()));
     }
 
     /// Set latest accepting block hash
     pub fn set_latest_accepting_block(&self, hash: [u8; 32]) {
-        self.latest_accepting_block.store(Arc::new(hash));
+        self.latest_accepting_block
+            .store(Arc::new(hash.to_hex_64()));
     }
 
     /// Get current handshakes by sender count
@@ -217,15 +216,6 @@ impl IndexerMetrics {
         self.blocks_processed.load(Ordering::Relaxed)
     }
 
-    /// Get latest block hash
-    pub fn get_latest_block(&self) -> [u8; 32] {
-        *self.latest_block.load().as_ref()
-    }
-
-    /// Get latest accepting block hash
-    pub fn get_latest_accepting_block(&self) -> [u8; 32] {
-        *self.latest_accepting_block.load().as_ref()
-    }
     pub fn increment_pruned_blocks(&self, pruned_blocks: u64) {
         self.pruned_blocks
             .fetch_add(pruned_blocks, Ordering::Relaxed);
