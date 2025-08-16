@@ -362,6 +362,12 @@ dependencies = [
 
 [[package]]
 name = "bon"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8db9474d97da053f4d83bd5232dcc985ebe7abc621beb5cd24f80b0ac4dbed3"
+
+[[package]]
+name = "bon"
 version = "3.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f61138465baf186c63e8d9b6b613b508cd832cba4ce93cf37ce5f096f91ac1a6"
@@ -1046,6 +1052,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fstr"
+version = "0.2.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17e4d821c226048ee351e9f7cf8554b5f226ca41b35ffe632eddaa3a8934da2f"
+
+[[package]]
 name = "futures"
 version = "0.3.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1560,13 +1572,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "bon 0.1.0",
  "dotenv",
  "envy",
  "faster-hex 0.10.0",
  "fjall",
  "flume",
  "futures-util",
- "indexer-lib",
+ "indexer-actors",
+ "indexer-db",
  "kaspa-addresses",
  "kaspa-rpc-core",
  "kaspa-wrpc-client",
@@ -1586,12 +1600,54 @@ dependencies = [
 ]
 
 [[package]]
+name = "indexer-actors"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "bon 3.6.4",
+ "faster-hex 0.10.0",
+ "fjall",
+ "flume",
+ "fstr",
+ "futures-util",
+ "indexer-db",
+ "kaspa-consensus-core",
+ "kaspa-rpc-core",
+ "kaspa-wrpc-client",
+ "protocol",
+ "ringmap",
+ "serde",
+ "serde_with",
+ "thiserror 2.0.12",
+ "tokio",
+ "tracing",
+ "utoipa",
+ "workflow-core",
+ "workflow-rpc",
+ "workflow-serializer",
+]
+
+[[package]]
+name = "indexer-db"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arrayref",
+ "fjall",
+ "kaspa-addresses",
+ "kaspa-consensus-core",
+ "kaspa-txscript",
+ "zerocopy",
+]
+
+[[package]]
 name = "indexer-lib"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "arc-swap",
- "bon",
+ "bon 3.6.4",
  "bytemuck",
  "fjall",
  "flume",

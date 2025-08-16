@@ -6,11 +6,11 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
-use indexer_lib::database::messages::{
-    AddressPayload, TxIdToPaymentPartition,
-    payments::{PaymentByReceiverPartition, PaymentBySenderPartition},
+use indexer_db::AddressPayload;
+use indexer_db::messages::payment::{
+    PaymentByReceiverPartition, PaymentBySenderPartition, TxIdToPaymentPartition,
 };
-use indexer_lib::database::processing::TxIDToAcceptancePartition;
+use indexer_db::processing::tx_id_to_acceptance::TxIDToAcceptancePartition;
 use serde::{Deserialize, Serialize};
 use tokio::task::spawn_blocking;
 use utoipa::{IntoParams, ToSchema};
@@ -137,17 +137,15 @@ async fn get_payments_by_sender(
                 Err(e) => bail!("Failed to get payment data: {}", e),
             };
 
-            let (accepting_block, accepting_daa_score) = match state
+                        let (accepting_block, accepting_daa_score) = match state
                 .tx_id_to_acceptance_partition
-                .get_by_tx_id(&rtx, &key.tx_id)
-                .flatten()
-                .next()
+                .acceptance_by_tx_id_rtx(&rtx, &key.tx_id)?
             {
-                Some((acceptance_key, _)) => (
+                Some(acceptance) => (
                     Some(faster_hex::hex_string(
-                        &acceptance_key.accepted_by_block_hash,
+                        &acceptance.header.accepting_block_hash,
                     )),
-                    Some(u64::from_be_bytes(acceptance_key.accepted_at_daa)),
+                    Some(acceptance.header.accepting_daa.into()),
                 ),
                 None => (None, None),
             };
@@ -162,9 +160,9 @@ async fn get_payments_by_sender(
                 tx_id: faster_hex::hex_string(&key.tx_id),
                 sender: Some(address_clone.clone()),
                 receiver: receiver_address,
-                block_time: u64::from_be_bytes(key.block_time),
+                block_time: key.block_time.into(),
                 amount: payment_data.amount(),
-                message: faster_hex::hex_string(payment_data.message()),
+                message: faster_hex::hex_string(payment_data.sealed_hex()),
                 accepting_block,
                 accepting_daa_score,
             });
@@ -250,17 +248,15 @@ async fn get_payments_by_receiver(
                 Err(e) => bail!("Failed to get payment data: {}", e),
             };
 
-            let (accepting_block, accepting_daa_score) = match state
+                        let (accepting_block, accepting_daa_score) = match state
                 .tx_id_to_acceptance_partition
-                .get_by_tx_id(&rtx, &key.tx_id)
-                .flatten()
-                .next()
+                .acceptance_by_tx_id_rtx(&rtx, &key.tx_id)?
             {
-                Some((acceptance_key, _)) => (
+                Some(acceptance) => (
                     Some(faster_hex::hex_string(
-                        &acceptance_key.accepted_by_block_hash,
+                        &acceptance.header.accepting_block_hash,
                     )),
-                    Some(u64::from_be_bytes(acceptance_key.accepted_at_daa)),
+                    Some(acceptance.header.accepting_daa.into()),
                 ),
                 None => (None, None),
             };
@@ -280,9 +276,9 @@ async fn get_payments_by_receiver(
                 tx_id: faster_hex::hex_string(&key.tx_id),
                 sender: sender_address,
                 receiver: receiver_address,
-                block_time: u64::from_be_bytes(key.block_time),
+                block_time: key.block_time.into(),
                 amount: payment_data.amount(),
-                message: faster_hex::hex_string(payment_data.message()),
+                message: faster_hex::hex_string(payment_data.sealed_hex()),
                 accepting_block,
                 accepting_daa_score,
             });
