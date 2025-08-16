@@ -36,6 +36,7 @@ use protocol::operation::{
 use std::collections::HashMap;
 use tracing::{debug, error, info, trace};
 
+#[derive(bon::Builder)]
 pub struct BlockProcessor {
     notification_rx: flume::Receiver<BlockNotification>,
     gap_result_rx: flume::Receiver<GapFillingProgress>,

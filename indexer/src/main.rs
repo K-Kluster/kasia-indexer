@@ -1,33 +1,27 @@
 use dotenv::dotenv;
 use fjall::Config;
-use indexer_lib::database::headers::{
-    BlockCompactHeaderPartition, BlockGapsPartition, DaaIndexPartition,
+use futures_util::TryFutureExt;
+use indexer_actors::block_processor::BlockProcessor;
+use indexer_actors::data_source::DataSource;
+use indexer_actors::metrics::{IndexerMetricsSnapshot, create_shared_metrics_from_snapshot};
+use indexer_actors::periodic_processor::PeriodicProcessor;
+use indexer_actors::virtual_chain_processor::VirtualProcessor;
+use indexer_db::headers::block_compact_headers::BlockCompactHeaderPartition;
+use indexer_db::headers::block_gaps::BlockGapsPartition;
+use indexer_db::headers::daa_index::DaaIndexPartition;
+use indexer_db::messages::contextual_message::ContextualMessageBySenderPartition;
+use indexer_db::messages::handshake::{
+    HandshakeByReceiverPartition, HandshakeBySenderPartition, TxIdToHandshakePartition,
 };
-use indexer_lib::database::messages::{
-    ContextualMessageBySenderPartition, HandshakeByReceiverPartition, HandshakeBySenderPartition,
-    PaymentByReceiverPartition, PaymentBySenderPartition, TxIdToHandshakePartition,
-    TxIdToPaymentPartition,
+use indexer_db::messages::payment::{
+    PaymentByReceiverPartition, PaymentBySenderPartition, TxIdToPaymentPartition,
 };
-use indexer_lib::database::processing::{
-    AcceptingBlockToTxIDPartition, PendingSenderResolutionPartition, SkipTxByBlockPartition,
-    SkipTxPartition, TxIDToAcceptancePartition, UnknownAcceptingDaaPartition, UnknownTxPartition,
-};
-use indexer_lib::fifo_set::FifoSet;
-use indexer_lib::metrics::IndexerMetricsSnapshot;
-use indexer_lib::periodic_processor::{Notification, PeriodicProcessor, run_ticker};
-use indexer_lib::virtual_chain_processor::VirtualChainProcessor;
-use indexer_lib::{
-    APP_IS_RUNNING,
-    block_processor::BlockProcessor,
-    database::{self},
-    metrics::create_shared_metrics_from_snapshot,
-    resolver::Resolver,
-    selected_chain_syncer::SelectedChainSyncer,
-    subscriber::Subscriber,
-};
+use indexer_db::metadata::MetadataPartition;
+use indexer_db::processing::accepting_block_to_txs::AcceptingBlockToTxIDPartition;
+use indexer_db::processing::pending_senders::PendingSenderResolutionPartition;
+use indexer_db::processing::tx_id_to_acceptance::TxIDToAcceptancePartition;
 use kaspa_wrpc_client::client::{ConnectOptions, ConnectStrategy};
 use kaspa_wrpc_client::prelude::NetworkType;
-use parking_lot::Mutex;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -35,12 +29,13 @@ use std::time::Duration;
 use time::macros::format_description;
 use tracing::{error, info};
 
+use crate::context::{IndexerContext, get_indexer_context};
+use indexer_actors::ticker::Ticker;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
     EnvFilter, Layer, filter::Directive, layer::SubscriberExt, util::SubscriberInitExt,
 };
-
-use crate::context::{IndexerContext, get_indexer_context};
+use workflow_core::channel::Channel;
 
 mod api;
 mod context;
@@ -58,9 +53,9 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::new(context.db_path).max_write_buffer_size(512 * 1024 * 1024);
     let tx_keyspace = config.open_transactional()?;
-    let reorg_lock = Arc::new(Mutex::new(()));
+    let virtual_daa = Arc::new(AtomicU64::new(0));
     // Partitions
-    let metadata_partition = database::metadata::MetadataPartition::new(&tx_keyspace)?;
+    let metadata_partition = MetadataPartition::new(&tx_keyspace)?;
     {
         metadata_partition.0.inner().major_compact()?;
     }
@@ -71,12 +66,8 @@ async fn main() -> anyhow::Result<()> {
     let payment_by_receiver_partition = PaymentByReceiverPartition::new(&tx_keyspace)?;
     let tx_id_to_payment_partition = TxIdToPaymentPartition::new(&tx_keyspace)?;
     let tx_id_to_acceptance_partition = TxIDToAcceptancePartition::new(&tx_keyspace)?;
-    let skip_tx_partition = SkipTxPartition::new(&tx_keyspace)?;
-    let skip_tx_by_block_partition = SkipTxByBlockPartition::new(&tx_keyspace)?;
     let block_compact_header_partition = BlockCompactHeaderPartition::new(&tx_keyspace)?;
     let acceptance_to_tx_id_partition = AcceptingBlockToTxIDPartition::new(&tx_keyspace)?;
-    let unknown_tx_partition = UnknownTxPartition::new(&tx_keyspace)?;
-    let unknown_accepting_daa_partition = UnknownAcceptingDaaPartition::new(&tx_keyspace)?;
     let pending_sender_resolution_partition = PendingSenderResolutionPartition::new(&tx_keyspace)?;
     let handshake_by_sender_partition = HandshakeBySenderPartition::new(&tx_keyspace)?;
     let payment_by_sender_partition = PaymentBySenderPartition::new(&tx_keyspace)?;
@@ -85,8 +76,9 @@ async fn main() -> anyhow::Result<()> {
     info!(
         "Gaps exist: {:?}",
         block_gaps_partition
-            .get_all_gaps_since_daa(0)
+            .get_all_gaps()
             .collect::<Result<Vec<_>, _>>()
+            .unwrap()
     );
 
     let metrics = create_shared_metrics_from_snapshot(IndexerMetricsSnapshot {
@@ -98,178 +90,115 @@ async fn main() -> anyhow::Result<()> {
         blocks_processed: block_compact_header_partition.len()? as u64,
         latest_block: metadata_partition
             .get_latest_block_cursor_rtx(&tx_keyspace.read_tx())?
-            .unwrap_or_default()
-            .hash,
+            .unwrap_or_default(),
         latest_accepting_block: metadata_partition
             .get_latest_accepting_block_cursor()?
             .unwrap_or_default()
-            .hash,
-        unknown_daa_entries: unknown_accepting_daa_partition.len()? as u64,
+            .block_hash,
         unknown_sender_entries: pending_sender_resolution_partition.len()? as u64,
-        unknown_tx_entries: 0,
-        resolved_daa: 0,
         resolved_senders: 0,
+        pruned_blocks: 0,
     });
 
     let (block_intake_tx, block_intake_rx) = flume::bounded(4096);
-
     let (vcc_intake_tx, vcc_intake_rx) = flume::bounded(4096);
-    let (shutdown_block_worker_tx, shutdown_block_worker_rx) = flume::bounded(1);
-    let (shutdown_acceptance_worker_tx, shutdown_acceptance_worker_rx) = flume::bounded(1);
-    let virtual_daa = Arc::new(AtomicU64::new(0));
+    let (gap_result_tx, gap_result_rx) = flume::bounded(1024);
+    let (processed_block_tx, processed_block_rx) = flume::bounded(4096);
+    let command_channel = {
+        let (command_tx, command_rx) = workflow_core::channel::bounded(1024);
+        Channel {
+            sender: command_tx,
+            receiver: command_rx,
+        }
+    };
+    let (syncer_tx, syncer_rx) = flume::bounded(4);
+    let (shutdown_data_source_tx, shutdown_data_source_rx) = tokio::sync::oneshot::channel();
+    let (periodic_intake_tx, periodic_intake_rx) = workflow_core::channel::bounded(1);
+    let (periodic_resp_tx, periodic_resp_rx) = workflow_core::channel::bounded(1);
+    let (shutdown_ticker_tx, shutdown_ticker_rx) = tokio::sync::mpsc::channel(1);
 
-    let mut block_worker = BlockProcessor::builder()
-        .processed_blocks(FifoSet::new(256))
-        .intake(block_intake_rx)
-        .shutdown(shutdown_block_worker_rx)
+    let mut block_processor = BlockProcessor::builder()
+        .notification_rx(block_intake_rx)
+        .gap_result_rx(gap_result_rx)
+        .gap_result_tx(gap_result_tx)
+        .processed_block_tx(processed_block_tx)
+        .command_tx(command_channel.sender.clone())
         .tx_keyspace(tx_keyspace.clone())
+        .blocks_gap_partition(block_gaps_partition.clone())
+        .runtime_handle(tokio::runtime::Handle::current())
         .metadata_partition(metadata_partition.clone())
+        .block_compact_header_partition(block_compact_header_partition.clone())
+        .daa_index_partition(block_daa_index_partition.clone())
         .handshake_by_receiver_partition(handshake_by_receiver_partition.clone())
+        .handshake_by_sender_partition(handshake_by_sender_partition.clone())
         .tx_id_to_handshake_partition(tx_id_to_handshake_partition.clone())
-        .contextual_message_partition(contextual_message_partition.clone())
+        .contextual_message_by_sender_partition(contextual_message_partition.clone())
         .payment_by_receiver_partition(payment_by_receiver_partition.clone())
+        .payment_by_sender_partition(payment_by_sender_partition.clone())
         .tx_id_to_payment_partition(tx_id_to_payment_partition.clone())
         .tx_id_to_acceptance_partition(tx_id_to_acceptance_partition.clone())
-        .skip_tx_partition(skip_tx_partition.clone())
-        .skip_tx_by_block_partition(skip_tx_by_block_partition.clone())
-        .block_compact_header_partition(block_compact_header_partition.clone())
-        .metrics(metrics.clone())
-        .processed_txs(FifoSet::new(
-            300/*txs per block*/ * 255, /*max mergeset size*/
-        ))
-        .block_daa_index(block_daa_index_partition.clone())
+        .shared_metrics(metrics.clone())
         .build();
 
-    let mut acceptance_worker = VirtualChainProcessor::builder()
-        .daa_resolution_attempt_count(5)
-        .reorg_log(reorg_lock.clone())
-        .vcc_rx(vcc_intake_rx)
-        .shutdown(shutdown_acceptance_worker_rx)
+    let mut virtual_processor = VirtualProcessor::builder()
+        .synced_capacity(500_000)
+        .unsynced_capacity(3_000_000)
+        .processed_block_tx(processed_block_rx)
+        .realtime_vcc_tx(vcc_intake_rx)
+        .syncer_rx(syncer_rx)
+        .syncer_tx(syncer_tx)
+        .command_tx(command_channel.sender.clone())
         .tx_keyspace(tx_keyspace.clone())
         .metadata_partition(metadata_partition.clone())
-        .skip_tx_partition(skip_tx_partition.clone())
         .tx_id_to_acceptance_partition(tx_id_to_acceptance_partition.clone())
-        .acceptance_to_tx_id_partition(acceptance_to_tx_id_partition.clone())
-        .unknown_tx_partition(unknown_tx_partition.clone())
-        .unknown_accepting_daa_partition(unknown_accepting_daa_partition.clone())
-        .block_compact_header_partition(block_compact_header_partition.clone())
-        .pending_sender_resolution_partition(pending_sender_resolution_partition.clone())
-        .build();
-
-    let (resolver_block_request_tx, resolver_block_request_rx) =
-        workflow_core::channel::bounded(16384);
-    // workflow_core::channel::unbounded();
-    let (resolver_sender_request_tx, resolver_sender_request_rx) =
-        workflow_core::channel::bounded(16384);
-    // workflow_core::channel::unbounded();
-    let (resolver_response_tx, resolver_response_rx) = workflow_core::channel::bounded(32768);
-    // let (resolver_response_tx, resolver_response_rx) = workflow_core::channel::unbounded();
-    let (shutdown_resolver_tx, shutdown_resolver_rx) = tokio::sync::oneshot::channel();
-
-    let requests_in_progress = Arc::new(AtomicU64::new(0));
-    let mut resolver = Resolver::new(
-        shutdown_resolver_rx,
-        resolver_block_request_rx,
-        resolver_sender_request_rx,
-        resolver_response_tx.clone(),
-        context.rpc_client.clone(),
-        requests_in_progress.clone(),
-    );
-
-    let (scan_worker_job_done_tx, scan_worker_job_done_rx) = workflow_core::channel::bounded(1);
-
-    let mut scan_worker = PeriodicProcessor::builder()
-        .tick_and_resolution_rx(resolver_response_rx)
-        .resolver_request_block_tx(resolver_block_request_tx)
-        .resolver_request_sender_tx(resolver_sender_request_tx)
-        .job_done_tx(scan_worker_job_done_tx)
-        .reorg_lock(reorg_lock)
-        .tx_keyspace(tx_keyspace.clone())
-        .tx_id_to_acceptance_partition(tx_id_to_acceptance_partition.clone())
-        .unknown_tx_partition(unknown_tx_partition.clone())
-        .skip_tx_partition(skip_tx_partition.clone())
-        .skip_tx_by_block_partition(skip_tx_by_block_partition.clone())
-        .unknown_accepting_daa_partition(unknown_accepting_daa_partition.clone())
-        .block_compact_header_partition(block_compact_header_partition.clone())
-        .daa_resolution_attempt_count(5)
+        .accepting_block_to_tx_id_partition(acceptance_to_tx_id_partition.clone())
         .pending_sender_resolution_partition(pending_sender_resolution_partition.clone())
         .handshake_by_receiver_partition(handshake_by_receiver_partition.clone())
         .handshake_by_sender_partition(handshake_by_sender_partition.clone())
         .contextual_message_by_sender_partition(contextual_message_partition.clone())
         .payment_by_receiver_partition(payment_by_receiver_partition.clone())
         .payment_by_sender_partition(payment_by_sender_partition.clone())
-        .tx_id_to_payment_partition(tx_id_to_payment_partition.clone())
-        .tx_id_to_handshake_partition(tx_id_to_handshake_partition.clone())
-        .metrics(metrics.clone())
-        .metrics_snapshot_interval(Duration::from_secs(10))
-        .metadata_partition(metadata_partition.clone())
-        .resolver_requests_in_progress(requests_in_progress)
-        .block_daa_index(block_daa_index_partition)
-        .virtual_daa(virtual_daa.clone())
-        .accepting_block_to_tx_id_partition(acceptance_to_tx_id_partition.clone())
+        .runtime(tokio::runtime::Handle::current())
         .build();
 
-    let (selected_chain_intake_tx, selected_chain_intake_rx) = tokio::sync::mpsc::channel(4096);
-    let (historical_sync_done_tx, historical_sync_done_rx) = tokio::sync::mpsc::channel(1);
-
-    let (shutdown_selected_chain_syncer_tx, shutdown_selected_chain_syncer_rx) =
-        tokio::sync::oneshot::channel();
-    let mut selected_chain_syncer = SelectedChainSyncer::new(
-        context.rpc_client.clone(),
-        metadata_partition.clone(),
-        block_compact_header_partition.clone(),
-        selected_chain_intake_rx,
-        historical_sync_done_rx,
-        historical_sync_done_tx,
-        vcc_intake_tx,
-        shutdown_selected_chain_syncer_rx,
-    );
-
-    let (shutdown_subscriber_tx, shutdown_subscriber_rx) = tokio::sync::oneshot::channel();
-    let mut subscriber = Subscriber::new(
-        context.rpc_client.clone(),
-        block_intake_tx.clone(),
-        shutdown_subscriber_rx,
-        block_gaps_partition.clone(),
-        selected_chain_intake_tx,
-        metadata_partition.get_latest_block_cursor_rtx(&tx_keyspace.read_tx())?,
-        virtual_daa.clone(),
-    );
-
-    let (shutdown_ticker_tx, shutdown_ticker_rx) = tokio::sync::oneshot::channel();
-    tokio::spawn(run_ticker(
-        shutdown_ticker_rx,
-        scan_worker_job_done_rx,
-        resolver_response_tx.clone(),
+    let mut ticker = Ticker::new(
         Duration::from_secs(10),
-    ));
+        shutdown_ticker_rx,
+        periodic_intake_tx,
+        periodic_resp_rx,
+    );
 
-    // Spawn workers
-    let block_worker_handle = std::thread::spawn(move || {
-        block_worker
-            .process()
-            .inspect(|_| info!("block worker has stopped"))
-            .inspect_err(|err| error!("block worker stopped with error: {err}"))
-    });
-    let acceptance_worker_handle = std::thread::spawn(move || {
-        acceptance_worker
-            .process()
-            .inspect(|_| info!("acceptance worker has stopped"))
-            .inspect_err(|err| error!("acceptance worker stopped with error: {err}"))
-    });
-    let scan_worker_handle = std::thread::spawn(move || {
-        scan_worker
-            .worker()
-            .inspect_err(|err| {
-                error!("scan worker stopped with error: {err}");
-            })
-            .inspect(|_| info!("scan worker has stopped"))
-    });
+    let periodic_processor = PeriodicProcessor::builder()
+        .pruning_depth(3_000_000)
+        .job_trigger_rx(periodic_intake_rx)
+        .resp_tx(periodic_resp_tx)
+        .metrics(metrics.clone())
+        .virtual_daa(virtual_daa.clone())
+        .tx_keyspace(tx_keyspace.clone())
+        .daa_index_partition(block_daa_index_partition.clone())
+        .block_compact_header_partition(block_compact_header_partition.clone())
+        .accepting_block_to_tx_id_partition(acceptance_to_tx_id_partition.clone())
+        .metadata_partition(metadata_partition.clone())
+        .tx_id_to_handshake_partition(tx_id_to_handshake_partition.clone())
+        .tx_id_to_payment_partition(tx_id_to_payment_partition.clone())
+        .payment_by_sender_partition(payment_by_sender_partition.clone())
+        .handshake_by_sender_partition(handshake_by_sender_partition.clone())
+        .build();
 
-    let resolver_handle = tokio::spawn(async move { resolver.process().await });
-    let selected_chain_syncer_handle =
-        tokio::spawn(async move { selected_chain_syncer.process().await });
-    let subscriber_handle = tokio::spawn(async move { subscriber.task().await });
+    let mut data_source = DataSource::new(
+        context.rpc_client.clone(),
+        block_intake_tx,
+        vcc_intake_tx,
+        shutdown_data_source_rx,
+        virtual_daa.clone(),
+        command_channel,
+    );
+
+    let block_processor_handle = std::thread::spawn(move || block_processor.process());
+    let virtual_processor_handle = std::thread::spawn(move || virtual_processor.process());
+    let periodic_processor_handle = std::thread::spawn(move || periodic_processor.process());
+    let data_source_handle = tokio::spawn(async move { data_source.task().await });
+    let ticker_handle = tokio::spawn(async move { ticker.process().await });
 
     let api_service = api::v1::Api::new(
         tx_keyspace.clone(),
@@ -304,67 +233,43 @@ async fn main() -> anyhow::Result<()> {
     // Handle shutdown
     tokio::signal::ctrl_c().await?;
     info!("Termination signal received. Shutting down...");
-    APP_IS_RUNNING.store(false, std::sync::atomic::Ordering::Relaxed);
 
     _ = api_shutdown_tx
         .send(())
         .inspect_err(|_err| error!("failed to shutdown api"));
-    _ = shutdown_subscriber_tx
+
+    _ = shutdown_data_source_tx
         .send(())
-        .inspect_err(|_err| error!("failed to shutdown subscriber"));
-    _ = shutdown_block_worker_tx
-        .send(())
-        .inspect_err(|err| error!("failed to shutdown block worker: {}", err));
-    info!("try shutdown acceptance worker");
-    _ = shutdown_acceptance_worker_tx
-        .send(())
-        .inspect_err(|err| error!("failed to shutdown acceptance worker: {}", err));
-    info!("try shutdown selected_chain_syncer");
-    _ = shutdown_selected_chain_syncer_tx
-        .send(())
-        .inspect_err(|_err| error!("failed to shutdown chain"));
-    info!("try shutdown ticker");
+        .inspect_err(|_err| error!("failed to shutdown data source"));
     _ = shutdown_ticker_tx
         .send(())
         .inspect_err(|_err| error!("failed to shutdown ticker"));
-    info!("try shutdown scan worker");
-    _ = resolver_response_tx
-        .send(Notification::Shutdown)
-        .await
-        .inspect_err(|_err| error!("failed to shutdown scan worker"));
-    info!("try shutdown resolver");
-    _ = shutdown_resolver_tx
-        .send(())
-        .inspect_err(|_err| error!("failed to shutdown resolver"));
-
     // Await on all tasks to complete
     info!("waiting for api finish");
     _ = api_handle.await.inspect(|_| info!("api has stopped"));
 
-    info!("waiting for resolver finish");
-    _ = resolver_handle
+    info!("waiting for data source finish");
+    _ = data_source_handle
         .await
-        .inspect(|_| info!("resolver has stopped")); // todo logs
-    info!("waiting for syncer finish");
-    _ = selected_chain_syncer_handle
-        .await
-        .inspect(|_| info!("selected chain syncer has stopped"))?; // todo logs
-    info!("waiting for subscriber finish");
-    _ = subscriber_handle
-        .await
-        .inspect(|_| info!("subscriber has stopped"))?; // todo logs
-    info!("waiting for acceptance worker finish");
-    _ = acceptance_worker_handle
+        .inspect(|_| info!("data source has stopped"));
+
+    info!("waiting for ticker finish");
+    _ = ticker_handle.await.inspect(|_| info!("ticker has stopped"));
+
+    info!("waiting for block processor finish");
+    _ = block_processor_handle
         .join()
-        .expect("failed to join acceptance worker"); // todo logs
-    info!("waiting for scan worker finish");
-    _ = scan_worker_handle
+        .expect("failed to join block_processor thread");
+
+    info!("waiting for virtual processor finish");
+    _ = virtual_processor_handle
         .join()
-        .expect("failed to join scan_worker thread"); // todo logs
-    info!("waiting for block worker finish");
-    _ = block_worker_handle
+        .expect("failed to join virtual_processor thread");
+
+    info!("waiting for periodic processor finish");
+    _ = periodic_processor_handle
         .join()
-        .expect("failed to join block_worker thread"); // todo logs
+        .expect("failed to join periodic_processor thread");
 
     info!("All tasks shut down.");
 

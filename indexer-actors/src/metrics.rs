@@ -13,7 +13,7 @@ use utoipa::{ToSchema, schema};
 /// A snapshot of the indexer metrics.
 /// This structure contains a copy of all metric counters as simple u64 values.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(feature = "serde", serde_with::serde_as, derive(Serialize))]
 #[cfg_attr(feature = "utoipa", derive(ToSchema))]
 pub struct IndexerMetricsSnapshot {
     /// Number of handshakes indexed by sender
@@ -30,9 +30,11 @@ pub struct IndexerMetricsSnapshot {
     pub blocks_processed: u64,
     /// Latest block hash processed
     #[cfg_attr(feature = "utoipa", schema(value_type = String, format = "hex"))]
+    #[cfg_attr(feature = "serde", serde_as(as = "serde_with::hex::Hex"))]
     pub latest_block: [u8; 32],
     /// Latest accepting block hash
     #[cfg_attr(feature = "utoipa", schema(value_type = String, format = "hex"))]
+    #[cfg_attr(feature = "serde", serde_as(as = "serde_with::hex::Hex"))]
     pub latest_accepting_block: [u8; 32],
     /// Number of unknown sender entries
     pub unknown_sender_entries: u64,

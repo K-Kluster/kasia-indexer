@@ -32,6 +32,7 @@ use std::collections::VecDeque;
 use tracing::error;
 use workflow_core::channel::Sender;
 
+#[derive(bon::Builder)]
 pub struct VirtualProcessor {
     synced_capacity: usize,
     unsynced_capacity: usize,

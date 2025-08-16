@@ -8,7 +8,6 @@ members = [
 ]
 resolver = "3"
 
-
 [workspace.dependencies]
 anyhow = "1.0.98"
 arrayref = "0.3.9"
@@ -31,6 +30,7 @@ parking_lot = "0.12.4"
 ringmap = "0.1.4"
 rolling-file = "0.2.0"
 serde = "1.0"
+serde_with = "3.14.0"
 thiserror = "2.0.12"
 time = "0.3.41"
 tokio = "1.45.1"
@@ -47,6 +47,8 @@ dotenv = "0.15.0"
 zerocopy = "0.8.26"
 
 protocol = { path = "protocol" }
+
+indexer-actors = { path = "indexer-actors" }
 indexer-lib = { path = "indexer-lib" }
 indexer-db = { path = "indexer-db" }
 

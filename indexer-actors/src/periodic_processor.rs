@@ -9,6 +9,7 @@ use indexer_db::processing::accepting_block_to_txs::AcceptingBlockToTxIDPartitio
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::error;
+use workflow_core::channel::{Receiver, Sender};
 
 pub enum Intake {
     DoJob,
@@ -20,10 +21,11 @@ pub enum Response {
     Stopped,
 }
 
+#[derive(bon::Builder)]
 pub struct PeriodicProcessor {
     pruning_depth: u64,
-    job_trigger_rx: flume::Receiver<Intake>,
-    resp_tx: flume::Sender<Response>,
+    job_trigger_rx: Receiver<Intake>,
+    resp_tx: Sender<Response>,
     metrics: SharedMetrics,
     virtual_daa: Arc<AtomicU64>,
 
@@ -41,13 +43,13 @@ pub struct PeriodicProcessor {
 impl PeriodicProcessor {
     pub fn process(&self) -> anyhow::Result<()> {
         loop {
-            match self.job_trigger_rx.recv()? {
+            match self.job_trigger_rx.recv_blocking()? {
                 Intake::Shutdown => {
                     return Ok(());
                 }
                 Intake::DoJob => {
                     self.do_job()?;
-                    self.resp_tx.send(Response::JobDone)?;
+                    self.resp_tx.send_blocking(Response::JobDone)?;
                 }
             }
         }
@@ -114,7 +116,7 @@ impl Drop for PeriodicProcessor {
     fn drop(&mut self) {
         _ = self
             .resp_tx
-            .send(Response::Stopped)
+            .send_blocking(Response::Stopped)
             .inspect_err(|_err| error!("periodic processor sending `stopped` failed"));
     }
 }

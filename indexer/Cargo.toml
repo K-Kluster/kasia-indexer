@@ -27,5 +27,6 @@ utoipa = { workspace = true, features = ["axum_extras"] }
 utoipa-swagger-ui = { workspace = true, features = ["axum"] }
 workflow-core = { workspace = true }
 
-indexer-lib = { path = "../indexer-lib", features = ["utoipa"] }
-
+indexer-db = { path = "../indexer-db" }
+bon = "0.1.0"
+indexer-actors = { path = "../indexer-actors", features = ["serde", "utoipa"] }

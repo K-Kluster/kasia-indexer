@@ -2,11 +2,11 @@ pub mod block_gap_filler;
 pub mod block_processor;
 pub mod data_source;
 pub mod fifo_set;
+pub mod metrics;
 pub mod periodic_processor;
+pub mod ticker;
 pub mod virtual_chain_processor;
 pub mod virtual_chain_syncer;
-
-pub mod metrics;
 
 pub(crate) mod util;
 

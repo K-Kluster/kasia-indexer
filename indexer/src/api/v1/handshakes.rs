@@ -5,11 +5,11 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
-use indexer_lib::database::messages::TxIdToHandshakePartition;
-use indexer_lib::database::messages::handshakes::{
-    AddressPayload, HandshakeByReceiverPartition, HandshakeBySenderPartition,
+use indexer_db::AddressPayload;
+use indexer_db::messages::handshake::{
+    HandshakeByReceiverPartition, HandshakeBySenderPartition, TxIdToHandshakePartition,
 };
-use indexer_lib::database::processing::TxIDToAcceptancePartition;
+use indexer_db::processing::tx_id_to_acceptance::TxIDToAcceptancePartition;
 use kaspa_rpc_core::{RpcAddress, RpcNetworkType};
 use serde::{Deserialize, Serialize};
 use tokio::task::spawn_blocking;
@@ -125,7 +125,7 @@ async fn get_handshakes_by_sender(
                 Ok(hs) => hs,
                 Err(e) => bail!("Database error: {}", e),
             };
-            let block_time = u64::from_be_bytes(handshake.block_time);
+            let block_time = handshake.block_time.into();
 
             let tx_id = faster_hex::hex_string(&handshake.tx_id);
             let sender_str = match to_rpc_address(&handshake.sender, RpcNetworkType::Mainnet) {
@@ -141,21 +141,21 @@ async fn get_handshakes_by_sender(
 
             let acceptance = state
                 .tx_id_to_acceptance_partition
-                .get_by_tx_id(&rtx, &handshake.tx_id)
-                .flatten()
-                .next();
+                .acceptance_by_tx_id_rtx(&rtx, &handshake.tx_id)?;
 
-            let (accepting_block, accepting_daa_score) = if let Some((key, _)) = acceptance {
+            let (accepting_block, accepting_daa_score) = if let Some(acceptance) = acceptance {
                 (
-                    Some(faster_hex::hex_string(&key.accepted_by_block_hash)),
-                    Some(u64::from_be_bytes(key.accepted_at_daa)),
+                    Some(faster_hex::hex_string(
+                        &acceptance.header.accepting_block_hash,
+                    )),
+                    Some(acceptance.header.accepting_daa.into()),
                 )
             } else {
                 (None, None)
             };
             let payload_bytes = match state
                 .tx_id_to_handshake_partition
-                .get_rtx(&rtx, handshake.tx_id)
+                .get_rtx(&rtx, &handshake.tx_id)
             {
                 Ok(Some(bts)) => bts,
                 Ok(None) => bail!("Missing handshake payload"),
@@ -242,14 +242,14 @@ async fn get_handshakes_by_receiver(
 
         for handshake_result in state
             .handshake_by_receiver_partition
-            .iter_by_receiver_from_block_time_rtx(&rtx, receiver, cursor)
+            .iter_by_receiver_from_block_time_rtx(&rtx, &receiver, cursor)
             .take(limit)
         {
             let (handshake, sender_payload) = match handshake_result {
                 Ok(res) => res,
                 Err(e) => bail!("Database error: {}", e),
             };
-            let block_time = u64::from_be_bytes(handshake.block_time);
+            let block_time = handshake.block_time.into();
 
             let tx_id = faster_hex::hex_string(&handshake.tx_id);
             let sender_str = match to_rpc_address(&sender_payload, RpcNetworkType::Mainnet) {
@@ -265,22 +265,23 @@ async fn get_handshakes_by_receiver(
 
             let acceptance = state
                 .tx_id_to_acceptance_partition
-                .get_by_tx_id(&rtx, &handshake.tx_id)
-                .flatten()
-                .next();
+                .acceptance_by_tx_id_rtx(&rtx, &handshake.tx_id)?;
+
             let payload_bytes = match state
                 .tx_id_to_handshake_partition
-                .get_rtx(&rtx, handshake.tx_id)
+                .get_rtx(&rtx, &handshake.tx_id)
             {
                 Ok(Some(bts)) => bts,
                 Ok(None) => bail!("Missing handshake payload"),
                 Err(e) => bail!("Database error: {}", e),
             };
             let message_payload = faster_hex::hex_string(payload_bytes.as_ref());
-            let (accepting_block, accepting_daa_score) = if let Some((key, _)) = acceptance {
+            let (accepting_block, accepting_daa_score) = if let Some(acceptance) = acceptance {
                 (
-                    Some(faster_hex::hex_string(&key.accepted_by_block_hash)),
-                    Some(u64::from_be_bytes(key.accepted_at_daa)),
+                    Some(faster_hex::hex_string(
+                        &acceptance.header.accepting_block_hash,
+                    )),
+                    Some(acceptance.header.accepting_daa.into()),
                 )
             } else {
                 (None, None)

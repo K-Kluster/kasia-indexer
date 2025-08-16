@@ -51,6 +51,32 @@ pub struct DataSource {
 }
 
 impl DataSource {
+    pub fn new(
+        rpc_client: KaspaRpcClient,
+        block_sender: flume::Sender<BlockNotification>,
+        vcc_sender: flume::Sender<RealTimeVccNotification>,
+        shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+        virtual_daa: Arc<AtomicU64>,
+        command_rx: workflow_core::channel::Channel<Command>,
+    ) -> Self {
+        let notification_channel = Channel::bounded(256);
+
+        Self {
+            rpc_client,
+            connected: false,
+            block_sender,
+            block_sender_closed: false,
+            vcc_sender,
+            vcc_sender_closed: false,
+            shutting_down: false,
+            shutdown_rx,
+            notification_channel,
+            listener_id: None,
+            virtual_daa,
+            command_rx,
+            requests_queue: VecDeque::new(),
+        }
+    }
     pub async fn task(&mut self) -> anyhow::Result<()> {
         let rpc_ctl_channel = self.rpc_client.rpc_ctl().multiplexer().channel();
         loop {

@@ -1,4 +1,4 @@
-use indexer_lib::database::messages::{AddressPayload, handshakes::EMPTY_VERSION};
+use indexer_db::{AddressPayload, EMPTY_VERSION};
 use kaspa_addresses::{Address, Version};
 use kaspa_rpc_core::{RpcAddress, RpcNetworkType};
 

@@ -133,10 +133,20 @@ impl PaymentByReceiverPartition {
     }
 }
 
-#[derive(Debug, FromBytes)]
+#[derive(Debug, FromBytes, Immutable)]
 pub struct PaymentData {
     pub amount: zerocopy::U64<zerocopy::LE>,
     pub sealed_hex: [u8],
+}
+
+impl SharedImmutable<PaymentData> {
+    pub fn amount(&self) -> u64 {
+        u64::from_le_bytes(self.inner.split_at(8).0.try_into().unwrap())
+    }
+
+    pub fn sealed_hex(&self) -> &[u8] {
+        self.inner.split_at(8).1
+    }
 }
 
 #[derive(Clone)]

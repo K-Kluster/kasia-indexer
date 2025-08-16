@@ -5,10 +5,9 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
-use indexer_lib::database::messages::{
-    AddressPayload, contextual_messages::ContextualMessageBySenderPartition,
-};
-use indexer_lib::database::processing::TxIDToAcceptancePartition;
+use indexer_db::AddressPayload;
+use indexer_db::messages::contextual_message::ContextualMessageBySenderPartition;
+use indexer_db::processing::tx_id_to_acceptance::TxIDToAcceptancePartition;
 use kaspa_rpc_core::RpcNetworkType;
 use serde::{Deserialize, Serialize};
 use tokio::task::spawn_blocking;
@@ -145,7 +144,7 @@ async fn get_contextual_messages_by_sender(
                 Err(e) => bail!("Database error: {}", e),
             };
 
-            let block_time = u64::from_be_bytes(message_key.block_time);
+            let block_time = message_key.block_time.into();
             let tx_id = faster_hex::hex_string(&message_key.tx_id);
 
             let sender_str = match to_rpc_address(&message_key.sender, RpcNetworkType::Mainnet) {
@@ -156,14 +155,14 @@ async fn get_contextual_messages_by_sender(
 
             let acceptance = state
                 .tx_id_to_acceptance_partition
-                .get_by_tx_id(&rtx, &message_key.tx_id)
-                .flatten()
-                .next();
+                .acceptance_by_tx_id_rtx(&rtx, &message_key.tx_id)?;
 
-            let (accepting_block, accepting_daa_score) = if let Some((key, _)) = acceptance {
+            let (accepting_block, accepting_daa_score) = if let Some(acceptance) = acceptance {
                 (
-                    Some(faster_hex::hex_string(&key.accepted_by_block_hash)),
-                    Some(u64::from_be_bytes(key.accepted_at_daa)),
+                    Some(faster_hex::hex_string(
+                        &acceptance.header.accepting_block_hash,
+                    )),
+                    Some(acceptance.header.accepting_daa.into()),
                 )
             } else {
                 (None, None)

@@ -6,16 +6,15 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
 use futures_util::FutureExt;
-use indexer_lib::database::messages::contextual_messages::ContextualMessageBySenderPartition;
-use indexer_lib::database::messages::handshakes::{
-    HandshakeByReceiverPartition, HandshakeBySenderPartition,
+use indexer_actors::metrics::{IndexerMetricsSnapshot, SharedMetrics};
+use indexer_db::messages::contextual_message::ContextualMessageBySenderPartition;
+use indexer_db::messages::handshake::{
+    HandshakeByReceiverPartition, HandshakeBySenderPartition, TxIdToHandshakePartition,
 };
-use indexer_lib::database::messages::{
-    PaymentByReceiverPartition, PaymentBySenderPartition, TxIdToHandshakePartition,
-    TxIdToPaymentPartition,
+use indexer_db::messages::payment::{
+    PaymentByReceiverPartition, PaymentBySenderPartition, TxIdToPaymentPartition,
 };
-use indexer_lib::database::processing::TxIDToAcceptancePartition;
-use indexer_lib::metrics::{IndexerMetricsSnapshot, SharedMetrics};
+use indexer_db::processing::tx_id_to_acceptance::TxIDToAcceptancePartition;
 use std::net::SocketAddr;
 use tower_http::cors::CorsLayer;
 use tracing::error;
