@@ -320,6 +320,25 @@ mod tests {
     }
 
     #[test]
+    fn test_self_stash_key_for_resolution_serialization() {
+        let key = SelfStashKeyForResolution {
+            scope: [0u8; 255],
+            block_time: 12345u64.to_be_bytes(),
+            block_hash: [1u8; 32],
+            version: 1,
+            tx_id: [2u8; 32],
+            attempt_count: 3,
+        };
+
+        let bytes = bytemuck::bytes_of(&key);
+
+        assert_eq!(bytes.len(), 329);
+
+        let deserialized: SelfStashKeyForResolution = *bytemuck::from_bytes(bytes);
+        assert_eq!(deserialized, key);
+    }
+
+    #[test]
     fn test_like_handshake_key_for_resolution() {
         let key = HandshakeKeyForResolution {
             block_time: 12345u64.to_be_bytes(),

@@ -285,6 +285,7 @@ async fn main() -> anyhow::Result<()> {
         tx_id_to_acceptance_partition,
         tx_id_to_handshake_partition,
         tx_id_to_payment_partition,
+        self_stash_by_owner_partition,
         metrics.clone(),
         context.clone(),
     );

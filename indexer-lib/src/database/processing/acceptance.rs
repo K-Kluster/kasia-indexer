@@ -219,7 +219,7 @@ impl TxIDToAcceptancePartition {
             tx_id,
             accepted_at_daa: accepted_at_daa.unwrap_or_default().to_be_bytes(),
             accepted_by_block_hash: accepted_by_block_hash.unwrap_or_default(),
-            partition_id: PartitionId::PaymentBySender as u8,
+            partition_id: PartitionId::SelfStashByOwner as u8,
         };
         wtx.insert(
             &self.0,

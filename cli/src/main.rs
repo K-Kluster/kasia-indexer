@@ -13,7 +13,7 @@ use indexer_lib::{
             ContextualMessageBySenderPartition, HandshakeByReceiverPartition,
             HandshakeBySenderPartition, PaymentByReceiverPartition, PaymentBySenderPartition,
             TxIdToHandshakePartition, TxIdToPaymentPartition,
-            self_stashes::{SelfStashByOwnerPartition, TxIdToSelfStashPartition},
+            self_stashes::SelfStashByOwnerPartition,
         },
         processing::{
             AcceptingBlockToTxIDPartition, PendingSenderResolutionPartition,
@@ -79,7 +79,6 @@ async fn main() -> anyhow::Result<()> {
     let contextual_message_partition = ContextualMessageBySenderPartition::new(&tx_keyspace)?;
     let payment_by_receiver_partition = PaymentByReceiverPartition::new(&tx_keyspace)?;
     let self_stash_by_owner_partition = SelfStashByOwnerPartition::new(&tx_keyspace)?;
-    let tx_id_to_self_stash_partition = TxIdToSelfStashPartition::new(&tx_keyspace)?;
     let tx_id_to_payment_partition = TxIdToPaymentPartition::new(&tx_keyspace)?;
     let tx_id_to_acceptance_partition = TxIDToAcceptancePartition::new(&tx_keyspace)?;
     let skip_tx_partition = SkipTxPartition::new(&tx_keyspace)?;
@@ -131,7 +130,6 @@ async fn main() -> anyhow::Result<()> {
         .contextual_message_partition(contextual_message_partition.clone())
         .payment_by_receiver_partition(payment_by_receiver_partition.clone())
         .self_stash_by_owner_partition(self_stash_by_owner_partition.clone())
-        .tx_id_to_self_stash_partition(tx_id_to_self_stash_partition.clone())
         .tx_id_to_payment_partition(tx_id_to_payment_partition.clone())
         .tx_id_to_acceptance_partition(tx_id_to_acceptance_partition.clone())
         .skip_tx_partition(skip_tx_partition.clone())
@@ -161,6 +159,12 @@ async fn main() -> anyhow::Result<()> {
                 .about("process block by id")
                 .arg(arg!([BLOCK_ID]).required(true)),
         )
+        .subcommand(
+            Command::new("resolution")
+                .alias("r")
+                .about("get resolution by id")
+                .arg(arg!([TX_ID]).required(true)),
+        )
         .get_matches();
 
     match matches.subcommand() {
@@ -178,6 +182,22 @@ async fn main() -> anyhow::Result<()> {
 
             sleep(Duration::from_secs(1)).await;
         }
+        Some(("resolution", sub_matches)) => {
+            let tx_id = sub_matches
+                .get_one::<String>("TX_ID")
+                .map(|s| s.as_str())
+                .unwrap();
+
+            let tx_id = Hash::from_str(&tx_id).expect("Invalid block id");
+
+            let mut iter = tx_id_to_acceptance_partition
+                .get_by_tx_id(&tx_keyspace.read_tx(), &tx_id.as_bytes());
+
+            let (resolution_key, resolution_value) = iter.next().unwrap()?;
+
+            info!("k: {:?} - v: {:?}", resolution_key, resolution_value);
+        }
+
         _ => (),
     };
 
