@@ -1,4 +1,5 @@
 use crate::api::to_rpc_address;
+use crate::context::IndexerContext;
 use anyhow::bail;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -10,7 +11,6 @@ use indexer_db::messages::payment::{
     PaymentByReceiverPartition, PaymentBySenderPartition, TxIdToPaymentPartition,
 };
 use indexer_db::processing::tx_id_to_acceptance::TxIDToAcceptancePartition;
-use kaspa_rpc_core::RpcNetworkType;
 use serde::{Deserialize, Serialize};
 use tokio::task::spawn_blocking;
 use utoipa::{IntoParams, ToSchema};
@@ -22,6 +22,7 @@ pub struct PaymentApi {
     payment_by_receiver_partition: PaymentByReceiverPartition,
     tx_id_to_payment_partition: TxIdToPaymentPartition,
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
+    context: IndexerContext,
 }
 
 impl PaymentApi {
@@ -31,6 +32,7 @@ impl PaymentApi {
         payment_by_receiver_partition: PaymentByReceiverPartition,
         tx_id_to_payment_partition: TxIdToPaymentPartition,
         tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
+        context: IndexerContext,
     ) -> Self {
         Self {
             tx_keyspace,
@@ -38,6 +40,7 @@ impl PaymentApi {
             payment_by_receiver_partition,
             tx_id_to_payment_partition,
             tx_id_to_acceptance_partition,
+            context,
         }
     }
 
@@ -147,7 +150,7 @@ async fn get_payments_by_sender(
                 None => (None, None),
             };
 
-            let receiver_address = match to_rpc_address(&key.receiver, RpcNetworkType::Mainnet) {
+            let receiver_address = match to_rpc_address(&key.receiver, state.context.network_type) {
                 Ok(Some(addr)) => addr.to_string(),
                 Ok(None) => bail!("Database consistency error: receiver address has EMPTY_VERSION"),
                 Err(e) => bail!("Failed to convert receiver address: {}", e),
@@ -258,12 +261,12 @@ async fn get_payments_by_receiver(
                 None => (None, None),
             };
 
-            let sender_address = match to_rpc_address(&sender_payload, RpcNetworkType::Mainnet) {
+            let sender_address = match to_rpc_address(&sender_payload, state.context.network_type) {
                 Ok(opt_addr) => opt_addr.map(|addr| addr.to_string()),
                 Err(e) => bail!("Failed to convert sender address: {}", e),
             };
 
-            let receiver_address = match to_rpc_address(&key.receiver, RpcNetworkType::Mainnet) {
+            let receiver_address = match to_rpc_address(&key.receiver, state.context.network_type) {
                 Ok(Some(addr)) => addr.to_string(),
                 Ok(None) => bail!("Database consistency error: receiver address has EMPTY_VERSION"),
                 Err(e) => bail!("Failed to convert receiver address: {}", e),
