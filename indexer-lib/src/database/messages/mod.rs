@@ -6,6 +6,7 @@
 pub mod contextual_messages;
 pub mod handshakes;
 pub mod payments;
+pub mod self_stashes;
 
 pub use contextual_messages::*;
 pub use handshakes::*;

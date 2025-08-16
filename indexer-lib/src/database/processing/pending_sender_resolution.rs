@@ -2,7 +2,8 @@ use crate::database::PartitionId;
 use crate::database::resolution_keys::{
     ContextualMessageKeyForResolution, HandshakeKeyForResolution,
     LikeContextualMessageKeyForResolution, LikeHandshakeKeyForResolution,
-    LikePaymentKeyForResolution, PaymentKeyForResolution, SenderResolutionLikeKey,
+    LikePaymentKeyForResolution, LikeSelfStashKeyForResolution, PaymentKeyForResolution,
+    SelfStashKeyForResolution, SenderResolutionLikeKey,
 };
 use anyhow::Result;
 use bytemuck::{AnyBitPattern, NoUninit};
@@ -108,6 +109,27 @@ impl PendingSenderResolutionPartition {
         Ok(())
     }
 
+    /// Mark a self stash transaction as needing sender resolution
+    pub fn mark_self_stash_pending(
+        &self,
+        wtx: &mut WriteTransaction,
+        accepting_daa_score: u64,
+        tx_id: [u8; 32],
+        self_stash_key: &SelfStashKeyForResolution,
+    ) -> Result<()> {
+        let key = PendingResolutionKey {
+            accepting_daa_score: accepting_daa_score.to_be_bytes(),
+            tx_id,
+            partition_type: PartitionId::SelfStashByOwner as u8,
+        };
+        wtx.insert(
+            &self.0,
+            bytemuck::bytes_of(&key),
+            bytemuck::bytes_of(self_stash_key),
+        );
+        Ok(())
+    }
+
     /// Remove all pending entries for a transaction (when resolution is complete)
     /// Returns all the key data for updating the target partitions
     pub fn remove_pending(
@@ -144,6 +166,7 @@ impl PendingSenderResolutionPartition {
                         PartitionId::ContextualMessageBySender
                     }
                     x if x == PartitionId::PaymentBySender as u8 => PartitionId::PaymentBySender,
+                    x if x == PartitionId::SelfStashByOwner as u8 => PartitionId::SelfStashByOwner,
                     _ => {
                         return Err(anyhow::anyhow!(
                             "Invalid partition type: {}",
@@ -163,6 +186,9 @@ impl PendingSenderResolutionPartition {
                     }
                     PartitionId::PaymentBySender => SenderResolutionLikeKey::PaymentKey(
                         LikePaymentKeyForResolution::new(value_bytes),
+                    ),
+                    PartitionId::SelfStashByOwner => SenderResolutionLikeKey::SelfStashKey(
+                        LikeSelfStashKeyForResolution::new(value_bytes),
                     ),
                     _ => {
                         return Err(anyhow::anyhow!(
@@ -210,6 +236,7 @@ impl PendingSenderResolutionPartition {
                         PartitionId::ContextualMessageBySender
                     }
                     x if x == PartitionId::PaymentBySender as u8 => PartitionId::PaymentBySender,
+                    x if x == PartitionId::SelfStashByOwner as u8 => PartitionId::SelfStashByOwner,
                     _ => {
                         return Err(anyhow::anyhow!(
                             "Invalid partition type: {}",
@@ -229,6 +256,9 @@ impl PendingSenderResolutionPartition {
                     }
                     PartitionId::PaymentBySender => SenderResolutionLikeKey::PaymentKey(
                         LikePaymentKeyForResolution::new(value_bytes),
+                    ),
+                    PartitionId::SelfStashByOwner => SenderResolutionLikeKey::SelfStashKey(
+                        LikeSelfStashKeyForResolution::new(value_bytes),
                     ),
                     _ => {
                         return Err(anyhow::anyhow!(
@@ -328,6 +358,7 @@ impl PendingSenderResolutionPartition {
                     PartitionId::ContextualMessageBySender
                 }
                 x if x == PartitionId::PaymentBySender as u8 => PartitionId::PaymentBySender,
+                x if x == PartitionId::SelfStashByOwner as u8 => PartitionId::SelfStashByOwner,
                 _ => continue, // Skip invalid partition types
             };
 
@@ -348,6 +379,9 @@ impl PendingSenderResolutionPartition {
                         PartitionId::PaymentBySender => SenderResolutionLikeKey::PaymentKey(
                             LikePaymentKeyForResolution::new(value_bytes.clone()),
                         ),
+                        PartitionId::SelfStashByOwner => SenderResolutionLikeKey::SelfStashKey(
+                            LikeSelfStashKeyForResolution::new(value_bytes.clone()),
+                        ),
                         _ => return None, // Invalid partition type
                     };
 
@@ -360,6 +394,9 @@ impl PendingSenderResolutionPartition {
                             key.attempt_count.saturating_sub(1)
                         }
                         SenderResolutionLikeKey::PaymentKey(key) => {
+                            key.attempt_count.saturating_sub(1)
+                        }
+                        SenderResolutionLikeKey::SelfStashKey(key) => {
                             key.attempt_count.saturating_sub(1)
                         }
                     };

@@ -269,6 +269,23 @@ impl VirtualChainProcessor {
                             entries.push_payment(key.tx_id, &pmk);
                         }
                     }
+                    AcceptingBlockResolutionData::SelfStashKey(ssk) => {
+                        assert_eq!(key.partition_id, PartitionId::SelfStashByOwner as u8);
+                        self.tx_id_to_acceptance_partition.remove(wtx, key.clone());
+                        self.tx_id_to_acceptance_partition.insert_self_stash_wtx(
+                            wtx,
+                            key.tx_id,
+                            &ssk,
+                            accepting_daa,
+                            Some(accepting_block_hash.as_bytes()),
+                        );
+                        if let Some(daa) = accepting_daa {
+                            self.pending_sender_resolution_partition
+                                .mark_self_stash_pending(wtx, daa, key.tx_id, &ssk)?
+                        } else {
+                            entries.push_self_stash(key.tx_id, &ssk);
+                        }
+                    }
                     AcceptingBlockResolutionData::None => {
                         warn!(tx_id = %RpcTransactionId::from_bytes(key.tx_id), "No resolution data found for transaction");
                     }

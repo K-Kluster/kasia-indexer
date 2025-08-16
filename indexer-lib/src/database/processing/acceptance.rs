@@ -1,7 +1,8 @@
 use crate::database::resolution_keys::{
     ContextualMessageKeyForResolution, HandshakeKeyForResolution,
     LikeContextualMessageKeyForResolution, LikeHandshakeKeyForResolution,
-    LikePaymentKeyForResolution, PaymentKeyForResolution,
+    LikePaymentKeyForResolution, LikeSelfStashKeyForResolution, PaymentKeyForResolution,
+    SelfStashKeyForResolution,
 };
 use crate::database::{LikeTxIds, PartitionId};
 use anyhow::Result;
@@ -22,6 +23,7 @@ pub enum AcceptingBlockResolutionData {
     HandshakeKey(LikeHandshakeKeyForResolution<UserKey>),
     ContextualMessageKey(LikeContextualMessageKeyForResolution<UserKey>),
     PaymentKey(LikePaymentKeyForResolution<UserKey>),
+    SelfStashKey(LikeSelfStashKeyForResolution<UserKey>),
     None,
 }
 
@@ -204,6 +206,28 @@ impl TxIDToAcceptancePartition {
         );
     }
 
+    /// Insert a SelfStash ForResolution key
+    pub fn insert_self_stash_wtx(
+        &self,
+        wtx: &mut WriteTransaction,
+        tx_id: [u8; 32],
+        self_stash_for_resolution_key: &SelfStashKeyForResolution,
+        accepted_at_daa: Option<u64>,
+        accepted_by_block_hash: Option<[u8; 32]>,
+    ) {
+        let key = AcceptanceTxKey {
+            tx_id,
+            accepted_at_daa: accepted_at_daa.unwrap_or_default().to_be_bytes(),
+            accepted_by_block_hash: accepted_by_block_hash.unwrap_or_default(),
+            partition_id: PartitionId::SelfStashByOwner as u8,
+        };
+        wtx.insert(
+            &self.0,
+            bytemuck::bytes_of(&key),
+            bytemuck::bytes_of(self_stash_for_resolution_key),
+        );
+    }
+
     pub fn insert_wtx(
         &self,
         wtx: &mut WriteTransaction,
@@ -222,6 +246,7 @@ impl TxIDToAcceptancePartition {
                 AcceptingBlockResolutionData::HandshakeKey(hk) => hk.inner(),
                 AcceptingBlockResolutionData::ContextualMessageKey(cmk) => cmk.inner(),
                 AcceptingBlockResolutionData::PaymentKey(pmk) => pmk.inner(),
+                AcceptingBlockResolutionData::SelfStashKey(ssk) => ssk.inner(),
             },
         )
     }
@@ -270,6 +295,7 @@ impl TxIDToAcceptancePartition {
                         PartitionId::ContextualMessageBySender
                     }
                     x if x == PartitionId::PaymentBySender as u8 => PartitionId::PaymentBySender,
+                    x if x == PartitionId::SelfStashByOwner as u8 => PartitionId::SelfStashByOwner,
                     _ => {
                         return Err(anyhow::anyhow!(
                             "Invalid partition ID: {}",
@@ -295,6 +321,11 @@ impl TxIDToAcceptancePartition {
                         PartitionId::PaymentBySender => AcceptingBlockResolutionData::PaymentKey(
                             LikePaymentKeyForResolution::new(value_bytes),
                         ),
+                        PartitionId::SelfStashByOwner => {
+                            AcceptingBlockResolutionData::SelfStashKey(
+                                LikeSelfStashKeyForResolution::new(value_bytes),
+                            )
+                        }
                         _ => {
                             return Err(anyhow::anyhow!(
                                 "Invalid partition ID for accepting block resolution: {:?}",

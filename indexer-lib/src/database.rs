@@ -20,6 +20,9 @@ pub mod util;
 /// Each partition stores specific data with optimized key-value layouts
 /// for efficient querying. All data is stored using bytemuck-compatible
 /// types for zero-copy casting with fjall's efficient Arc<[u8]> clones.
+///
+/// warning: changing the order of enum element would break the persisted elements
+///          it's not possible to do that without a data migration
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PartitionId {
@@ -49,6 +52,9 @@ pub enum PartitionId {
     PaymentBySender,
     PaymentByReceiver,
     TxIdToPayment,
+
+    // Self Stash
+    SelfStashByOwner,
 }
 
 use fjall::UserValue;
