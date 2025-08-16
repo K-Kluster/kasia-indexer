@@ -78,6 +78,7 @@ impl DataSource {
         }
     }
     pub async fn task(&mut self) -> anyhow::Result<()> {
+        info!("Data source task started");
         let rpc_ctl_channel = self.rpc_client.rpc_ctl().multiplexer().channel();
         loop {
             tokio::select! {
@@ -169,7 +170,9 @@ impl DataSource {
     }
 
     async fn handle_connect(&mut self) -> anyhow::Result<()> {
+        info!("Handling RPC connection event");
         if self.shutting_down {
+            info!("Shutting down, disconnecting from RPC client");
             _ = self
                 .rpc_client
                 .disconnect()
@@ -184,16 +187,21 @@ impl DataSource {
 
                 // force disconnect the client if we have failed to negotiate the connection to
                 // the node. self.rpc_client().trigger_abort()?;
+                warn!("Disconnecting and retrying connection in 3 seconds");
                 self.rpc_client.disconnect().await?;
                 tokio::time::sleep(Duration::from_secs(3)).await;
                 let options = ConnectOptions {
                     block_async_connect: false,
                     ..Default::default()
                 };
+                info!("Attempting to reconnect to RPC client");
                 self.rpc_client.connect(Some(options)).await?;
                 Err(err)
             }
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                info!("Successfully connected to RPC client");
+                Ok(())
+            }
         }
     }
 
@@ -230,7 +238,9 @@ impl DataSource {
     }
 
     async fn handle_disconnect(&mut self) -> anyhow::Result<()> {
+        info!("Handling RPC disconnection event");
         if self.shutting_down {
+            info!("Shutting down, disconnecting from RPC client");
             _ = self
                 .rpc_client
                 .disconnect()

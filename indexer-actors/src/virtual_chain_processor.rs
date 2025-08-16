@@ -1,6 +1,7 @@
 pub mod message;
 
 use crate::data_source::{Command, Request};
+use crate::util::ToHex64;
 use crate::virtual_chain_syncer::{NotificationAck, VirtualChainSyncer};
 use fjall::{TxKeyspace, WriteTransaction};
 use indexer_db::messages::contextual_message::{
@@ -29,7 +30,7 @@ use kaspa_rpc_core::{
 };
 pub use message::*;
 use std::collections::VecDeque;
-use tracing::error;
+use tracing::{debug, error, info, trace};
 use workflow_core::channel::Sender;
 
 #[derive(bon::Builder)]
@@ -108,6 +109,7 @@ enum SyncState {
 
 impl VirtualProcessor {
     pub fn process(&mut self) -> anyhow::Result<()> {
+        info!("Virtual chain processor started");
         let state = &mut State::new();
         loop {
             match self.select_input()? {
@@ -116,19 +118,23 @@ impl VirtualProcessor {
                     sink_blue_work,
                     pp,
                 }) => {
+                    info!(sink = %sink.to_hex_64(), pp = %pp.to_hex_64(), "Received VCC connection notification");
                     self.handle_connect(state, sink, sink_blue_work, pp)?;
                 }
                 ProcessedBlockOrVccOrSyncer::Vcc(RealTimeVccNotification::Disconnected) => {
+                    info!("Received VCC disconnection notification");
                     state.shared_state.realtime_queue_vcc.clear();
                 }
                 ProcessedBlockOrVccOrSyncer::Syncer(SyncVccNotification::VirtualChain {
                     syncer_id,
                     virtual_chain,
                 }) => {
+                    debug!(syncer_id, "Received syncer virtual chain notification");
                     self.handle_syncer_vc(state, syncer_id, virtual_chain)?;
                     // todo: process real time queue if get synced
                 }
                 ProcessedBlockOrVccOrSyncer::Vcc(RealTimeVccNotification::Shutdown) => {
+                    info!("Received VCC shutdown notification");
                     let cont = self.handle_shutdown(state)?;
                     if cont {
                         continue;
@@ -137,6 +143,7 @@ impl VirtualProcessor {
                     }
                 }
                 ProcessedBlockOrVccOrSyncer::Syncer(SyncVccNotification::Stopped { syncer_id }) => {
+                    info!(syncer_id, "Syncer stopped notification received");
                     let cont = self.handle_syncer_stopped(state, syncer_id)?;
                     if cont {
                         continue;
@@ -145,6 +152,7 @@ impl VirtualProcessor {
                     }
                 }
                 ProcessedBlockOrVccOrSyncer::Block(ch) => {
+                    trace!(hash = %ch.block_hash.to_hex_64(), daa_score = ch.daa_score, "Processing block header");
                     self.handle_processed_block(state, ch)?;
                     // todo: process real time queue if get synced
                 }
@@ -183,6 +191,7 @@ impl VirtualProcessor {
         sink_blue_work: BlueWorkType,
         pp: [u8; 32],
     ) -> anyhow::Result<()> {
+        debug!("Handling virtual chain connection, requesting all pending senders");
         match &mut state.sync_state {
             SyncState::Initial => {
                 self.pending_sender_resolution_partition
@@ -199,8 +208,10 @@ impl VirtualProcessor {
                     })?;
 
                 let last_accepting_block = self.last_accepting_block_db()?;
+                debug!(last_accepting_block = ?last_accepting_block, "Checked last accepting block from database");
                 match last_accepting_block {
                     None => {
+                        info!(pp = %pp.to_hex_64(), "No last accepting block, starting sync from pruning point");
                         let syncer = self.spawn_syncer(0, pp);
                         state.sync_state = SyncState::Syncing {
                             last_accepting_block: (pp, Default::default()),

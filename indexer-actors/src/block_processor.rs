@@ -4,6 +4,7 @@ use crate::BlockGap;
 use crate::block_gap_filler::BlockGapFiller;
 use crate::data_source::Command;
 use crate::metrics::SharedMetrics;
+use crate::util::{ToHex, ToHex64};
 use crate::virtual_chain_processor::CompactHeader;
 use fjall::{TxKeyspace, WriteTransaction};
 use indexer_db::headers::block_compact_headers::BlockCompactHeaderPartition;
@@ -66,7 +67,7 @@ impl BlockProcessor {
         let mut has_first_connect = false;
         let mut gaps_fillers = HashMap::new();
         let mut is_shutdown = false;
-        let mut last_processed_block = None;
+        let mut last_processed_block: Option<[u8; 32]> = None;
         let mut gaps_filling_in_progress = 0;
         loop {
             match self.select_input()? {
@@ -74,9 +75,12 @@ impl BlockProcessor {
                     sink,
                     pp,
                 }) => {
+                    info!(sink = %sink.to_hex_64(), pp = %pp.to_hex_64(), "Received connection notification");
                     if !has_first_connect {
                         has_first_connect = true;
+                        info!("Handling first connection");
                         let gaps = self.handle_first_connect(sink, pp)?;
+                        info!(gap_count = gaps.len(), "Found gaps to fill");
                         gaps_fillers = gaps
                             .into_iter()
                             .map(|gap| {
@@ -99,7 +103,9 @@ impl BlockProcessor {
                             })
                             .collect();
                         gaps_filling_in_progress = gaps_fillers.len();
+                        info!(gaps_filling_in_progress, "Started gap filling tasks");
                     } else if let Some(last_processed_block) = last_processed_block.take() {
+                        info!(from = %last_processed_block.to_hex_64(), to = %sink.to_hex_64(), "Creating gap for reconnection");
                         self.insert_gap(last_processed_block, sink)?;
                         let (interrupt_tx, interrupt_rx) = tokio::sync::oneshot::channel();
                         self.runtime_handle.spawn({
@@ -122,6 +128,7 @@ impl BlockProcessor {
                     }
                 }
                 NotificationOrGapResult::Notification(BlockNotification::Disconnected) => {
+                    info!("Received disconnection notification, stopping gap fillers");
                     std::mem::take(&mut gaps_fillers)
                         .into_iter()
                         .for_each(|(_to, interrupt_tx)| {
@@ -131,6 +138,7 @@ impl BlockProcessor {
                         })
                 }
                 NotificationOrGapResult::Notification(BlockNotification::Shutdown) => {
+                    info!("Received shutdown notification");
                     is_shutdown = true;
                     std::mem::take(&mut gaps_fillers)
                         .into_iter()
@@ -141,24 +149,28 @@ impl BlockProcessor {
                         })
                 }
                 NotificationOrGapResult::Notification(BlockNotification::Notification(block)) => {
+                    let hash = block.header.hash.as_bytes();
+                    debug!(hash = %hash.to_hex_64(), daa_score = block.header.daa_score, tx_count = block.transactions.len(), "Processing block notification");
                     let mut wtx = self.tx_keyspace.write_tx()?;
                     self.handle_block(&mut wtx, &block)?;
-                    let hash = block.header.hash.as_bytes();
                     last_processed_block = Some(hash);
                     self.update_block(&mut wtx, hash);
                     wtx.commit()??;
                     self.processed_block_tx.send(block.header.as_ref().into())?;
+                    trace!(hash = %hash.to_hex_64(), "Block processed successfully");
                 }
                 NotificationOrGapResult::GapFilling(GapFillingProgress::Interrupted { to }) => {
+                    debug!(to = %to.to_hex_64(), "Gap filler interrupted");
                     gaps_fillers.remove(&to);
                     gaps_filling_in_progress -= 1;
                 }
                 NotificationOrGapResult::GapFilling(GapFillingProgress::Error { to, err }) => {
-                    error!(%err, "Error in block gap filler");
+                    error!(to = %to.to_hex_64(), %err, "Error in block gap filler");
                     gaps_fillers.remove(&to);
                     gaps_filling_in_progress -= 1;
                 }
                 NotificationOrGapResult::GapFilling(GapFillingProgress::Update { to, blocks }) => {
+                    debug!(to = %to.to_hex_64(), block_count = blocks.len(), "Processing gap filling update");
                     blocks.iter().try_for_each(|block| -> anyhow::Result<()> {
                         let mut wtx = self.tx_keyspace.write_tx()?;
                         self.handle_block(&mut wtx, block)?;
@@ -225,14 +237,17 @@ impl BlockProcessor {
             block.header.daa_score,
         )?;
         if already_processed {
+            debug!(hash = %block.header.hash.as_bytes().to_hex_64(), "Skipping already processed block");
             return Ok(());
         }
         self.daa_index_partition
             .insert(block.header.daa_score, block.header.hash.as_ref())?;
+        debug!(hash = %block.header.hash.as_bytes().to_hex_64(), tx_count = block.transactions.len(), "Processing block transactions");
         for tx in &block.transactions {
             self.handle_transaction(wtx, &block.header, tx)?;
         }
         self.shared_metrics.increment_blocks_processed();
+        trace!(hash = %block.header.hash.as_bytes().to_hex_64(), "Block handled successfully");
         Ok(())
     }
 
@@ -251,6 +266,7 @@ impl BlockProcessor {
         let Some(op) = parse_sealed_operation(&tx.payload).inspect(|op| {
             trace!(%tx_id, kind = op.op_type_name(), "Parsed sealed operation");
         }) else {
+            trace!(%tx_id, "No valid sealed operation found, skipping transaction");
             return Ok(());
         };
 
@@ -463,6 +479,7 @@ impl BlockProcessor {
         receiver: AddressPayload,
         sender: Option<AddressPayload>,
     ) -> anyhow::Result<HandshakeKeyByReceiver> {
+        debug!(%tx_id, sender = ?sender, receiver = ?receiver, "Handling handshake transaction");
         self.tx_id_to_handshake_partition
             .insert_wtx(wtx, tx_id.as_ref(), op.sealed_hex);
         let hs_key = HandshakeKeyByReceiver {
@@ -476,6 +493,7 @@ impl BlockProcessor {
             .insert_wtx(wtx, &hs_key, sender)?;
 
         if let Some(sender) = sender {
+            trace!(sender = ?sender, "Inserting handshake by sender");
             let by_sender_key = HandshakeKeyBySender {
                 sender,
                 block_time: hs_key.block_time,
@@ -486,6 +504,8 @@ impl BlockProcessor {
             };
             self.handshake_by_sender_partition
                 .insert_wtx(wtx, &by_sender_key);
+        } else {
+            trace!("No sender resolved for handshake");
         }
         Ok(hs_key)
     }
@@ -499,6 +519,7 @@ impl BlockProcessor {
         cm: SealedContextualMessageV1,
         receiver: AddressPayload,
     ) -> anyhow::Result<ContextualMessageBySenderKey> {
+        debug!(%tx_id, sender = ?sender, receiver = ?receiver, alias = %cm.alias.to_hex(), "Handling contextual message");
         self.contextual_message_by_sender_partition.insert(
             wtx,
             sender.unwrap_or_default(),
@@ -522,7 +543,7 @@ impl BlockProcessor {
         pm: SealedPaymentV1,
         sender: Option<AddressPayload>,
     ) -> anyhow::Result<PaymentKeyByReceiver> {
-        debug!(%tx_id, "Handling PaymentV1");
+        debug!(%tx_id, sender = ?sender, receiver = ?receiver, amount, "Handling payment transaction");
         self.tx_id_to_payment_partition
             .insert_wtx(wtx, tx_id.as_ref(), amount, pm.sealed_hex)?;
         let pm_key = PaymentKeyByReceiver {
@@ -535,6 +556,7 @@ impl BlockProcessor {
         self.payment_by_receiver_partition
             .insert_wtx(wtx, &pm_key, sender)?;
         if let Some(sender) = sender {
+            trace!(sender = ?sender, "Inserting payment by sender");
             let by_sender_key = PaymentKeyBySender {
                 sender,
                 block_time: pm_key.block_time,
@@ -545,6 +567,8 @@ impl BlockProcessor {
             };
             self.payment_by_sender_partition
                 .insert_wtx(wtx, &by_sender_key);
+        } else {
+            trace!("No sender resolved for payment");
         }
         Ok(pm_key)
     }

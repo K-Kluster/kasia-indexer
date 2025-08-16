@@ -1052,6 +1052,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fstr"
+version = "0.2.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17e4d821c226048ee351e9f7cf8554b5f226ca41b35ffe632eddaa3a8934da2f"
+
+[[package]]
 name = "futures"
 version = "0.3.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1603,6 +1609,7 @@ dependencies = [
  "faster-hex 0.10.0",
  "fjall",
  "flume",
+ "fstr",
  "futures-util",
  "indexer-db",
  "kaspa-consensus-core",

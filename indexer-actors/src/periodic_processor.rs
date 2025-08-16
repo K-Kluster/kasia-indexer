@@ -1,4 +1,5 @@
 use crate::metrics::SharedMetrics;
+use crate::util::ToHex64;
 use fjall::TxKeyspace;
 use indexer_db::headers::block_compact_headers::BlockCompactHeaderPartition;
 use indexer_db::headers::daa_index::DaaIndexPartition;
@@ -8,7 +9,7 @@ use indexer_db::metadata::MetadataPartition;
 use indexer_db::processing::accepting_block_to_txs::AcceptingBlockToTxIDPartition;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tracing::error;
+use tracing::{debug, error, info, trace};
 use workflow_core::channel::{Receiver, Sender};
 
 pub enum Intake {
@@ -42,52 +43,75 @@ pub struct PeriodicProcessor {
 
 impl PeriodicProcessor {
     pub fn process(&self) -> anyhow::Result<()> {
+        info!("Periodic processor started");
         loop {
             match self.job_trigger_rx.recv_blocking()? {
                 Intake::Shutdown => {
+                    info!("Periodic processor received shutdown signal");
                     return Ok(());
                 }
                 Intake::DoJob => {
+                    debug!("Periodic processor executing job");
                     self.do_job()?;
                     self.resp_tx.send_blocking(Response::JobDone)?;
+                    trace!("Periodic job completed");
                 }
             }
         }
     }
 
     fn do_job(&self) -> anyhow::Result<()> {
+        debug!("Starting periodic maintenance job");
         self.compact_metadata()?;
-        self.prune()?;
-        self.update_metrics()?;
+        let pruned_count = self.prune()?;
+        self.update_metrics(pruned_count)?;
+        if pruned_count > 0 {
+            info!(
+                pruned_blocks = pruned_count,
+                "Periodic maintenance completed"
+            );
+        } else {
+            trace!("Periodic maintenance completed, no blocks pruned");
+        }
         Ok(())
     }
 
     fn prune(&self) -> anyhow::Result<u64> {
+        let current_daa = self.virtual_daa.load(Ordering::Relaxed);
+        let prune_threshold = current_daa.saturating_sub(self.pruning_depth);
+        debug!(current_daa, prune_threshold, "Starting block pruning");
+
         let read_tx = self.tx_keyspace.read_tx();
         let mut pruned = 0;
-        for r in self.daa_index_partition.iter_lt(
-            &read_tx,
-            self.virtual_daa
-                .load(Ordering::Relaxed)
-                .saturating_sub(self.pruning_depth),
-        ) {
+        for r in self.daa_index_partition.iter_lt(&read_tx, prune_threshold) {
             let (daa, hash) = r?;
+            trace!(hash = %hash.to_hex_64(), daa_score = daa, "Pruning block");
             self.block_compact_header_partition.remove(&hash)?;
             self.daa_index_partition.delete(daa, &hash)?;
             self.accepting_block_to_tx_id_partition.remove(&hash)?;
             pruned += 1;
         }
+        if pruned > 0 {
+            debug!(pruned_blocks = pruned, "Block pruning completed");
+        }
         Ok(pruned)
     }
 
     fn compact_metadata(&self) -> anyhow::Result<()> {
-        if self.metadata_partition.0.inner().disk_space() > 1024 * 1024 {
+        let disk_space = self.metadata_partition.0.inner().disk_space();
+        if disk_space > 1024 * 1024 {
+            debug!(
+                disk_space_mb = disk_space / (1024 * 1024),
+                "Compacting metadata partition"
+            );
             self.metadata_partition.0.inner().major_compact()?;
+            trace!("Metadata compaction completed");
         }
         Ok(())
     }
 
-    fn update_metrics(&self) -> anyhow::Result<()> {
+    fn update_metrics(&self, pruned_blocks: u64) -> anyhow::Result<()> {
+        self.metrics.increment_pruned_blocks(pruned_blocks);
         self.metrics
             .set_handshakes_by_receiver(self.tx_id_to_handshake_partition.approximate_len() as u64); // todo use len at startup and atomic for update
         self.metrics

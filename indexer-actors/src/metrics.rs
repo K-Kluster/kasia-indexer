@@ -3,7 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::util::ToHex;
+use crate::util::ToHex64;
 
 #[cfg(feature = "serde")]
 use serde::Serialize;
@@ -55,11 +55,11 @@ impl Display for IndexerMetricsSnapshot {
         writeln!(f, "  Payments by receiver: {}", self.payments_by_receiver)?;
         writeln!(f, "  Contextual messages: {}", self.contextual_messages)?;
         writeln!(f, "  Blocks processed: {}", self.blocks_processed)?;
-        writeln!(f, "  Latest block: {}", self.latest_block.to_hex())?;
+        writeln!(f, "  Latest block: {}", self.latest_block.to_hex_64())?;
         writeln!(
             f,
             "  Latest accepting block: {}",
-            self.latest_accepting_block.to_hex()
+            self.latest_accepting_block.to_hex_64()
         )?;
         writeln!(
             f,
@@ -225,6 +225,10 @@ impl IndexerMetrics {
     /// Get latest accepting block hash
     pub fn get_latest_accepting_block(&self) -> [u8; 32] {
         *self.latest_accepting_block.load().as_ref()
+    }
+    pub fn increment_pruned_blocks(&self, pruned_blocks: u64) {
+        self.pruned_blocks
+            .fetch_add(pruned_blocks, Ordering::Relaxed);
     }
 }
 

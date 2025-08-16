@@ -13,9 +13,10 @@ utoipa = ["serde", "dep:utoipa"]
 anyhow.workspace = true
 arc-swap.workspace = true
 bon = { workspace = true }
-fjall.workspace = true
 faster-hex.workspace = true
+fjall.workspace = true
 flume.workspace = true
+fstr.workspace = true
 futures-util.workspace = true
 kaspa-consensus-core.workspace = true
 kaspa-rpc-core.workspace = true
