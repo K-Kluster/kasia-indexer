@@ -1,8 +1,6 @@
 use crate::BlockOrMany;
 use crate::database::headers::{BlockCompactHeaderPartition, DaaIndexPartition};
-use crate::database::messages::self_stashes::{
-    SelfStashByOwnerPartition, SelfStashKeyByOwner, TxIdToSelfStashPartition,
-};
+use crate::database::messages::self_stashes::{SelfStashByOwnerPartition, SelfStashKeyByOwner};
 use crate::database::messages::{
     AddressPayload, ContextualMessageBySenderPartition, HandshakeByReceiverPartition,
     HandshakeKeyByReceiver, PaymentByReceiverPartition, PaymentKeyByReceiver,
@@ -49,7 +47,6 @@ pub struct BlockProcessor {
     tx_id_to_payment_partition: TxIdToPaymentPartition,
 
     self_stash_by_owner_partition: SelfStashByOwnerPartition,
-    tx_id_to_self_stash_partition: TxIdToSelfStashPartition,
 
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
 
@@ -333,12 +330,6 @@ impl BlockProcessor {
         debug!(%tx_id, "Handling SelfStashV1");
 
         debug!(scope=?op.key, op.sealed_hex, "Inserting SelfStash by owner");
-        self.tx_id_to_self_stash_partition.insert_wtx(
-            wtx,
-            tx_id.as_ref(),
-            op.key,
-            op.sealed_hex,
-        )?;
 
         // pad with zeros
         let mut fixed_scope = [0u8; 255];

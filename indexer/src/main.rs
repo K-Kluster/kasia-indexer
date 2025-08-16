@@ -3,9 +3,7 @@ use fjall::Config;
 use indexer_lib::database::headers::{
     BlockCompactHeaderPartition, BlockGapsPartition, DaaIndexPartition,
 };
-use indexer_lib::database::messages::self_stashes::{
-    SelfStashByOwnerPartition, TxIdToSelfStashPartition,
-};
+use indexer_lib::database::messages::self_stashes::SelfStashByOwnerPartition;
 use indexer_lib::database::messages::{
     ContextualMessageBySenderPartition, HandshakeByReceiverPartition, HandshakeBySenderPartition,
     PaymentByReceiverPartition, PaymentBySenderPartition, TxIdToHandshakePartition,
@@ -73,7 +71,6 @@ async fn main() -> anyhow::Result<()> {
     let payment_by_receiver_partition = PaymentByReceiverPartition::new(&tx_keyspace)?;
     let tx_id_to_payment_partition = TxIdToPaymentPartition::new(&tx_keyspace)?;
     let self_stash_by_owner_partition = SelfStashByOwnerPartition::new(&tx_keyspace)?;
-    let tx_id_to_self_stash_partition = TxIdToSelfStashPartition::new(&tx_keyspace)?;
     let tx_id_to_acceptance_partition = TxIDToAcceptancePartition::new(&tx_keyspace)?;
     let skip_tx_partition = SkipTxPartition::new(&tx_keyspace)?;
     let skip_tx_by_block_partition = SkipTxByBlockPartition::new(&tx_keyspace)?;
@@ -134,7 +131,6 @@ async fn main() -> anyhow::Result<()> {
         .contextual_message_partition(contextual_message_partition.clone())
         .payment_by_receiver_partition(payment_by_receiver_partition.clone())
         .self_stash_by_owner_partition(self_stash_by_owner_partition.clone())
-        .tx_id_to_self_stash_partition(tx_id_to_self_stash_partition.clone())
         .tx_id_to_payment_partition(tx_id_to_payment_partition.clone())
         .tx_id_to_acceptance_partition(tx_id_to_acceptance_partition.clone())
         .skip_tx_partition(skip_tx_partition.clone())

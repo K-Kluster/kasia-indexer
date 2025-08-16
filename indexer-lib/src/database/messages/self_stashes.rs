@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use anyhow::{Result, bail};
 use bytemuck::{AnyBitPattern, NoUninit};
-use fjall::{PartitionCreateOptions, ReadTransaction, UserKey, UserValue, WriteTransaction};
+use fjall::{PartitionCreateOptions, ReadTransaction, UserKey, WriteTransaction};
 
 use crate::database::messages::AddressPayload;
 
@@ -20,12 +20,12 @@ pub struct SelfStashKeyByOwner {
 
 #[repr(transparent)]
 #[derive(Clone, PartialEq, Eq)]
-pub struct LikeSelfStashData<T: AsRef<[u8]>> {
+pub struct LikeSelfStashByOwnerKey<T: AsRef<[u8]>> {
     bts: T,
     phantom_data: PhantomData<[u8]>,
 }
 
-impl<T: AsRef<[u8]>> LikeSelfStashData<T> {
+impl<T: AsRef<[u8]>> LikeSelfStashByOwnerKey<T> {
     pub fn new(bts: T) -> anyhow::Result<Self> {
         if bts.as_ref().len() < 255 + 34 {
             bail!(
@@ -108,7 +108,7 @@ impl SelfStashByOwnerPartition {
         scope: Option<&[u8]>,
         owner: AddressPayload,
         block_time: u64,
-    ) -> impl DoubleEndedIterator<Item = Result<(LikeSelfStashData<UserKey>, impl AsRef<[u8]>)>> + '_
+    ) -> impl DoubleEndedIterator<Item = Result<(LikeSelfStashByOwnerKey<UserKey>, impl AsRef<[u8]>)>> + '_
     {
         // layout prefix: owner (34) + scope (255) + block_time (8)
         const OWNER_LEN: usize = core::mem::size_of::<AddressPayload>(); // 34
@@ -141,116 +141,11 @@ impl SelfStashByOwnerPartition {
 
         rtx.range(&self.0, range_start..=range_end).map(|item| {
             let (key_bytes, value_bytes) = item?;
-            Ok((LikeSelfStashData::new(key_bytes)?, value_bytes))
+            Ok((LikeSelfStashByOwnerKey::new(key_bytes)?, value_bytes))
         })
     }
 
     pub fn approximate_len(&self) -> usize {
         self.0.approximate_len()
-    }
-}
-
-#[derive(Clone)]
-pub struct TxIdToSelfStashPartition(fjall::TxPartition);
-
-impl TxIdToSelfStashPartition {
-    pub fn new(keyspace: &fjall::TxKeyspace) -> anyhow::Result<Self> {
-        Ok(Self(keyspace.open_partition(
-            "tx_id_to_self_stash",
-            PartitionCreateOptions::default(),
-        )?))
-    }
-    pub fn approximate_len(&self) -> usize {
-        self.0.approximate_len()
-    }
-
-    pub fn insert(&self, tx_id: &[u8], scope: &[u8], sealed_hex: &[u8]) -> anyhow::Result<()> {
-        if tx_id.len() != 32 {
-            bail!("Transaction ID must be 32 bytes, got {}", tx_id.len());
-        }
-
-        let mut fixed_scope = [0u8; 255];
-        let len = scope.len().min(255); // cap at 255
-        fixed_scope[..len].copy_from_slice(&scope[..len]);
-
-        // Value: fixed_scope (255 bytes) + sealed_hex (remaining bytes)
-        let mut value_bytes = Vec::with_capacity(fixed_scope.len() + sealed_hex.len());
-        value_bytes.extend_from_slice(&fixed_scope);
-        value_bytes.extend_from_slice(sealed_hex);
-
-        self.0.insert(tx_id, value_bytes)?;
-        Ok(())
-    }
-
-    pub fn insert_wtx(
-        &self,
-        wtx: &mut WriteTransaction,
-        tx_id: &[u8],
-        scope: Option<&[u8]>,
-        sealed_hex: &[u8],
-    ) -> anyhow::Result<()> {
-        if tx_id.len() != 32 {
-            bail!("Transaction ID must be 32 bytes, got {}", tx_id.len());
-        }
-
-        // pad with zeros
-        let mut fixed_scope = [0u8; 255];
-        match scope {
-            Some(scope) => {
-                let scope_length = scope.len().min(255);
-                fixed_scope[..scope_length].copy_from_slice(&scope[..scope_length]); // cap at 255,
-            }
-            None => (),
-        };
-
-        // Value: fixed_scope (255 bytes) + sealed_hex (remaining bytes)
-        let mut value_bytes = Vec::with_capacity(fixed_scope.len() + sealed_hex.len());
-        value_bytes.extend_from_slice(&fixed_scope);
-        value_bytes.extend_from_slice(sealed_hex);
-
-        wtx.insert(&self.0, tx_id, value_bytes);
-        Ok(())
-    }
-
-    pub fn get(&self, tx_id: &[u8]) -> anyhow::Result<Option<([u8; 255], Vec<u8>)>> {
-        if tx_id.len() != 32 {
-            bail!("Transaction ID must be 32 bytes, got {}", tx_id.len());
-        }
-
-        if let Some(value_bytes) = self.0.get(tx_id)? {
-            if value_bytes.len() >= 255 {
-                // Split at position 255: first 255 bytes = scope, rest = sealed_hex
-                let scope_bytes: [u8; 255] = value_bytes[..255]
-                    .try_into()
-                    .map_err(|_| anyhow::anyhow!("Failed to parse scope bytes"))?;
-
-                let sealed_hex = value_bytes[8..].to_vec();
-                Ok(Some((scope_bytes, sealed_hex)))
-            } else {
-                bail!(
-                    "Invalid value length in tx_id_to_self_stash partition: expected at least 255 bytes, got {}",
-                    value_bytes.len()
-                )
-            }
-        } else {
-            Ok(None)
-        }
-    }
-
-    pub fn get_rtx(
-        &self,
-        rtx: &ReadTransaction,
-        tx_id: &[u8],
-    ) -> anyhow::Result<Option<LikeSelfStashData<UserValue>>> {
-        if tx_id.len() != 32 {
-            bail!("Transaction ID must be 32 bytes, got {}", tx_id.len());
-        }
-
-        if let Some(value_bytes) = rtx.get(&self.0, tx_id)? {
-            let self_stash_data = LikeSelfStashData::new(value_bytes)?;
-            Ok(Some(self_stash_data))
-        } else {
-            Ok(None)
-        }
     }
 }
