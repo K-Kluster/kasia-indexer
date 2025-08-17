@@ -142,8 +142,7 @@ async fn main() -> anyhow::Result<()> {
         .shared_metrics(metrics.clone())
         .build();
     let mut virtual_processor = VirtualProcessor::builder()
-        .synced_capacity(500_000)
-        .unsynced_capacity(3_000_000)
+        .synced_capacity(3_000_000)
         .processed_block_tx(processed_block_rx)
         .realtime_vcc_tx(vcc_intake_rx)
         .syncer_rx(syncer_rx)
@@ -246,6 +245,7 @@ async fn main() -> anyhow::Result<()> {
 
     tokio::time::sleep(Duration::from_secs(5)).await; // let time to spawn everything
     info!("Connecting to Kaspa node...");
+    // dbg!(context.config.kaspa_node_wborsh_url)
     context
         .rpc_client
         .connect(Some(options))
