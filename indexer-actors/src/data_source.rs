@@ -362,6 +362,11 @@ impl DataSource {
                     info!("Both processors closed, data source can now terminate");
                 } else {
                     info!("Block processor closed, waiting for VCC processor");
+                    _ = self
+                        .vcc_sender
+                        .send_async(RealTimeVccNotification::Shutdown)
+                        .await
+                        .inspect_err(|_err| warn!("Error sending shutdown to VCC processor"));
                 }
                 Ok(continue_running)
             }
@@ -376,6 +381,11 @@ impl DataSource {
                     info!("Both processors closed, data source can now terminate");
                 } else {
                     info!("VCC processor closed, waiting for block processor");
+                    _ = self
+                        .block_sender
+                        .send_async(BlockNotification::Shutdown)
+                        .await
+                        .inspect_err(|_err| warn!("Error sending shutdown to block processor"));
                 }
                 Ok(continue_running)
             }

@@ -6,7 +6,6 @@ use axum::extract::State;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
-use futures_util::FutureExt;
 use indexer_actors::metrics::{IndexerMetricsSnapshot, SharedMetrics};
 use indexer_db::messages::contextual_message::ContextualMessageBySenderPartition;
 use indexer_db::messages::handshake::{
@@ -18,7 +17,6 @@ use indexer_db::messages::payment::{
 use indexer_db::processing::tx_id_to_acceptance::TxIDToAcceptancePartition;
 use std::net::SocketAddr;
 use tower_http::cors::CorsLayer;
-use tracing::error;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 pub mod contextual_messages;
@@ -103,16 +101,16 @@ impl Api {
     pub async fn serve(
         self,
         bind_address: &str,
-        shutdown: tokio::sync::oneshot::Receiver<()>,
+        mut shutdown: tokio::sync::mpsc::Receiver<()>,
     ) -> anyhow::Result<()> {
         let addr: SocketAddr = bind_address.parse()?;
         let app = self.router();
         let listener = tokio::net::TcpListener::bind(addr).await?;
         tracing::info!("Starting API server on {}", addr);
         axum::serve(listener, app.into_make_service())
-            .with_graceful_shutdown(shutdown.map(|v| {
-                _ = v.inspect_err(|_err| error!("shutdown receive error"));
-            }))
+            .with_graceful_shutdown(async move {
+                shutdown.recv().await;
+            })
             .await?;
         Ok(())
     }

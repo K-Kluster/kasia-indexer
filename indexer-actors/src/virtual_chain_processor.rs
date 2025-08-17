@@ -431,7 +431,7 @@ impl VirtualProcessor {
             _ = syncer
                 .process()
                 .await
-                .inspect_err(|_| error!("Error in syncer"));
+                .inspect_err(|err| error!("Error in syncer: {err}"));
         });
         ack_tx
     }

@@ -1,5 +1,6 @@
 use crate::data_source::{Command, Request};
 use crate::virtual_chain_processor::SyncVccNotification;
+use anyhow::Context;
 use futures_util::FutureExt;
 use tracing::error;
 
@@ -48,10 +49,10 @@ impl VirtualChainSyncer {
             r = resp_rx => {
                 let r = r??;
                 from = r.added_chain_block_hashes.last().map(|h| h.as_bytes()).unwrap_or(from);
-                self.vcc_tx.send(SyncVccNotification::VirtualChain {syncer_id: self.syncer_id,virtual_chain: r})?;
+                self.vcc_tx.send(SyncVccNotification::VirtualChain {syncer_id: self.syncer_id,virtual_chain: r}).context("Failed to send first virtual chain")?;
             },
             r = self.ack_rx.recv().fuse() => {
-                let r = r?;
+                let r = r.context("Failed to receive first ack")?;
                 match r {
                     NotificationAck::Continue => unreachable!(),
                     NotificationAck::Stop => {
@@ -61,7 +62,7 @@ impl VirtualChainSyncer {
             }
         }
         loop {
-            match self.ack_rx.recv().await? {
+            match self.ack_rx.recv().await.context("Failed to receive ack")? {
                 NotificationAck::Stop => return Ok(()),
                 NotificationAck::Continue => {
                     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
@@ -70,15 +71,16 @@ impl VirtualChainSyncer {
                             vc_from: from,
                             response_channel: resp_tx,
                         }))
-                        .await?;
+                        .await
+                        .context("Failed to send request")?;
                     tokio::select! {
                         r = resp_rx => {
-                            let r = r??;
+                            let r = r.context("Failed to receive response")?.context("Failed response")?;
                             from = r.added_chain_block_hashes.last().map(|h| h.as_bytes()).unwrap_or(from);
-                            self.vcc_tx.send(SyncVccNotification::VirtualChain {syncer_id: self.syncer_id,virtual_chain: r})?;
+                            self.vcc_tx.send_async(SyncVccNotification::VirtualChain {syncer_id: self.syncer_id,virtual_chain: r}).await.context("Failed to send virtual chain")?;
                         },
                         r = self.ack_rx.recv().fuse() => {
-                            let r = r?;
+                            let r = r.context("Failed to receive ack")?;
                             match r {
                                 NotificationAck::Continue => unreachable!(),
                                 NotificationAck::Stop => {

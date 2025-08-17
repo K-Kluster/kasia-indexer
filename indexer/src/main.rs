@@ -2,6 +2,7 @@ use crate::config::get_indexer_config;
 use crate::context::{IndexerContext, get_indexer_context};
 use dotenv::dotenv;
 use fjall::Config;
+use futures_util::TryFutureExt;
 use indexer_actors::block_processor::BlockProcessor;
 use indexer_actors::data_source::DataSource;
 use indexer_actors::metrics::{IndexerMetricsSnapshot, create_shared_metrics_from_snapshot};
@@ -113,10 +114,10 @@ async fn main() -> anyhow::Result<()> {
         }
     };
     let (syncer_tx, syncer_rx) = flume::bounded(4);
-    let (shutdown_data_source_tx, shutdown_data_source_rx) = tokio::sync::mpsc::channel(1);
+    let (shutdown_data_source_tx, shutdown_data_source_rx) = tokio::sync::mpsc::channel(2);
     let (periodic_intake_tx, periodic_intake_rx) = workflow_core::channel::bounded(1);
     let (periodic_resp_tx, periodic_resp_rx) = workflow_core::channel::bounded(1);
-    let (shutdown_ticker_tx, shutdown_ticker_rx) = tokio::sync::mpsc::channel(1);
+    let (shutdown_ticker_tx, shutdown_ticker_rx) = tokio::sync::mpsc::channel(2);
 
     let mut block_processor = BlockProcessor::builder()
         .notification_rx(block_intake_rx.clone())
@@ -239,7 +240,7 @@ async fn main() -> anyhow::Result<()> {
         metrics.clone(),
         context.clone(),
     );
-    let (api_shutdown_tx, api_shutdown_rx) = tokio::sync::oneshot::channel();
+    let (api_shutdown_tx, api_shutdown_rx) = tokio::sync::mpsc::channel(2);
     let api_handle = tokio::spawn(api_service.serve("0.0.0.0:8080", api_shutdown_rx));
 
     let options = ConnectOptions {
@@ -256,43 +257,30 @@ async fn main() -> anyhow::Result<()> {
         .connect(Some(options))
         .await
         .map_err(|e| anyhow::anyhow!("Failed to connect to node: {}", e))?;
-
-    // Handle shutdown
-    tokio::signal::ctrl_c().await?;
-    info!("Termination signal received. Shutting down...");
-
-    _ = api_shutdown_tx
-        .send(())
-        .inspect_err(|_err| error!("failed to shutdown api"));
-
-    info!("Sending shutdown signal to data source");
-    _ = shutdown_data_source_tx
-        .send(())
-        .await
-        .inspect(|_| info!("Shutdown signal sent to data source successfully"))
-        .inspect_err(|_err| error!("failed to shutdown data source"));
-    _ = shutdown_ticker_tx
-        .send(())
-        .await
-        .inspect_err(|_err| error!("failed to shutdown ticker"));
-    // Await on all tasks to complete
-    info!("waiting for api finish");
-    _ = api_handle
-        .await
-        .inspect(|_| info!("api has stopped"))
-        .inspect_err(|err| error!("api has stopped with error: {}", err));
-
-    info!("waiting for data source finish");
-    _ = data_source_handle
-        .await
-        .inspect(|_| info!("data source has stopped"))
-        .inspect_err(|err| error!("data_source finished with err: {}", err));
-
-    info!("waiting for ticker finish");
-    _ = ticker_handle
-        .await
-        .inspect(|_| info!("ticker has stopped"))
-        .inspect_err(|err| error!("ticker processing error: {}", err));
+    let shutdown = Shutdown {
+        api: api_shutdown_tx,
+        data_source: shutdown_data_source_tx,
+        ticker: shutdown_ticker_tx,
+    };
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            info!("Termination signal received. Shutting down...");
+            shutdown.shutdown(None).await
+        }
+        r = api_handle => {
+           _ = r.inspect(|_| info!("api has stopped"))
+                .inspect_err(|err| error!("api has stopped with error: {}", err));
+            shutdown.shutdown(Some(Exclude::Api)).await;
+        },
+        r = data_source_handle => {
+           _ = r.inspect(|_| info!("data source has stopped")).inspect_err(|err| error!("data_source finished with err: {}", err));
+             shutdown.shutdown(Some(Exclude::DataSource)).await;
+        },
+        r = ticker_handle => {
+            _ = r.inspect(|_| info!("ticker has stopped")).inspect_err(|err| error!("ticker processing error: {}", err));
+             shutdown.shutdown(Some(Exclude::Ticker)).await;
+        },
+    }
 
     info!("waiting for virtual processor finish");
     _ = virtual_processor_handle
@@ -372,4 +360,66 @@ fn format_gap(bg: &BlockGap) -> String {
         bg.from.to_hex_64(),
         bg.to.to_hex_64()
     )
+}
+
+#[derive(Clone)]
+struct Shutdown {
+    api: tokio::sync::mpsc::Sender<()>,
+    data_source: tokio::sync::mpsc::Sender<()>,
+    ticker: tokio::sync::mpsc::Sender<()>,
+}
+
+enum Exclude {
+    Api,
+    DataSource,
+    Ticker,
+}
+impl Shutdown {
+    async fn shutdown(&self, exclude: Option<Exclude>) {
+        match exclude {
+            None => {
+                _ = tokio::join!(
+                    self.api
+                        .send(())
+                        .inspect_err(|_err| error!("failed to shutdown api")),
+                    self.data_source
+                        .send(())
+                        .inspect_err(|_err| error!("failed to shutdown data source")),
+                    self.ticker
+                        .send(())
+                        .inspect_err(|_err| error!("failed to shutdown ticker"))
+                );
+            }
+            Some(Exclude::Api) => {
+                _ = tokio::join!(
+                    self.data_source
+                        .send(())
+                        .inspect_err(|_err| error!("failed to shutdown data source")),
+                    self.ticker
+                        .send(())
+                        .inspect_err(|_err| error!("failed to shutdown ticker"))
+                );
+            }
+            Some(Exclude::DataSource) => {
+                _ = tokio::join!(
+                    self.api
+                        .send(())
+                        .inspect_err(|_err| error!("failed to shutdown api")),
+                    self.ticker
+                        .send(())
+                        .inspect_err(|_err| error!("failed to shutdown ticker"))
+                );
+            }
+            Some(Exclude::Ticker) => {
+                _ = tokio::join!(
+                    self.api
+                        .send(())
+                        .inspect_err(|_err| error!("failed to shutdown api")),
+                    self.data_source
+                        .send(())
+                        .inspect_err(|_err| error!("failed to shutdown data source")),
+                );
+            }
+        }
+    }
 }
