@@ -632,6 +632,11 @@ impl VirtualProcessor {
                     (compact_header.daa_score, compact_header.blue_work),
                 );
                 while let Some(vcc) = state.shared_state.realtime_queue_vcc.pop_front() {
+                    if vcc.removed_chain_block_hashes.is_empty()
+                        && vcc.added_chain_block_hashes.is_empty()
+                    {
+                        continue;
+                    }
                     if vcc.added_chain_block_hashes.iter().any(|hash| {
                         !state
                             .shared_state
