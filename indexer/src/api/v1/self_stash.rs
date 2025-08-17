@@ -172,7 +172,7 @@ async fn get_self_stash_by_owner(
 
             let stashed_data_str = faster_hex::hex_string(self_stash_data.as_ref());
 
-            let scope = if self_stash_key.scope.iter().rev().any(|&b| b != 0) {
+            let scope = if self_stash_key.scope.iter().any(|&b| b != 0) {
                 Some(faster_hex::hex_string(&self_stash_key.scope))
             } else {
                 None
