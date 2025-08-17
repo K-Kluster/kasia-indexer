@@ -378,7 +378,7 @@ impl PeriodicProcessor {
                             );
                         }
                         SenderResolutionLikeKey::SelfStashKey(ssk) => {
-                            self.self_stash_by_owner_partition.insert_wtx(
+                            self.self_stash_by_owner_partition.update_owner(
                                 &mut wtx,
                                 &SelfStashKeyByOwner {
                                     scope: ssk.scope,
@@ -388,8 +388,8 @@ impl PeriodicProcessor {
                                     version: ssk.version,
                                     tx_id: ssk.tx_id,
                                 },
-                                Some(sender),
-                            );
+                                &sender,
+                            )?;
                         }
                     }
                 }

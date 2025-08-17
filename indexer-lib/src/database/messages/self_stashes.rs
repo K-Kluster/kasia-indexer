@@ -4,7 +4,7 @@ use std::{
     ops::Deref,
 };
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use bytemuck::{AnyBitPattern, NoUninit};
 use fjall::{PartitionCreateOptions, ReadTransaction, UserKey, WriteTransaction};
 
@@ -63,29 +63,36 @@ impl SelfStashByOwnerPartition {
         )?))
     }
 
-    pub fn insert(
-        &self,
-        key: &SelfStashKeyByOwner,
-        sender: Option<AddressPayload>,
-    ) -> anyhow::Result<()> {
-        let sender = sender.unwrap_or_default();
-        self.0
-            .insert(bytemuck::bytes_of(key), bytemuck::bytes_of(&sender))?;
-        Ok(())
+    pub fn insert_wtx(&self, wtx: &mut WriteTransaction, key: &SelfStashKeyByOwner, data: &[u8]) {
+        wtx.insert(&self.0, bytemuck::bytes_of(key), data);
     }
 
-    pub fn insert_wtx(
+    /// error if the key doesn't exists
+    /// the key can change after this operation as owner is part of it
+    pub fn update_owner(
         &self,
         wtx: &mut WriteTransaction,
-        key: &SelfStashKeyByOwner,
-        sender: Option<AddressPayload>,
-    ) {
-        let sender = sender.unwrap_or_default();
-        wtx.insert(
-            &self.0,
-            bytemuck::bytes_of(key),
-            bytemuck::bytes_of(&sender),
-        );
+        old_key: &SelfStashKeyByOwner,
+        owner: &AddressPayload,
+    ) -> anyhow::Result<()> {
+        // exist guard
+        let old_key_as_bytes = bytemuck::bytes_of(old_key);
+        let data = self.0.inner().get(old_key_as_bytes)?.ok_or(anyhow!(
+            "Cannot find an existing self-stash key while updating the owner"
+        ))?;
+
+        // create new key
+        let new_key = {
+            let mut old_cloned = old_key.clone();
+            old_cloned.owner = owner.clone();
+
+            old_cloned
+        };
+
+        wtx.insert(&self.0, bytemuck::bytes_of(&new_key), data);
+        wtx.remove(&self.0, old_key_as_bytes);
+
+        Ok(())
     }
 
     pub fn iter(

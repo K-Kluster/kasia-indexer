@@ -344,7 +344,6 @@ impl BlockProcessor {
         self.self_stash_by_owner_partition.insert_wtx(
             wtx,
             &SelfStashKeyByOwner {
-                // @QUESTION: not sure about populating default value here
                 owner: AddressPayload::default(),
                 scope: fixed_scope,
                 block_time: block.header.timestamp.to_be_bytes(),
@@ -352,7 +351,7 @@ impl BlockProcessor {
                 version: 1,
                 tx_id: tx_id.as_bytes(),
             },
-            None,
+            op.sealed_hex,
         );
 
         let self_stash_for_resolution = SelfStashKeyForResolution {
