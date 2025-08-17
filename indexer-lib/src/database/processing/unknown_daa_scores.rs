@@ -19,7 +19,10 @@ const fn max(a: usize, b: usize) -> usize {
 const MAX_RESOLUTION_KEY_SIZE: usize = max(
     max(
         std::mem::size_of::<HandshakeKeyForResolution>(),
-        std::mem::size_of::<ContextualMessageKeyForResolution>(),
+        max(
+            std::mem::size_of::<ContextualMessageKeyForResolution>(),
+            std::mem::size_of::<SelfStashKeyForResolution>(),
+        ),
     ),
     std::mem::size_of::<PaymentKeyForResolution>(),
 );
