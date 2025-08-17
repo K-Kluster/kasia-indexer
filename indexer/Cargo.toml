@@ -15,7 +15,7 @@ futures-util = { workspace = true }
 kaspa-addresses = { workspace = true }
 kaspa-rpc-core = { workspace = true }
 kaspa-wrpc-client = { workspace = true }
-rayon.workspace = true
+#rayon.workspace = true
 rolling-file = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 time = { workspace = true , features = ["macros"]}

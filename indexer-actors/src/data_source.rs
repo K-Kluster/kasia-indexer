@@ -22,7 +22,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use thiserror::Error;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, warn};
 use workflow_core::channel::Channel;
 use workflow_serializer::prelude::Serializable;
 
@@ -81,7 +81,6 @@ impl DataSource {
         info!("Data source task started");
         let rpc_ctl_channel = self.rpc_client.rpc_ctl().multiplexer().channel();
         loop {
-            trace!("Data source select loop iteration");
             tokio::select! {
                 biased;
                 command = self.command_rx.receiver.recv().fuse() => {

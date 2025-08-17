@@ -1,8 +1,9 @@
 use crate::data_source::{Command, Request};
+use crate::util::ToHex64;
 use crate::virtual_chain_processor::SyncVccNotification;
 use anyhow::Context;
 use futures_util::FutureExt;
-use tracing::error;
+use tracing::{error, info};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationAck {
@@ -37,6 +38,8 @@ impl VirtualChainSyncer {
 
     pub async fn process(&self) -> anyhow::Result<()> {
         let mut from = self.from;
+        info!(from = %from.to_hex_64(), "Starting VirtualChainSyncer");
+
         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
 
         self.commands_tx

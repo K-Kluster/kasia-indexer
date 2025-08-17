@@ -29,16 +29,20 @@ impl Ticker {
     pub async fn process(&mut self) -> anyhow::Result<()> {
         info!(interval_secs = self.interval.as_secs(), "Ticker started");
         let mut need_to_send = true;
-        let mut shutting_down = false;
         let mut t = tokio::time::interval(self.interval);
         loop {
             tokio::select! {
                 biased;
                 _ = self.shutdown.recv().fuse() => {
                     info!("Ticker shutdown signal received");
-                    shutting_down = true;
                     debug!("Sending shutdown signal to periodic processor");
                     _ = self.job_trigger_tx.send(Intake::Shutdown).await.inspect_err(|err| error!("Error sending shutdown signal: {}", err));
+                    loop {
+                        if let Response::Stopped = self.resp_rx.recv().await? {
+                            info!("Ticker is shutting down");
+                            return Ok(())
+                        }
+                    }
                 }
                 _ = t.tick().fuse() => {
                     if need_to_send {
@@ -57,13 +61,8 @@ impl Ticker {
                             need_to_send = true;
                         }
                         Response::Stopped => {
-                            if shutting_down {
-                                info!("Ticker is shutting down");
-                                return Ok(())
-                            } else {
-                                error!("Periodic processor stopped unexpectedly");
-                                bail!("Periodic processor stopped unexpectedly")
-                            }
+                            error!("Periodic processor stopped unexpectedly");
+                            bail!("Periodic processor stopped unexpectedly")
                         }
                     }
                 }

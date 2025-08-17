@@ -31,7 +31,7 @@ use kaspa_rpc_core::{
 pub use message::*;
 use std::collections::VecDeque;
 use std::time::Instant;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 use workflow_core::channel::Sender;
 
 #[derive(bon::Builder)]
@@ -402,12 +402,14 @@ impl VirtualProcessor {
                 } else {
                     let (last_block, last_blue_work) =
                         self.handle_vcc(&state.shared_state, &vcc)?;
+                    debug!(last_block = %last_block.to_hex_64(),"Realtime vcc is handled");
                     state.shared_state.processed_time_or_warn = Instant::now();
                     *last_accepting_block = last_block;
                     *last_accepting_blue_work = last_blue_work;
                 }
             }
             SyncState::Syncing { .. } => {
+                trace!("Queue realtime vcc because we are syncing");
                 state.shared_state.realtime_queue_vcc.push_back(vcc);
             }
         }
