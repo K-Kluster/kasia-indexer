@@ -32,7 +32,7 @@ pub enum MetadataKey {
     Unaligned,
 )]
 pub struct Cursor {
-    pub blue_work: [u8; 24], // Uint192 serialized as 24 be bytes
+    pub blue_work: [u8; 24], // Uint192 serialized as 24 BE bytes
     pub block_hash: [u8; 32],
     pub daa_score: U64,
 }

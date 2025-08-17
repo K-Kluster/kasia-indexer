@@ -274,7 +274,7 @@ impl BlockProcessor {
     ) -> anyhow::Result<()> {
         let already_processed = self.block_compact_header_partition.insert_compact_header(
             block.header.hash.as_ref(),
-            block.header.blue_work.to_be_bytes(),
+            block.header.blue_work.to_le_bytes(),
             block.header.daa_score,
         )?;
         if already_processed {
