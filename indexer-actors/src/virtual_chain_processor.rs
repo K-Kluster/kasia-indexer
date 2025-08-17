@@ -331,7 +331,7 @@ impl VirtualProcessor {
                 .processed_time_or_warn
                 .elapsed()
                 .as_secs()
-                > 60
+                > 120
             {
                 state.shared_state.processed_time_or_warn = Instant::now();
                 warn!("We don't process vcc for a long time");
@@ -392,7 +392,7 @@ impl VirtualProcessor {
                         .processed_time_or_warn
                         .elapsed()
                         .as_secs()
-                        > 60
+                        > 120
                     {
                         state.shared_state.processed_time_or_warn = Instant::now();
                         warn!("We don't process vcc for a long time");
