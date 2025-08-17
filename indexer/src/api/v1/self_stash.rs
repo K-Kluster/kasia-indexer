@@ -106,7 +106,7 @@ async fn get_self_stash_by_owner(
     };
 
     // Decode scope hex if provided (max 510 hex chars = 255 bytes)
-    if params.scope.unwrap_or_default().len() > 255 {
+    if params.scope.clone().unwrap_or_default().len() > 255 {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
@@ -117,7 +117,7 @@ async fn get_self_stash_by_owner(
 
     let mut scope_bytes = [0u8; 255];
     match faster_hex::hex_decode(
-        params.scope.unwrap_or_default().as_bytes(),
+        params.scope.clone().unwrap_or_default().as_bytes(),
         &mut scope_bytes[..params.scope.unwrap_or_default().len() / 2],
     ) {
         Ok(_) => (),
@@ -131,15 +131,14 @@ async fn get_self_stash_by_owner(
         }
     };
 
-    let alias = params.scope;
-
     let result = spawn_blocking(move || {
         let mut messages = vec![];
         let rtx = state.tx_keyspace.read_tx();
 
         for self_stash_result in state
             .self_stash_by_owner_partition
-            .iter_by_owner_and_scope_from_block_time_rtx(&rtx, Some(&scope_bytes), owner, cursor)
+            // @TODO: debug the query
+            .iter_by_owner(&rtx, owner, cursor)
             .take(limit)
         {
             let (self_stash_key, self_stash_data) = match self_stash_result {
@@ -174,10 +173,16 @@ async fn get_self_stash_by_owner(
 
             let stashed_data_str = faster_hex::hex_string(self_stash_data.as_ref());
 
+            let scope = if self_stash_key.scope.iter().rev().any(|&b| b != 0) {
+                Some(faster_hex::hex_string(&self_stash_key.scope))
+            } else {
+                None
+            };
+
             messages.push(SelfStashResponse {
                 tx_id,
                 owner: sender_str,
-                scope: &self_stash_key.scope(),
+                scope,
                 stashed_data: stashed_data_str,
                 block_time,
                 accepting_block,

@@ -38,10 +38,11 @@ pub mod self_stash;
         contextual_messages::get_contextual_messages_by_sender,
         payments::get_payments_by_sender,
         payments::get_payments_by_receiver,
+        self_stash::get_self_stash_by_owner,
         get_metrics,
     ),
     components(
-        schemas(handshakes::HandshakeResponse, contextual_messages::ContextualMessageResponse, IndexerMetricsSnapshot)
+        schemas(handshakes::HandshakeResponse, contextual_messages::ContextualMessageResponse, payments::PaymentResponse, self_stash::SelfStashResponse, IndexerMetricsSnapshot)
     ),
     tags(
         (name = "Kasia Indexer API", description = "Kasia Indexer API")

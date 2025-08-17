@@ -1,6 +1,10 @@
-use std::marker::PhantomData;
+use std::{
+    fmt::{Debug, Formatter},
+    marker::PhantomData,
+    ops::Deref,
+};
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use bytemuck::{AnyBitPattern, NoUninit};
 use fjall::{PartitionCreateOptions, ReadTransaction, UserKey, WriteTransaction};
 
@@ -22,34 +26,29 @@ pub struct SelfStashKeyByOwner {
 #[derive(Clone, PartialEq, Eq)]
 pub struct LikeSelfStashByOwnerKey<T: AsRef<[u8]>> {
     bts: T,
-    phantom_data: PhantomData<[u8]>,
+    phantom_data: PhantomData<SelfStashKeyByOwner>,
+}
+
+impl<T: AsRef<[u8]>> Debug for LikeSelfStashByOwnerKey<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.deref().fmt(f)
+    }
 }
 
 impl<T: AsRef<[u8]>> LikeSelfStashByOwnerKey<T> {
-    pub fn new(bts: T) -> anyhow::Result<Self> {
-        if bts.as_ref().len() < 255 + 34 {
-            bail!(
-                "SelfStash data must be at least 34 + 255 bytes (scope), got {}",
-                bts.as_ref().len()
-            );
-        }
-        Ok(Self {
+    pub fn new(bts: T) -> Self {
+        Self {
             bts,
             phantom_data: PhantomData,
-        })
+        }
     }
+}
 
-    pub fn scope(&self) -> &[u8] {
-        let scope_bytes = self.bts.as_ref()[33..33 + 255]
-            .try_into()
-            .expect("scope bytes should be exactly 255 bytes");
-        scope_bytes
-    }
+impl<T: AsRef<[u8]>> Deref for LikeSelfStashByOwnerKey<T> {
+    type Target = SelfStashKeyByOwner;
 
-    pub fn owner(&self) -> &[u8] {
-        self.bts.as_ref()[..33]
-            .try_into()
-            .expect("scope bytes should be exactly 255 bytes")
+    fn deref(&self) -> &Self::Target {
+        bytemuck::from_bytes(self.bts.as_ref())
     }
 }
 
@@ -102,6 +101,34 @@ impl SelfStashByOwnerPartition {
         })
     }
 
+    pub fn iter_by_owner(
+        &self,
+        rtx: &ReadTransaction,
+        owner: AddressPayload,
+        block_time: u64,
+    ) -> impl DoubleEndedIterator<Item = Result<(LikeSelfStashByOwnerKey<UserKey>, impl AsRef<[u8]>)>> + '_
+    {
+        // layout prefix: owner (34) + scope (255) + block_time (8)
+        const OWNER_LEN: usize = core::mem::size_of::<AddressPayload>(); // 34
+        const SCOPE_LEN: usize = 255;
+        const TIME_LEN: usize = 8;
+        const PREFIX_LEN: usize = OWNER_LEN + SCOPE_LEN + TIME_LEN;
+
+        // start: owner + (scope or zeros) + from block_time
+        let mut range_start = [0u8; PREFIX_LEN];
+        range_start[..OWNER_LEN].copy_from_slice(bytemuck::bytes_of(&owner));
+        range_start[OWNER_LEN + SCOPE_LEN..PREFIX_LEN].copy_from_slice(&block_time.to_be_bytes());
+
+        // end: owner + (same scope if provided, otherwise 0xFF for all scopes) + max time (0xFF...)
+        let mut range_end = [0xFFu8; PREFIX_LEN];
+        range_end[..OWNER_LEN].copy_from_slice(bytemuck::bytes_of(&owner));
+
+        rtx.range(&self.0, range_start..=range_end).map(|item| {
+            let (key_bytes, value_bytes) = item?;
+            Ok((LikeSelfStashByOwnerKey::new(key_bytes), value_bytes))
+        })
+    }
+
     pub fn iter_by_owner_and_scope_from_block_time_rtx(
         &self,
         rtx: &ReadTransaction,
@@ -141,7 +168,7 @@ impl SelfStashByOwnerPartition {
 
         rtx.range(&self.0, range_start..=range_end).map(|item| {
             let (key_bytes, value_bytes) = item?;
-            Ok((LikeSelfStashByOwnerKey::new(key_bytes)?, value_bytes))
+            Ok((LikeSelfStashByOwnerKey::new(key_bytes), value_bytes))
         })
     }
 
