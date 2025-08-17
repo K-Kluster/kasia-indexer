@@ -329,7 +329,6 @@ pub fn init_logs(context: &IndexerContext) -> anyhow::Result<(WorkerGuard, Worke
         .with_writer(non_blocking_appender)
         .with_filter(
             EnvFilter::builder()
-                .with_env_var("RUST_LOG_FILE")
                 .with_default_directive(LevelFilter::INFO.into())
                 .from_env_lossy(),
         );
