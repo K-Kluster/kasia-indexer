@@ -30,7 +30,8 @@ use kaspa_rpc_core::{
 };
 pub use message::*;
 use std::collections::VecDeque;
-use tracing::{debug, error, info};
+use std::time::Instant;
+use tracing::{debug, error, info, warn};
 use workflow_core::channel::Sender;
 
 #[derive(bon::Builder)]
@@ -78,6 +79,7 @@ struct StateShared {
     shutting_down: bool,
     processed_blocks: ringmap::RingMap<[u8; 32], (DaaScore, BlueWorkType)>, // when we get synced keep only blocks in ~10 mins interval. realloc it
     realtime_queue_vcc: VecDeque<VirtualChainChangedNotification>, // perform realloc when sync is finished if queue is too big
+    processed_time_or_warn: std::time::Instant,
 }
 
 impl StateShared {
@@ -99,6 +101,7 @@ impl StateShared {
             shutting_down: false,
             processed_blocks,
             realtime_queue_vcc: VecDeque::new(),
+            processed_time_or_warn: Instant::now(),
         }
     }
 }
@@ -323,6 +326,17 @@ impl VirtualProcessor {
                 .processed_blocks
                 .contains_key(&hash.as_bytes())
         }) {
+            if state
+                .shared_state
+                .processed_time_or_warn
+                .elapsed()
+                .as_secs()
+                > 60
+            {
+                state.shared_state.processed_time_or_warn = Instant::now();
+                warn!("We don't process vcc for a long time");
+                // todo force request required blocks
+            }
             assert!(sync_queue.is_none());
             sync_queue.replace(vcc);
             return Ok(());
@@ -341,6 +355,7 @@ impl VirtualProcessor {
             };
         } else {
             let last = self.handle_vc_resp(&state.shared_state, vcc)?;
+            state.shared_state.processed_time_or_warn = Instant::now();
             *last_accepting_block = last;
             syncer.send_blocking(NotificationAck::Continue)?;
         }
@@ -372,10 +387,22 @@ impl VirtualProcessor {
                             .contains_key(&hash.as_bytes())
                     })
                 {
+                    if state
+                        .shared_state
+                        .processed_time_or_warn
+                        .elapsed()
+                        .as_secs()
+                        > 60
+                    {
+                        state.shared_state.processed_time_or_warn = Instant::now();
+                        warn!("We don't process vcc for a long time");
+                        // todo force request required blocks
+                    }
                     state.shared_state.realtime_queue_vcc.push_back(vcc);
                 } else {
                     let (last_block, last_blue_work) =
                         self.handle_vcc(&state.shared_state, &vcc)?;
+                    state.shared_state.processed_time_or_warn = Instant::now();
                     *last_accepting_block = last_block;
                     *last_accepting_blue_work = last_blue_work;
                 }
@@ -496,10 +523,16 @@ impl VirtualProcessor {
         state_shared: &StateShared,
     ) -> anyhow::Result<()> {
         let block = block.as_bytes();
-        let tracked_tx_ids = self
+        let Some(tracked_tx_ids) = self
             .accepting_block_to_tx_id_partition
             .remove_wtx(wtx, &block)?
-            .expect("RemovedBlock must exists");
+        else {
+            warn!(
+                "Block {} not found in accepting_block_to_tx_id_partition for removal",
+                block.to_hex_64()
+            );
+            return Ok(());
+        };
         let daa = state_shared.processed_blocks.get(&block).unwrap().0;
 
         for tx_id in tracked_tx_ids.as_ref() {
