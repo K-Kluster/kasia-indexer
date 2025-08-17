@@ -17,6 +17,7 @@ use kaspa_wrpc_client::client::ConnectOptions;
 use kaspa_wrpc_client::prelude::{
     BlockAddedScope, ListenerId, Scope, VirtualChainChangedScope, VirtualDaaScoreChangedScope,
 };
+use protocol::operation::deserializer::PROTOCOL_PREFIX;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -143,7 +144,7 @@ impl DataSource {
 
         let sink_blue_work = self
             .rpc_client
-            .get_block(info.sink, false)
+            .get_block(info.sink, false, vec![])
             .await?
             .header
             .blue_work;
@@ -430,6 +431,7 @@ impl DataSource {
                                     Some(RpcHash::from_bytes(blocks_from)),
                                     true,
                                     true,
+                                    PROTOCOL_PREFIX.as_bytes().to_vec(),
                                 )),
                             )
                             .await
@@ -502,6 +504,7 @@ impl DataSource {
                                 Serializable(GetVirtualChainFromBlockRequest::new(
                                     RpcHash::from_bytes(vc_from),
                                     true,
+                                    None,
                                 )),
                             )
                             .await
