@@ -1,7 +1,8 @@
 use crate::database::resolution_keys::{
     ContextualMessageKeyForResolution, DaaResolutionLikeKey, HandshakeKeyForResolution,
     LikeContextualMessageKeyForResolution, LikeHandshakeKeyForResolution,
-    LikePaymentKeyForResolution, PaymentKeyForResolution, SelfStashKeyForResolution,
+    LikePaymentKeyForResolution, LikeSelfStashKeyForResolution, PaymentKeyForResolution,
+    SelfStashKeyForResolution,
 };
 use anyhow::Result;
 use bytemuck::{AnyBitPattern, NoUninit};
@@ -56,6 +57,12 @@ impl PaddedResolutionEntry {
                 let size = std::mem::size_of::<PaymentKeyForResolution>();
                 Ok(DaaResolutionLikeKey::PaymentKey(
                     LikePaymentKeyForResolution::new(&self.resolution_key_data[..size]),
+                ))
+            }
+            x if x == DaaResolutionPartitionType::SelfStashByOwner as u8 => {
+                let size = std::mem::size_of::<SelfStashKeyForResolution>();
+                Ok(DaaResolutionLikeKey::SelfStashKey(
+                    LikeSelfStashKeyForResolution::new(&self.resolution_key_data[..size]),
                 ))
             }
             _ => Err(anyhow::anyhow!(

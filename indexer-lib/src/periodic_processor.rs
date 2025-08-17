@@ -2,6 +2,7 @@ use crate::APP_IS_RUNNING;
 use crate::RK_PRUNING_DEPTH;
 use crate::database::PartitionId;
 use crate::database::headers::{BlockCompactHeaderPartition, DaaIndexPartition};
+use crate::database::messages::AddressPayload;
 use crate::database::messages::self_stashes::SelfStashByOwnerPartition;
 use crate::database::messages::self_stashes::SelfStashKeyByOwner;
 use crate::database::messages::{
@@ -126,7 +127,13 @@ impl PeriodicProcessor {
                     self.handle_sender_resolution(r)?;
                 }
                 Notification::Tick => {
-                    self.tick_work()?;
+                    let tick_result = self.tick_work();
+
+                    if let Err(error) = tick_result {
+                        error!("{:?}", error);
+                        panic!();
+                    }
+
                     self.job_done_tx.send_blocking(())?;
                 }
                 Notification::Shutdown => {
@@ -380,9 +387,11 @@ impl PeriodicProcessor {
                         SenderResolutionLikeKey::SelfStashKey(ssk) => {
                             self.self_stash_by_owner_partition.update_owner(
                                 &mut wtx,
+                                // building the current (soon to be called old) key
                                 &SelfStashKeyByOwner {
                                     scope: ssk.scope,
-                                    owner: sender,
+                                    // this is intended to build the old key
+                                    owner: AddressPayload::default(),
                                     block_time: ssk.block_time,
                                     block_hash: ssk.block_hash,
                                     version: ssk.version,

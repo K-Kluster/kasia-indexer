@@ -108,34 +108,6 @@ impl SelfStashByOwnerPartition {
         })
     }
 
-    pub fn iter_by_owner(
-        &self,
-        rtx: &ReadTransaction,
-        owner: AddressPayload,
-        block_time: u64,
-    ) -> impl DoubleEndedIterator<Item = Result<(LikeSelfStashByOwnerKey<UserKey>, impl AsRef<[u8]>)>> + '_
-    {
-        // layout prefix: owner (34) + scope (255) + block_time (8)
-        const OWNER_LEN: usize = core::mem::size_of::<AddressPayload>(); // 34
-        const SCOPE_LEN: usize = 255;
-        const TIME_LEN: usize = 8;
-        const PREFIX_LEN: usize = OWNER_LEN + SCOPE_LEN + TIME_LEN;
-
-        // start: owner + (scope or zeros) + from block_time
-        let mut range_start = [0u8; PREFIX_LEN];
-        range_start[..OWNER_LEN].copy_from_slice(bytemuck::bytes_of(&owner));
-        range_start[OWNER_LEN + SCOPE_LEN..PREFIX_LEN].copy_from_slice(&block_time.to_be_bytes());
-
-        // end: owner + (same scope if provided, otherwise 0xFF for all scopes) + max time (0xFF...)
-        let mut range_end = [0xFFu8; PREFIX_LEN];
-        range_end[..OWNER_LEN].copy_from_slice(bytemuck::bytes_of(&owner));
-
-        rtx.range(&self.0, range_start..=range_end).map(|item| {
-            let (key_bytes, value_bytes) = item?;
-            Ok((LikeSelfStashByOwnerKey::new(key_bytes), value_bytes))
-        })
-    }
-
     pub fn iter_by_owner_and_scope_from_block_time_rtx(
         &self,
         rtx: &ReadTransaction,

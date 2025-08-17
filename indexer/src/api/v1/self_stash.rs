@@ -137,8 +137,7 @@ async fn get_self_stash_by_owner(
 
         for self_stash_result in state
             .self_stash_by_owner_partition
-            // @TODO: debug the query
-            .iter_by_owner(&rtx, owner, cursor)
+            .iter_by_owner_and_scope_from_block_time_rtx(&rtx, Some(&scope_bytes), owner, cursor)
             .take(limit)
         {
             let (self_stash_key, self_stash_data) = match self_stash_result {
