@@ -19,11 +19,11 @@ pub struct IndexerMetricsSnapshot {
     /// Number of handshakes indexed by sender
     pub handshakes_by_sender: u64,
     /// Number of handshakes indexed by receiver
-    pub handshakes_by_receiver: u64,
+    pub uniq_handshakes_by_receiver: u64,
     /// Number of payments indexed by sender
     pub payments_by_sender: u64,
     /// Number of payments indexed by receiver
-    pub payments_by_receiver: u64,
+    pub uniq_payments_by_receiver: u64,
     /// Number of contextual messages indexed
     pub contextual_messages: u64,
     /// Number of blocks processed
@@ -47,10 +47,14 @@ impl Display for IndexerMetricsSnapshot {
         writeln!(
             f,
             "  Handshakes by receiver: {}",
-            self.handshakes_by_receiver
+            self.uniq_handshakes_by_receiver
         )?;
         writeln!(f, "  Payments by sender: {}", self.payments_by_sender)?;
-        writeln!(f, "  Payments by receiver: {}", self.payments_by_receiver)?;
+        writeln!(
+            f,
+            "  Payments by receiver: {}",
+            self.uniq_payments_by_receiver
+        )?;
         writeln!(f, "  Contextual messages: {}", self.contextual_messages)?;
         writeln!(f, "  Blocks processed: {}", self.blocks_processed)?;
         writeln!(f, "  Latest block: {}", self.latest_block)?;
@@ -74,11 +78,11 @@ pub struct IndexerMetrics {
     /// Number of handshakes indexed by sender
     pub handshakes_by_sender: AtomicU64,
     /// Number of handshakes indexed by receiver
-    pub handshakes_by_receiver: AtomicU64,
+    pub uniq_handshakes_by_receiver: AtomicU64,
     /// Number of payments indexed by sender
     pub payments_by_sender: AtomicU64,
     /// Number of payments indexed by receiver
-    pub payments_by_receiver: AtomicU64,
+    pub uniq_payments_by_receiver: AtomicU64,
     /// Number of contextual messages indexed
     pub contextual_messages: AtomicU64,
     /// Number of blocks processed
@@ -98,9 +102,9 @@ impl IndexerMetrics {
     pub fn new() -> Self {
         Self {
             handshakes_by_sender: AtomicU64::new(0),
-            handshakes_by_receiver: AtomicU64::new(0),
+            uniq_handshakes_by_receiver: AtomicU64::new(0),
             payments_by_sender: AtomicU64::new(0),
-            payments_by_receiver: AtomicU64::new(0),
+            uniq_payments_by_receiver: AtomicU64::new(0),
             contextual_messages: AtomicU64::new(0),
             blocks_processed: AtomicU64::new(0),
             latest_block: ArcSwap::new(Arc::new(Default::default())),
@@ -115,9 +119,9 @@ impl IndexerMetrics {
     pub fn from_snapshot(snapshot: IndexerMetricsSnapshot) -> Self {
         Self {
             handshakes_by_sender: AtomicU64::new(snapshot.handshakes_by_sender),
-            handshakes_by_receiver: AtomicU64::new(snapshot.handshakes_by_receiver),
+            uniq_handshakes_by_receiver: AtomicU64::new(snapshot.uniq_handshakes_by_receiver),
             payments_by_sender: AtomicU64::new(snapshot.payments_by_sender),
-            payments_by_receiver: AtomicU64::new(snapshot.payments_by_receiver),
+            uniq_payments_by_receiver: AtomicU64::new(snapshot.uniq_payments_by_receiver),
             contextual_messages: AtomicU64::new(snapshot.contextual_messages),
             blocks_processed: AtomicU64::new(snapshot.blocks_processed),
             latest_block: ArcSwap::new(Arc::new(snapshot.latest_block)),
@@ -132,9 +136,9 @@ impl IndexerMetrics {
     pub fn snapshot(&self) -> IndexerMetricsSnapshot {
         IndexerMetricsSnapshot {
             handshakes_by_sender: self.handshakes_by_sender.load(Ordering::Relaxed),
-            handshakes_by_receiver: self.handshakes_by_receiver.load(Ordering::Relaxed),
+            uniq_handshakes_by_receiver: self.uniq_handshakes_by_receiver.load(Ordering::Relaxed),
             payments_by_sender: self.payments_by_sender.load(Ordering::Relaxed),
-            payments_by_receiver: self.payments_by_receiver.load(Ordering::Relaxed),
+            uniq_payments_by_receiver: self.uniq_payments_by_receiver.load(Ordering::Relaxed),
             contextual_messages: self.contextual_messages.load(Ordering::Relaxed),
             blocks_processed: self.blocks_processed.load(Ordering::Relaxed),
             latest_block: *self.latest_block.load().as_ref(),
@@ -152,7 +156,8 @@ impl IndexerMetrics {
 
     /// Update handshakes by receiver count
     pub fn set_handshakes_by_receiver(&self, count: u64) {
-        self.handshakes_by_receiver.store(count, Ordering::Relaxed);
+        self.uniq_handshakes_by_receiver
+            .store(count, Ordering::Relaxed);
     }
 
     /// Update payments by sender count
@@ -162,7 +167,8 @@ impl IndexerMetrics {
 
     /// Update payments by receiver count
     pub fn set_payments_by_receiver(&self, count: u64) {
-        self.payments_by_receiver.store(count, Ordering::Relaxed);
+        self.uniq_payments_by_receiver
+            .store(count, Ordering::Relaxed);
     }
 
     /// Update contextual messages count
@@ -193,7 +199,7 @@ impl IndexerMetrics {
 
     /// Get current handshakes by receiver count
     pub fn get_handshakes_by_receiver(&self) -> u64 {
-        self.handshakes_by_receiver.load(Ordering::Relaxed)
+        self.uniq_handshakes_by_receiver.load(Ordering::Relaxed)
     }
 
     /// Get current payments by sender count
@@ -203,7 +209,7 @@ impl IndexerMetrics {
 
     /// Get current payments by receiver count
     pub fn get_payments_by_receiver(&self) -> u64 {
-        self.payments_by_receiver.load(Ordering::Relaxed)
+        self.uniq_payments_by_receiver.load(Ordering::Relaxed)
     }
 
     /// Get current contextual messages count

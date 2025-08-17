@@ -128,6 +128,19 @@ impl HandshakeByReceiverPartition {
                 .map_err(anyhow::Error::from)
         })
     }
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<
+        Item = anyhow::Result<(
+            SharedImmutable<HandshakeKeyByReceiver>,
+            SharedImmutable<AddressPayload>,
+        )>,
+    > {
+        self.0.inner().iter().map(|r| {
+            r.map(|(k, v)| (SharedImmutable::new(k), SharedImmutable::new(v)))
+                .map_err(anyhow::Error::from)
+        })
+    }
 }
 
 #[derive(Clone)]
