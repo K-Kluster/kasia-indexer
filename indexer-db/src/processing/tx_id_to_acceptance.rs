@@ -85,19 +85,32 @@ impl TxIDToAcceptancePartition {
         k: &AcceptanceKey,
         entries: &[InsertionEntry<'a>],
     ) -> anyhow::Result<()> {
-        let value_size: usize = entries
+        let entries_size: usize = entries
             .iter()
             .map(|entry| (entry.partition_key)().len() + 2)
             .sum();
-        let mut v = Vec::with_capacity(size_of::<AcceptanceValueHeader>() + value_size);
-        v.extend_from_slice(AcceptanceValueHeader::new_zeroed().as_bytes());
-        entries.iter().for_each(|entry| {
-            v.extend_from_slice(entry.partition_id.as_bytes());
-            v.extend_from_slice(entry.action.as_bytes());
-            v.extend_from_slice((entry.partition_key)());
-        });
-        wtx.insert(&self.0, k.as_bytes(), &v);
-
+        wtx.fetch_update(&self.0, k.as_bytes(), |old_value| match old_value {
+            None => {
+                let mut v = Vec::with_capacity(size_of::<AcceptanceValueHeader>() + entries_size);
+                v.extend_from_slice(AcceptanceValueHeader::new_zeroed().as_bytes());
+                entries.iter().for_each(|entry| {
+                    v.extend_from_slice(entry.partition_id.as_bytes());
+                    v.extend_from_slice(entry.action.as_bytes());
+                    v.extend_from_slice((entry.partition_key)());
+                });
+                Some(v.into())
+            }
+            Some(old) => {
+                let mut v = Vec::with_capacity(old.len() + entries_size);
+                v.extend_from_slice(old.as_ref());
+                entries.iter().for_each(|entry| {
+                    v.extend_from_slice(entry.partition_id.as_bytes());
+                    v.extend_from_slice(entry.action.as_bytes());
+                    v.extend_from_slice((entry.partition_key)());
+                });
+                Some(v.into())
+            }
+        })?;
         Ok(())
     }
 
