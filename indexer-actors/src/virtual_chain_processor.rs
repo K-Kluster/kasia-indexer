@@ -37,7 +37,6 @@ use workflow_core::channel::Sender;
 #[derive(bon::Builder)]
 pub struct VirtualProcessor {
     synced_capacity: usize,
-    unsynced_capacity: usize,
     processed_block_tx: flume::Receiver<CompactHeader>,
     realtime_vcc_tx: flume::Receiver<RealTimeVccNotification>,
 
@@ -659,7 +658,7 @@ impl VirtualProcessor {
                 sync_queue,
             } => {
                 let need_to_delete = (state.shared_state.processed_blocks.len() + 1)
-                    .saturating_sub(self.unsynced_capacity);
+                    .saturating_sub(self.synced_capacity);
                 (0..need_to_delete).for_each(|_| {
                     state.shared_state.processed_blocks.pop_front();
                 });
