@@ -334,7 +334,7 @@ impl VirtualProcessor {
                 > 120
             {
                 state.shared_state.processed_time_or_warn = Instant::now();
-                warn!("We don't process vcc for a long time");
+                warn!("We don't process syncer vcc for a long time");
                 // todo force request required blocks
             }
             assert!(sync_queue.is_none());
@@ -395,7 +395,7 @@ impl VirtualProcessor {
                         > 120
                     {
                         state.shared_state.processed_time_or_warn = Instant::now();
-                        warn!("We don't process vcc for a long time");
+                        warn!("We don't process real time vcc for a long time");
                         // todo force request required blocks
                     }
                     state.shared_state.realtime_queue_vcc.push_back(vcc);
