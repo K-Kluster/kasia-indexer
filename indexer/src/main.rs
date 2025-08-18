@@ -162,7 +162,7 @@ async fn main() -> anyhow::Result<()> {
         .build();
 
     let mut ticker = Ticker::new(
-        Duration::from_secs(10),
+        Duration::from_secs(context.config.periodic_processor_interval_secs),
         shutdown_ticker_rx,
         periodic_intake_tx,
         periodic_resp_rx,
