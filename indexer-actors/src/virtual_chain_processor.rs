@@ -79,6 +79,8 @@ struct StateShared {
     processed_blocks: ringmap::RingMap<[u8; 32], (DaaScore, BlueWorkType)>, // when we get synced keep only blocks in ~10 mins interval. realloc it
     realtime_queue_vcc: VecDeque<VirtualChainChangedNotification>, // perform realloc when sync is finished if queue is too big
     processed_time_or_warn: std::time::Instant,
+    recently_removed_blocks: Ring,
+    recently_added_blocks: Ring,
 }
 
 impl StateShared {
@@ -101,6 +103,8 @@ impl StateShared {
             processed_blocks,
             realtime_queue_vcc: VecDeque::new(),
             processed_time_or_warn: Instant::now(),
+            recently_removed_blocks: Ring::new(),
+            recently_added_blocks: Ring::new(),
         }
     }
 }
@@ -347,13 +351,13 @@ impl VirtualProcessor {
         {
             // todo shrink queues
             syncer.send_blocking(NotificationAck::Stop)?;
-            let last_accepting_block = self.handle_vc_resp(&state.shared_state, vcc)?;
+            let last_accepting_block = self.handle_vc_resp(&mut state.shared_state, vcc)?;
             state.sync_state = SyncState::Synced {
                 last_syncer_id: *syncer_id,
                 last_accepting_block,
             };
         } else {
-            let last = self.handle_vc_resp(&state.shared_state, vcc)?;
+            let last = self.handle_vc_resp(&mut state.shared_state, vcc)?;
             state.shared_state.processed_time_or_warn = Instant::now();
             *last_accepting_block = last;
             syncer.send_blocking(NotificationAck::Continue)?;
@@ -400,7 +404,7 @@ impl VirtualProcessor {
                     state.shared_state.realtime_queue_vcc.push_back(vcc);
                 } else {
                     let (last_block, last_blue_work) =
-                        self.handle_vcc(&state.shared_state, &vcc)?;
+                        self.handle_vcc(&mut state.shared_state, &vcc)?;
                     debug!(last_block = %last_block.to_hex_64(),"Realtime vcc is handled");
                     state.shared_state.processed_time_or_warn = Instant::now();
                     *last_accepting_block = last_block;
@@ -466,7 +470,7 @@ impl VirtualProcessor {
 
     fn handle_vcc(
         &self,
-        state: &StateShared,
+        state: &mut StateShared,
         vcc: &VirtualChainChangedNotification,
     ) -> anyhow::Result<([u8; 32], BlueWorkType)> {
         let mut wtx = self.tx_keyspace.write_tx()?;
@@ -492,7 +496,7 @@ impl VirtualProcessor {
     }
     fn handle_vc_resp(
         &self,
-        state: &StateShared,
+        state: &mut StateShared,
         vcc: GetVirtualChainFromBlockResponse,
     ) -> anyhow::Result<([u8; 32], BlueWorkType)> {
         let mut wtx = self.tx_keyspace.write_tx()?;
@@ -521,19 +525,29 @@ impl VirtualProcessor {
         &self,
         wtx: &mut WriteTransaction,
         block: &RpcHash,
-        state_shared: &StateShared,
+        state_shared: &mut StateShared,
     ) -> anyhow::Result<()> {
         let block = block.as_bytes();
         let Some(tracked_tx_ids) = self
             .accepting_block_to_tx_id_partition
             .remove_wtx(wtx, &block)?
         else {
-            warn!(
-                "Block {} not found in accepting_block_to_tx_id_partition for removal",
-                block.to_hex_64()
-            );
+            if state_shared.recently_removed_blocks.contains(block) {
+                // all good
+            } else if state_shared.recently_added_blocks.contains(block) {
+                error!(
+                    "Block {} not found in accepting_block_to_tx_id_partition for removal, but we processed it recently",
+                    block.to_hex_64()
+                );
+            } else {
+                error!(
+                    "Block {} not found in accepting_block_to_tx_id_partition for removal, neither we processed it recently nor we added it recently",
+                    block.to_hex_64()
+                );
+            }
             return Ok(());
         };
+        state_shared.recently_removed_blocks.push(block);
         let daa = state_shared.processed_blocks.get(&block).unwrap().0;
 
         for tx_id in tracked_tx_ids.as_ref() {
@@ -561,7 +575,7 @@ impl VirtualProcessor {
         &self,
         wtx: &mut WriteTransaction,
         block: &RpcAcceptedTransactionIds,
-        state: &StateShared,
+        state: &mut StateShared,
     ) -> anyhow::Result<()> {
         let mut tracked_tx_ids = Vec::new();
         let block_hash = block.accepting_block_hash.as_bytes();
@@ -601,7 +615,9 @@ impl VirtualProcessor {
         }
         self.accepting_block_to_tx_id_partition
             .insert_wtx(wtx, &block_hash, &tracked_tx_ids);
-
+        state
+            .recently_added_blocks
+            .push(block.accepting_block_hash.as_bytes());
         Ok(())
     }
 
@@ -646,7 +662,7 @@ impl VirtualProcessor {
                         break;
                     }
                     let (last_block, last_blue_work) =
-                        self.handle_vcc(&state.shared_state, &vcc)?;
+                        self.handle_vcc(&mut state.shared_state, &vcc)?;
                     *last_accepting_block = (last_block, last_blue_work);
                 }
             }
@@ -685,13 +701,13 @@ impl VirtualProcessor {
                 {
                     // todo shrink queues
                     syncer.send_blocking(NotificationAck::Stop)?;
-                    let last_accepting_block = self.handle_vc_resp(&state.shared_state, vcc)?;
+                    let last_accepting_block = self.handle_vc_resp(&mut state.shared_state, vcc)?;
                     state.sync_state = SyncState::Synced {
                         last_syncer_id: *syncer_id,
                         last_accepting_block,
                     };
                 } else {
-                    let last = self.handle_vc_resp(&state.shared_state, vcc)?;
+                    let last = self.handle_vc_resp(&mut state.shared_state, vcc)?;
                     *last_accepting_block = last;
                     syncer.send_blocking(NotificationAck::Continue)?;
                 }
@@ -876,3 +892,26 @@ impl From<Cursor> for DbCursor {
 
 type DaaScore = u64;
 type Continue = bool;
+
+struct Ring {
+    inner: [[u8; 32]; 128],
+    cursor: usize,
+}
+
+impl Ring {
+    fn new() -> Self {
+        Self {
+            inner: [[0u8; 32]; 128],
+            cursor: 0,
+        }
+    }
+
+    fn push(&mut self, value: [u8; 32]) {
+        self.inner[self.cursor] = value;
+        self.cursor = (self.cursor + 1) % 128;
+    }
+
+    fn contains(&self, value: [u8; 32]) -> bool {
+        self.inner.contains(&value)
+    }
+}
