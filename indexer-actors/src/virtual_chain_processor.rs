@@ -356,6 +356,7 @@ impl VirtualProcessor {
                 last_syncer_id: *syncer_id,
                 last_accepting_block,
             };
+            info!("Virtual chain synced");
         } else {
             let last = self.handle_vc_resp(&mut state.shared_state, vcc)?;
             state.shared_state.processed_time_or_warn = Instant::now();
@@ -706,6 +707,7 @@ impl VirtualProcessor {
                         last_syncer_id: *syncer_id,
                         last_accepting_block,
                     };
+                    info!("Virtual chain synced");
                 } else {
                     let last = self.handle_vc_resp(&mut state.shared_state, vcc)?;
                     *last_accepting_block = last;
