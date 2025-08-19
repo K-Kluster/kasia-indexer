@@ -31,7 +31,7 @@ use kaspa_rpc_core::{
 pub use message::*;
 use std::collections::VecDeque;
 use std::time::Instant;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, info_span, trace, warn};
 use workflow_core::channel::Sender;
 
 #[derive(bon::Builder)]
@@ -211,6 +211,13 @@ impl VirtualProcessor {
         sink_blue_work: BlueWorkType,
         pp: [u8; 32],
     ) -> anyhow::Result<()> {
+        let _connection_span = info_span!(
+            "(Re)connection",
+            sink = %sink.to_hex_64(),
+            sink_blue_work = %sink_blue_work,
+        )
+        .entered();
+
         debug!("Handling virtual chain connection, requesting all pending senders");
         match &mut state.sync_state {
             SyncState::Initial => {
@@ -263,6 +270,7 @@ impl VirtualProcessor {
                 target_block: (target_block, target_blue_work),
                 ..
             } => {
+                info!("Reconnection during the syncing, update target block to sink");
                 *target_block = sink;
                 *target_blue_work = sink_blue_work;
                 Ok(())
@@ -271,10 +279,24 @@ impl VirtualProcessor {
                 last_syncer_id,
                 last_accepting_block: (last_accepting_block, last_accepting_blue_work),
             } => {
+                let _span = info_span!(
+                    "Reconnection in synced state",
+                    last_accepting_block = %last_accepting_block.to_hex_64(),
+                    %last_accepting_blue_work,
+                )
+                .entered();
+
                 if last_accepting_block == &sink || *last_accepting_blue_work > sink_blue_work {
-                    // log, do nothing, we are synced
+                    info!(
+                        last_accepting_block = %last_accepting_block.to_hex_64(),
+                        sink = %sink.to_hex_64(),
+                        %last_accepting_blue_work,
+                        %sink_blue_work,
+                        "Target equal to last processed block, nothing to do"
+                    );
                     Ok(())
                 } else {
+                    info!("Target different from last processed block, starting new syncer");
                     // that branch is possible only if we get disconnected right before synced state
                     let syncer = self.spawn_syncer(*last_syncer_id + 1, *last_accepting_block);
                     state.sync_state = SyncState::Syncing {
@@ -536,12 +558,12 @@ impl VirtualProcessor {
             if state_shared.recently_removed_blocks.contains(block) {
                 // all good
             } else if state_shared.recently_added_blocks.contains(block) {
-                error!(
+                warn!(
                     "Block {} not found in accepting_block_to_tx_id_partition for removal, but we processed it recently",
                     block.to_hex_64()
                 );
             } else {
-                error!(
+                warn!(
                     "Block {} not found in accepting_block_to_tx_id_partition for removal, neither we processed it recently nor we added it recently",
                     block.to_hex_64()
                 );
