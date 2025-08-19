@@ -45,15 +45,15 @@ impl SelfStashApi {
 pub struct SelfStashPaginationParams {
     pub limit: Option<usize>,
     pub block_time: Option<u64>,
-    pub scope: Option<String>,
+    pub scope: String,
     pub owner: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SelfStashResponse {
     pub tx_id: String,
-    pub owner: String,
-    pub scope: Option<String>,
+    pub owner: Option<String>,
+    pub scope: String,
     pub block_time: u64,
     pub accepting_block: Option<String>,
     pub accepting_daa_score: Option<u64>,
@@ -106,19 +106,19 @@ async fn get_self_stash_by_owner(
     };
 
     // Decode scope hex if provided (max 510 hex chars = 255 bytes)
-    if params.scope.clone().unwrap_or_default().len() > 255 {
+    if params.scope.clone().len() > 255 {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
-                error: "Alias hex length cannot exceed 32 characters".to_string(),
+                error: "Scope hex length cannot exceed 32 characters".to_string(),
             }),
         ));
     }
 
     let mut scope_bytes = [0u8; 255];
     match faster_hex::hex_decode(
-        params.scope.clone().unwrap_or_default().as_bytes(),
-        &mut scope_bytes[..params.scope.unwrap_or_default().len() / 2],
+        params.scope.clone().as_bytes(),
+        &mut scope_bytes[..params.scope.len() / 2],
     ) {
         Ok(_) => (),
         Err(e) => {
@@ -137,7 +137,7 @@ async fn get_self_stash_by_owner(
 
         for self_stash_result in state
             .self_stash_by_owner_partition
-            .iter_by_owner_and_scope_from_block_time_rtx(&rtx, Some(&scope_bytes), owner, cursor)
+            .iter_by_owner_and_scope_from_block_time_rtx(&rtx, &scope_bytes, owner, cursor)
             .take(limit)
         {
             let (self_stash_key, self_stash_data) = match self_stash_result {
@@ -148,10 +148,9 @@ async fn get_self_stash_by_owner(
             let block_time = u64::from_be_bytes(self_stash_key.block_time);
             let tx_id = faster_hex::hex_string(&self_stash_key.tx_id);
 
-            let sender_str = match to_rpc_address(&self_stash_key.owner, state.context.network_type)
-            {
-                Ok(Some(addr)) => addr.to_string(),
-                Ok(None) => String::new(),
+            let owner = match to_rpc_address(&self_stash_key.owner, state.context.network_type) {
+                Ok(Some(addr)) => Some(addr.to_string()),
+                Ok(None) => None,
                 Err(e) => bail!("Address conversion error: {}", e),
             };
 
@@ -172,15 +171,11 @@ async fn get_self_stash_by_owner(
 
             let stashed_data_str = faster_hex::hex_string(self_stash_data.as_ref());
 
-            let scope = if self_stash_key.scope.iter().any(|&b| b != 0) {
-                Some(faster_hex::hex_string(&self_stash_key.scope))
-            } else {
-                None
-            };
+            let scope = faster_hex::hex_string(self_stash_key.scope.as_ref());
 
             messages.push(SelfStashResponse {
                 tx_id,
-                owner: sender_str,
+                owner,
                 scope,
                 stashed_data: stashed_data_str,
                 block_time,

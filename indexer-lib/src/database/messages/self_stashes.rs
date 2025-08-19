@@ -33,15 +33,6 @@ impl From<&[u8]> for SelfStashScope {
     }
 }
 
-impl From<Option<&[u8]>> for SelfStashScope {
-    fn from(value: Option<&[u8]>) -> Self {
-        match value {
-            Some(v) => SelfStashScope::from(v),
-            None => SelfStashScope::ZERO,
-        }
-    }
-}
-
 impl SelfStashScope {
     pub const ZERO: Self = SelfStashScope([0; SCOPE_LEN]);
     pub fn as_ref(&self) -> &[u8; SCOPE_LEN] {
@@ -150,7 +141,7 @@ impl SelfStashByOwnerPartition {
     pub fn iter_by_owner_and_scope_from_block_time_rtx(
         &self,
         rtx: &ReadTransaction,
-        scope: Option<&[u8]>,
+        scope: &[u8],
         owner: AddressPayload,
         block_time: u64,
     ) -> impl DoubleEndedIterator<Item = Result<(LikeSelfStashByOwnerKey<UserKey>, impl AsRef<[u8]>)>> + '_
@@ -162,13 +153,13 @@ impl SelfStashByOwnerPartition {
 
         let scope_bytes = SelfStashScope::from(scope);
 
-        // start: owner + (scope or zeros) + from block_time
+        // start: owner + scope + from block_time
         let mut range_start = [0u8; PREFIX_LEN];
         range_start[..OWNER_LEN].copy_from_slice(bytemuck::bytes_of(&owner));
         range_start[OWNER_LEN..OWNER_LEN + SCOPE_LEN].copy_from_slice(scope_bytes.as_ref());
         range_start[OWNER_LEN + SCOPE_LEN..PREFIX_LEN].copy_from_slice(&block_time.to_be_bytes());
 
-        // end: owner + (same scope if provided, otherwise 0xFF for all scopes) + max time (0xFF...)
+        // end: owner + same scope + max time (0xFF...)
         let mut range_end = [0xFFu8; PREFIX_LEN];
         range_end[..OWNER_LEN].copy_from_slice(bytemuck::bytes_of(&owner));
         range_end[OWNER_LEN..OWNER_LEN + SCOPE_LEN].copy_from_slice(scope_bytes.as_ref());
