@@ -10,12 +10,51 @@ use fjall::{PartitionCreateOptions, ReadTransaction, UserKey, WriteTransaction};
 
 use crate::database::messages::AddressPayload;
 
+pub const SCOPE_LEN: usize = 255;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, AnyBitPattern, NoUninit)]
+pub struct SelfStashScope([u8; SCOPE_LEN]);
+
+impl From<&[u8; 255]> for SelfStashScope {
+    fn from(value: &[u8; 255]) -> Self {
+        let mut b = [0u8; SCOPE_LEN];
+        b.copy_from_slice(value);
+        SelfStashScope(b)
+    }
+}
+
+impl From<&[u8]> for SelfStashScope {
+    fn from(s: &[u8]) -> Self {
+        let mut b = [0u8; SCOPE_LEN];
+        let n = core::cmp::min(SCOPE_LEN, s.len());
+        b[..n].copy_from_slice(&s[..n]);
+        SelfStashScope(b)
+    }
+}
+
+impl From<Option<&[u8]>> for SelfStashScope {
+    fn from(value: Option<&[u8]>) -> Self {
+        match value {
+            Some(v) => SelfStashScope::from(v),
+            None => SelfStashScope::ZERO,
+        }
+    }
+}
+
+impl SelfStashScope {
+    pub const ZERO: Self = SelfStashScope([0; SCOPE_LEN]);
+    pub fn as_ref(&self) -> &[u8; SCOPE_LEN] {
+        &self.0
+    }
+}
+
 /// owner (34) + scope (255) + block_time (8) + block_hash (32) + version (1) + tx_id (32)
 #[derive(Clone, Copy, Debug, AnyBitPattern, NoUninit, PartialEq, Eq)]
 #[repr(C)]
 pub struct SelfStashKeyByOwner {
     pub owner: AddressPayload,
-    pub scope: [u8; 255],
+    pub scope: SelfStashScope,
     pub block_time: [u8; 8], // be
     pub block_hash: [u8; 32],
     pub version: u8,
@@ -118,32 +157,21 @@ impl SelfStashByOwnerPartition {
     {
         // layout prefix: owner (34) + scope (255) + block_time (8)
         const OWNER_LEN: usize = core::mem::size_of::<AddressPayload>(); // 34
-        const SCOPE_LEN: usize = 255;
         const TIME_LEN: usize = 8;
         const PREFIX_LEN: usize = OWNER_LEN + SCOPE_LEN + TIME_LEN;
 
-        // build the fixed scope bytes if provided, zero-padded to 255
-        let mut scope_bytes = [0u8; SCOPE_LEN];
-        if let Some(s) = scope {
-            let copy_len = core::cmp::min(SCOPE_LEN, s.len());
-            scope_bytes[..copy_len].copy_from_slice(&s[..copy_len]);
-        }
+        let scope_bytes = SelfStashScope::from(scope);
 
         // start: owner + (scope or zeros) + from block_time
         let mut range_start = [0u8; PREFIX_LEN];
         range_start[..OWNER_LEN].copy_from_slice(bytemuck::bytes_of(&owner));
-        if scope.is_some() {
-            range_start[OWNER_LEN..OWNER_LEN + SCOPE_LEN].copy_from_slice(&scope_bytes);
-        } // else keep zeros to start from the first scope
+        range_start[OWNER_LEN..OWNER_LEN + SCOPE_LEN].copy_from_slice(scope_bytes.as_ref());
         range_start[OWNER_LEN + SCOPE_LEN..PREFIX_LEN].copy_from_slice(&block_time.to_be_bytes());
 
         // end: owner + (same scope if provided, otherwise 0xFF for all scopes) + max time (0xFF...)
         let mut range_end = [0xFFu8; PREFIX_LEN];
         range_end[..OWNER_LEN].copy_from_slice(bytemuck::bytes_of(&owner));
-        if scope.is_some() {
-            // exact same scope to constrain results to this scope only
-            range_end[OWNER_LEN..OWNER_LEN + SCOPE_LEN].copy_from_slice(&scope_bytes);
-        }
+        range_end[OWNER_LEN..OWNER_LEN + SCOPE_LEN].copy_from_slice(scope_bytes.as_ref());
 
         rtx.range(&self.0, range_start..=range_end).map(|item| {
             let (key_bytes, value_bytes) = item?;

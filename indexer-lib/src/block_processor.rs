@@ -1,6 +1,8 @@
 use crate::BlockOrMany;
 use crate::database::headers::{BlockCompactHeaderPartition, DaaIndexPartition};
-use crate::database::messages::self_stashes::{SelfStashByOwnerPartition, SelfStashKeyByOwner};
+use crate::database::messages::self_stashes::{
+    SelfStashByOwnerPartition, SelfStashKeyByOwner, SelfStashScope,
+};
 use crate::database::messages::{
     AddressPayload, ContextualMessageBySenderPartition, HandshakeByReceiverPartition,
     HandshakeKeyByReceiver, PaymentByReceiverPartition, PaymentKeyByReceiver,
@@ -345,7 +347,7 @@ impl BlockProcessor {
             wtx,
             &SelfStashKeyByOwner {
                 owner: AddressPayload::default(),
-                scope: fixed_scope,
+                scope: SelfStashScope::from(&fixed_scope),
                 block_time: block.header.timestamp.to_be_bytes(),
                 block_hash: block.header.hash.as_bytes(),
                 version: 1,
@@ -355,7 +357,7 @@ impl BlockProcessor {
         );
 
         let self_stash_for_resolution = SelfStashKeyForResolution {
-            scope: fixed_scope,
+            scope: SelfStashScope::from(&fixed_scope),
             block_time: block.header.timestamp.to_be_bytes(),
             block_hash: block.header.hash.as_bytes(),
             version: 1,

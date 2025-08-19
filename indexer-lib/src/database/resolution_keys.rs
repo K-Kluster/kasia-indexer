@@ -1,4 +1,5 @@
 use crate::database::messages::AddressPayload;
+use crate::database::messages::self_stashes::SelfStashScope;
 use bytemuck::{AnyBitPattern, NoUninit};
 use fjall::UserKey;
 use std::fmt::Debug;
@@ -176,7 +177,7 @@ impl<T: AsRef<[u8]>> Debug for LikePaymentKeyForResolution<T> {
 #[derive(Clone, Copy, Debug, AnyBitPattern, NoUninit, PartialEq, Eq)]
 #[repr(C)]
 pub struct SelfStashKeyForResolution {
-    pub scope: [u8; 255],
+    pub scope: SelfStashScope,
     pub block_time: [u8; 8], // be
     pub block_hash: [u8; 32],
     pub version: u8,
@@ -322,7 +323,7 @@ mod tests {
     #[test]
     fn test_self_stash_key_for_resolution_serialization() {
         let key = SelfStashKeyForResolution {
-            scope: [0u8; 255],
+            scope: SelfStashScope::ZERO,
             block_time: 12345u64.to_be_bytes(),
             block_hash: [1u8; 32],
             version: 1,
