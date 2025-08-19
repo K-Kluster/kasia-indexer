@@ -105,19 +105,18 @@ async fn get_self_stash_by_owner(
         }
     };
 
-    // Decode scope hex if provided (max 510 hex chars = 255 bytes)
-    if params.scope.clone().len() > 255 {
+    if params.scope.len() > 510 {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
-                error: "Scope hex length cannot exceed 32 characters".to_string(),
+                error: "Scope hex length cannot exceed 510 characters".to_string(),
             }),
         ));
     }
 
     let mut scope_bytes = [0u8; 255];
     match faster_hex::hex_decode(
-        params.scope.clone().as_bytes(),
+        params.scope.as_bytes(),
         &mut scope_bytes[..params.scope.len() / 2],
     ) {
         Ok(_) => (),
@@ -171,12 +170,10 @@ async fn get_self_stash_by_owner(
 
             let stashed_data_str = faster_hex::hex_string(self_stash_data.as_ref());
 
-            let scope = faster_hex::hex_string(self_stash_key.scope.as_ref());
-
             messages.push(SelfStashResponse {
                 tx_id,
                 owner,
-                scope,
+                scope: params.scope.clone(),
                 stashed_data: stashed_data_str,
                 block_time,
                 accepting_block,

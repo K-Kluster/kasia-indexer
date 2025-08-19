@@ -127,12 +127,9 @@ impl PeriodicProcessor {
                     self.handle_sender_resolution(r)?;
                 }
                 Notification::Tick => {
-                    let tick_result = self.tick_work();
-
-                    if let Err(error) = tick_result {
+                    let _ = self.tick_work().inspect_err(|error| {
                         error!("{:?}", error);
-                        panic!();
-                    }
+                    });
 
                     self.job_done_tx.send_blocking(())?;
                 }
