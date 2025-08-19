@@ -27,7 +27,7 @@ use indexer_db::processing::tx_id_to_acceptance::TxIDToAcceptancePartition;
 use kaspa_rpc_core::RpcBlueWorkType;
 use kaspa_wrpc_client::client::{ConnectOptions, ConnectStrategy};
 use kaspa_wrpc_client::prelude::NetworkType;
-// use rayon::prelude::*;
+use rayon::prelude::*;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
@@ -198,21 +198,25 @@ async fn main() -> anyhow::Result<()> {
     let processed_blocks = block_daa_index_partition
         .iter_lt(&rtx, u64::MAX)
         .rev()
+        .map(|r| r.map(|kv| kv.1))
         .take(3_000_000)
-        .map(|r| {
-            r.and_then(|(_daa, hash)| {
-                block_compact_header_partition
-                    .get_compact_header(&hash)
-                    .transpose()
-                    .unwrap()
-                    .map(|db_compact_header| CompactHeader {
-                        block_hash: hash,
-                        blue_work: RpcBlueWorkType::from_le_bytes(db_compact_header.blue_work),
-                        daa_score: db_compact_header.daa_score.into(),
-                    })
-            })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut processed_blocks = processed_blocks
+        .par_iter()
+        .rev()
+        .map(|hash| {
+            block_compact_header_partition
+                .get_compact_header(hash)
+                .transpose()
+                .unwrap()
+                .map(|db_compact_header| CompactHeader {
+                    block_hash: *hash,
+                    blue_work: RpcBlueWorkType::from_le_bytes(db_compact_header.blue_work),
+                    daa_score: db_compact_header.daa_score.into(),
+                })
         })
         .collect::<Result<Vec<_>, _>>()?;
+    processed_blocks.par_sort_by_key(|h| h.daa_score);
     let block_processor_handle = std::thread::spawn(move || block_processor.process());
     let virtual_processor_handle =
         std::thread::spawn(move || virtual_processor.process(processed_blocks));
