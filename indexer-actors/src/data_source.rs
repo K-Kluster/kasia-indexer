@@ -140,6 +140,8 @@ impl DataSource {
 
     async fn handle_connect_impl(&mut self) -> anyhow::Result<()> {
         info!("Connected to {:?}", self.rpc_client.url());
+        // register for notifications
+        self.register_notification_listeners().await?;
         let info = self.rpc_client.get_block_dag_info().await?;
 
         let sink_blue_work = self
@@ -172,8 +174,6 @@ impl DataSource {
         )
         .await;
         pair.0.and(pair.1)?;
-        // register for notifications
-        self.register_notification_listeners().await?;
         for req in self.requests_queue.drain(..) {
             self.command_rx.send(Command::Request(req)).await?;
         }
