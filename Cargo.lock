@@ -1567,7 +1567,6 @@ dependencies = [
  "flume",
  "futures-util",
  "indexer-lib",
- "itertools 0.14.0",
  "kaspa-addresses",
  "kaspa-rpc-core",
  "kaspa-wrpc-client",
