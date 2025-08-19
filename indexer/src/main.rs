@@ -98,7 +98,6 @@ async fn main() -> anyhow::Result<()> {
         payments_by_receiver: tx_id_to_payment_partition.approximate_len() as u64,
         contextual_messages: contextual_message_partition.len()? as u64,
         blocks_processed: block_compact_header_partition.len()? as u64,
-        self_stashes: self_stash_by_owner_partition.approximate_len() as u64,
         latest_block: metadata_partition
             .get_latest_block_cursor_rtx(&tx_keyspace.read_tx())?
             .unwrap_or_default()

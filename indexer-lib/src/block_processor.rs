@@ -170,7 +170,7 @@ impl BlockProcessor {
                 None
             }
             Some(SealedOperation::SelfStashV1(op)) => {
-                self.handle_self_stash(wtx, block, tx, &tx_id, op)?;
+                self.handle_self_stash(wtx, block, tx, &tx_id, op);
                 None
             }
             None => {
@@ -326,7 +326,7 @@ impl BlockProcessor {
         _tx: &RpcTransaction,
         tx_id: &TransactionId,
         op: SealedSelfStashV1,
-    ) -> anyhow::Result<()> {
+    ) {
         debug!(%tx_id, "Handling SelfStashV1");
 
         debug!(scope=?op.key, op.sealed_hex, "Inserting SelfStash by owner");
@@ -369,9 +369,6 @@ impl BlockProcessor {
             None,
             None,
         );
-        // @QUESTION: should we remove this instead and use resolution metrics, like payment and handshake?
-        self.metrics.increment_self_stash_count();
-        Ok(())
     }
 }
 

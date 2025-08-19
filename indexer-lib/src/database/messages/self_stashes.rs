@@ -150,8 +150,4 @@ impl SelfStashByOwnerPartition {
             Ok((LikeSelfStashByOwnerKey::new(key_bytes), value_bytes))
         })
     }
-
-    pub fn approximate_len(&self) -> usize {
-        self.0.approximate_len()
-    }
 }
