@@ -1546,6 +1546,7 @@ dependencies = [
  "kaspa-addresses",
  "kaspa-rpc-core",
  "kaspa-wrpc-client",
+ "rayon",
  "rolling-file",
  "serde",
  "time",
