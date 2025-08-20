@@ -128,7 +128,7 @@ impl PeriodicProcessor {
                 }
                 Notification::Tick => {
                     let _ = self.tick_work().inspect_err(|error| {
-                        error!("{:?}", error);
+                        error!("tick job finished with error: {}", error);
                     });
 
                     self.job_done_tx.send_blocking(())?;
