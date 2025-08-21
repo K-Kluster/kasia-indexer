@@ -25,4 +25,4 @@ jobs:
         with:
           push: true
           # :{tag}, :{sha1}, :latest (if on main branch)
-          tags: ${{ vars.DOCKER_REPO }}:${{ github.event.inputs.tag }},${{ vars.DOCKER_REPO }}:${{ GITHUB_SHA }} ${{ github.ref != 'refs/heads/main' && '${{ vars.DOCKER_REPO }}:latest' || '' }}
+          tags: ${{ vars.DOCKER_REPO }}:${{ github.event.inputs.tag }},${{ vars.DOCKER_REPO }}:${{ github.sha }} ${{ github.ref != 'refs/heads/main' && '${{ vars.DOCKER_REPO }}:latest' || '' }}
