@@ -496,52 +496,64 @@ impl VirtualProcessor {
         state: &mut StateShared,
         vcc: &VirtualChainChangedNotification,
     ) -> anyhow::Result<([u8; 32], BlueWorkType)> {
-        let mut wtx = self.tx_keyspace.write_tx()?;
-        for block in vcc.removed_chain_block_hashes.as_slice() {
-            self.handle_vcc_removal(&mut wtx, block, state)?;
-        }
-        for block in vcc.accepted_transaction_ids.as_slice() {
-            self.handle_vcc_addition(&mut wtx, block, state)?;
-        }
-        let last_block = vcc.added_chain_block_hashes.last().unwrap().as_bytes();
-        let (last_daa, last_blue_work) = state.processed_blocks.get(&last_block).unwrap();
-        self.metadata_partition.set_latest_accepting_block_cursor(
-            &mut wtx,
-            Cursor {
-                blue_work: *last_blue_work,
-                block_hash: last_block,
-                daa_score: *last_daa,
+        let resp = loop {
+            let mut wtx = self.tx_keyspace.write_tx()?;
+            for block in vcc.removed_chain_block_hashes.as_slice() {
+                self.handle_vcc_removal(&mut wtx, block, state)?;
             }
-            .into(),
-        )?;
-        wtx.commit()??;
-        Ok((last_block, *last_blue_work))
+            for block in vcc.accepted_transaction_ids.as_slice() {
+                self.handle_vcc_addition(&mut wtx, block, state)?;
+            }
+            let last_block = vcc.added_chain_block_hashes.last().unwrap().as_bytes();
+            let (last_daa, last_blue_work) = state.processed_blocks.get(&last_block).unwrap();
+            self.metadata_partition.set_latest_accepting_block_cursor(
+                &mut wtx,
+                Cursor {
+                    blue_work: *last_blue_work,
+                    block_hash: last_block,
+                    daa_score: *last_daa,
+                }
+                .into(),
+            )?;
+            if wtx.commit()?.is_ok() {
+                break (last_block, *last_blue_work);
+            } else {
+                warn!("conflict detected, retry handling realtime vcc")
+            }
+        };
+        Ok(resp)
     }
     fn handle_vc_resp(
         &self,
         state: &mut StateShared,
         vcc: GetVirtualChainFromBlockResponse,
     ) -> anyhow::Result<([u8; 32], BlueWorkType)> {
-        let mut wtx = self.tx_keyspace.write_tx()?;
-        for block in vcc.removed_chain_block_hashes.as_slice() {
-            self.handle_vcc_removal(&mut wtx, block, state)?;
-        }
-        for block in vcc.accepted_transaction_ids.as_slice() {
-            self.handle_vcc_addition(&mut wtx, block, state)?;
-        }
-        let last_block = vcc.added_chain_block_hashes.last().unwrap().as_bytes();
-        let (last_daa, last_blue_work) = state.processed_blocks.get(&last_block).unwrap();
-        self.metadata_partition.set_latest_accepting_block_cursor(
-            &mut wtx,
-            Cursor {
-                blue_work: *last_blue_work,
-                block_hash: last_block,
-                daa_score: *last_daa,
+        let resp = loop {
+            let mut wtx = self.tx_keyspace.write_tx()?;
+            for block in vcc.removed_chain_block_hashes.as_slice() {
+                self.handle_vcc_removal(&mut wtx, block, state)?;
             }
-            .into(),
-        )?;
-        wtx.commit()??;
-        Ok((last_block, *last_blue_work))
+            for block in vcc.accepted_transaction_ids.as_slice() {
+                self.handle_vcc_addition(&mut wtx, block, state)?;
+            }
+            let last_block = vcc.added_chain_block_hashes.last().unwrap().as_bytes();
+            let (last_daa, last_blue_work) = state.processed_blocks.get(&last_block).unwrap();
+            self.metadata_partition.set_latest_accepting_block_cursor(
+                &mut wtx,
+                Cursor {
+                    blue_work: *last_blue_work,
+                    block_hash: last_block,
+                    daa_score: *last_daa,
+                }
+                .into(),
+            )?;
+            if wtx.commit()?.is_ok() {
+                break (last_block, *last_blue_work);
+            } else {
+                warn!("conflict detected, retry handling sync vc")
+            }
+        };
+        Ok(resp)
     }
 
     fn handle_vcc_removal(
@@ -746,111 +758,119 @@ impl VirtualProcessor {
         tx_id: [u8; 32],
         daa: DaaScore,
     ) -> anyhow::Result<()> {
+        let _span = info_span!("handle sender address", %sender).entered();
         let sender = AddressPayload::try_from(&sender)?;
         let key = self
             .tx_id_to_acceptance_partition
             .key_by_tx_id(&tx_id)?
             .expect("Key must exists");
-        let mut wtx = self.tx_keyspace.write_tx()?;
-        self.pending_sender_resolution_partition.remove_wtx(
-            &mut wtx,
-            &PendingResolutionKey {
-                accepting_daa_score: daa.into(),
-                tx_id,
-            },
-        );
-        self.tx_id_to_acceptance_partition.resolve_entries_wtx(
-            &mut wtx,
-            &key,
-            |partition_id| match partition_id {
-                PartitionId::Metadata
-                | PartitionId::BlockCompactHeaders
-                | PartitionId::BlockDaaIndex
-                | PartitionId::BlockGaps
-                | PartitionId::TxIdToHandshake
-                | PartitionId::TxIdToPayment
-                | PartitionId::AcceptingBlockToTxIds
-                | PartitionId::TxIdToAcceptance
-                | PartitionId::PendingSenders => {
-                    panic!("Unexpected partition id")
-                }
-                PartitionId::HandshakeByReceiver => size_of::<HandshakeKeyByReceiver>(),
-                PartitionId::HandshakeBySender => size_of::<HandshakeKeyBySender>(),
-                PartitionId::ContextualMessageBySender => size_of::<ContextualMessageBySenderKey>(),
-                PartitionId::PaymentByReceiver => size_of::<PaymentKeyByReceiver>(),
-                PartitionId::PaymentBySender => size_of::<PaymentKeyBySender>(),
-            },
-            |wtx, entry| match entry.partition_id {
-                PartitionId::Metadata
-                | PartitionId::BlockCompactHeaders
-                | PartitionId::BlockDaaIndex
-                | PartitionId::BlockGaps
-                | PartitionId::TxIdToHandshake
-                | PartitionId::TxIdToPayment
-                | PartitionId::AcceptingBlockToTxIds
-                | PartitionId::TxIdToAcceptance
-                | PartitionId::PendingSenders => {
-                    panic!("Unexpected partition id")
-                }
-                PartitionId::HandshakeByReceiver => {
-                    if !matches!(entry.action, Action::UpdateValueSender) {
-                        panic!("Unexpected action")
+        loop {
+            let mut wtx = self.tx_keyspace.write_tx()?;
+            self.pending_sender_resolution_partition.remove_wtx(
+                &mut wtx,
+                &PendingResolutionKey {
+                    accepting_daa_score: daa.into(),
+                    tx_id,
+                },
+            );
+            self.tx_id_to_acceptance_partition.resolve_entries_wtx(
+                &mut wtx,
+                &key,
+                |partition_id| match partition_id {
+                    PartitionId::Metadata
+                    | PartitionId::BlockCompactHeaders
+                    | PartitionId::BlockDaaIndex
+                    | PartitionId::BlockGaps
+                    | PartitionId::TxIdToHandshake
+                    | PartitionId::TxIdToPayment
+                    | PartitionId::AcceptingBlockToTxIds
+                    | PartitionId::TxIdToAcceptance
+                    | PartitionId::PendingSenders => {
+                        panic!("Unexpected partition id")
                     }
-                    self.handshake_by_receiver_partition.insert_wtx(
-                        wtx,
-                        HandshakeKeyByReceiver::try_ref_from_bytes(entry.key)
-                            .map_err(|_| anyhow::anyhow!("Key conversion error"))?,
-                        Some(sender),
-                    )?;
-                    Ok(())
-                }
-                PartitionId::HandshakeBySender => {
-                    if !matches!(entry.action, Action::InsertByKeySender) {
-                        panic!("Unexpected action")
+                    PartitionId::HandshakeByReceiver => size_of::<HandshakeKeyByReceiver>(),
+                    PartitionId::HandshakeBySender => size_of::<HandshakeKeyBySender>(),
+                    PartitionId::ContextualMessageBySender => {
+                        size_of::<ContextualMessageBySenderKey>()
                     }
-                    let mut key = HandshakeKeyBySender::try_read_from_bytes(entry.key)
-                        .map_err(|_| anyhow::anyhow!("Key conversion error"))?;
-                    key.sender = sender;
-                    self.handshake_by_sender_partition.insert_wtx(wtx, &key);
-                    Ok(())
-                }
-                PartitionId::ContextualMessageBySender => {
-                    if !matches!(entry.action, Action::ReplaceByKeySender) {
-                        panic!("Unexpected action")
+                    PartitionId::PaymentByReceiver => size_of::<PaymentKeyByReceiver>(),
+                    PartitionId::PaymentBySender => size_of::<PaymentKeyBySender>(),
+                },
+                |wtx, entry| match entry.partition_id {
+                    PartitionId::Metadata
+                    | PartitionId::BlockCompactHeaders
+                    | PartitionId::BlockDaaIndex
+                    | PartitionId::BlockGaps
+                    | PartitionId::TxIdToHandshake
+                    | PartitionId::TxIdToPayment
+                    | PartitionId::AcceptingBlockToTxIds
+                    | PartitionId::TxIdToAcceptance
+                    | PartitionId::PendingSenders => {
+                        panic!("Unexpected partition id")
                     }
-                    self.contextual_message_by_sender_partition.replace_sender(
-                        wtx,
-                        ContextualMessageBySenderKey::try_ref_from_bytes(entry.key)
-                            .map_err(|_| anyhow::anyhow!("Key conversion error"))?,
-                        sender,
-                    )
-                }
-                PartitionId::PaymentByReceiver => {
-                    if !matches!(entry.action, Action::UpdateValueSender) {
-                        panic!("Unexpected action")
+                    PartitionId::HandshakeByReceiver => {
+                        if !matches!(entry.action, Action::UpdateValueSender) {
+                            panic!("Unexpected action")
+                        }
+                        self.handshake_by_receiver_partition.insert_wtx(
+                            wtx,
+                            HandshakeKeyByReceiver::try_ref_from_bytes(entry.key)
+                                .map_err(|_| anyhow::anyhow!("Key conversion error"))?,
+                            Some(sender),
+                        )?;
+                        Ok(())
                     }
-                    self.payment_by_receiver_partition.insert_wtx(
-                        wtx,
-                        PaymentKeyByReceiver::try_ref_from_bytes(entry.key)
-                            .map_err(|_| anyhow::anyhow!("Key conversion error"))?,
-                        Some(sender),
-                    )
-                }
-                PartitionId::PaymentBySender => {
-                    if !matches!(entry.action, Action::InsertByKeySender) {
-                        panic!("Unexpected action")
+                    PartitionId::HandshakeBySender => {
+                        if !matches!(entry.action, Action::InsertByKeySender) {
+                            panic!("Unexpected action")
+                        }
+                        let mut key = HandshakeKeyBySender::try_read_from_bytes(entry.key)
+                            .map_err(|_| anyhow::anyhow!("Key conversion error"))?;
+                        key.sender = sender;
+                        self.handshake_by_sender_partition.insert_wtx(wtx, &key);
+                        Ok(())
                     }
-                    let mut key = PaymentKeyBySender::try_read_from_bytes(entry.key)
-                        .map_err(|_| anyhow::anyhow!("Key conversion error"))?;
-                    key.sender = sender;
-                    self.payment_by_sender_partition.insert_wtx(wtx, &key);
-                    Ok(())
-                }
-            },
-        )?;
+                    PartitionId::ContextualMessageBySender => {
+                        if !matches!(entry.action, Action::ReplaceByKeySender) {
+                            panic!("Unexpected action")
+                        }
+                        self.contextual_message_by_sender_partition.replace_sender(
+                            wtx,
+                            ContextualMessageBySenderKey::try_ref_from_bytes(entry.key)
+                                .map_err(|_| anyhow::anyhow!("Key conversion error"))?,
+                            sender,
+                        )
+                    }
+                    PartitionId::PaymentByReceiver => {
+                        if !matches!(entry.action, Action::UpdateValueSender) {
+                            panic!("Unexpected action")
+                        }
+                        self.payment_by_receiver_partition.insert_wtx(
+                            wtx,
+                            PaymentKeyByReceiver::try_ref_from_bytes(entry.key)
+                                .map_err(|_| anyhow::anyhow!("Key conversion error"))?,
+                            Some(sender),
+                        )
+                    }
+                    PartitionId::PaymentBySender => {
+                        if !matches!(entry.action, Action::InsertByKeySender) {
+                            panic!("Unexpected action")
+                        }
+                        let mut key = PaymentKeyBySender::try_read_from_bytes(entry.key)
+                            .map_err(|_| anyhow::anyhow!("Key conversion error"))?;
+                        key.sender = sender;
+                        self.payment_by_sender_partition.insert_wtx(wtx, &key);
+                        Ok(())
+                    }
+                },
+            )?;
 
-        wtx.commit()??;
-        Ok(())
+            if wtx.commit()?.is_ok() {
+                return Ok(());
+            } else {
+                warn!("Conflict detected, retry handling sender update")
+            }
+        }
     }
 }
 

@@ -35,7 +35,7 @@ use protocol::operation::{
     SealedPaymentV1,
 };
 use std::collections::HashMap;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, info_span, trace, warn};
 
 #[derive(bon::Builder)]
 pub struct BlockProcessor {
@@ -155,12 +155,22 @@ impl BlockProcessor {
                 }
                 NotificationOrGapResult::Notification(BlockNotification::Notification(block)) => {
                     let hash = block.header.hash.as_bytes();
+                    let _span =
+                        info_span!("Real-time Block notification", block = %hash.to_hex_64())
+                            .entered();
                     debug!(hash = %hash.to_hex_64(), daa_score = block.header.daa_score, tx_count = block.transactions.len(), "Processing block notification");
-                    let mut wtx = self.tx_keyspace.write_tx()?;
-                    self.handle_block(&mut wtx, &block)?;
-                    last_processed_block = Some(hash);
-                    self.update_block(&mut wtx, hash);
-                    wtx.commit()??;
+                    loop {
+                        let mut wtx = self.tx_keyspace.write_tx()?;
+                        self.handle_block(&mut wtx, &block)?;
+                        last_processed_block = Some(hash);
+                        self.update_block(&mut wtx, hash);
+                        if wtx.commit()?.is_ok() {
+                            break;
+                        } else {
+                            warn!("conflict detected, retry handling block")
+                        }
+                    }
+
                     if !is_shutdown {
                         _ = self
                             .processed_block_tx
@@ -188,18 +198,26 @@ impl BlockProcessor {
                     target: to,
                     blocks,
                 }) => {
+                    let _span = info_span!("Gap Block Update", block = %to.to_hex_64()).entered();
                     debug!(to = %to.to_hex_64(), block_count = blocks.len(), "Processing gap filling update");
                     blocks.iter().try_for_each(|block| -> anyhow::Result<()> {
-                        let mut wtx = self.tx_keyspace.write_tx()?;
-                        self.handle_block(&mut wtx, block)?;
-                        self.blocks_gap_partition.update_gap_wtx(
-                            &mut wtx,
-                            indexer_db::headers::block_gaps::BlockGap {
-                                from: block.header.hash.as_bytes(),
-                                to,
-                            },
-                        );
-                        wtx.commit()??;
+                        loop {
+                            let mut wtx = self.tx_keyspace.write_tx()?;
+                            self.handle_block(&mut wtx, block)?;
+                            self.blocks_gap_partition.update_gap_wtx(
+                                &mut wtx,
+                                indexer_db::headers::block_gaps::BlockGap {
+                                    from: block.header.hash.as_bytes(),
+                                    to,
+                                },
+                            );
+                            if wtx.commit()?.is_ok() {
+                                break;
+                            } else {
+                                warn!("conflict detected, retry handling block")
+                            }
+                        }
+
                         if !is_shutdown {
                             _ = self
                                 .processed_block_tx
@@ -217,16 +235,24 @@ impl BlockProcessor {
                     blocks.iter().enumerate().try_for_each(
                         |(idx, block)| -> anyhow::Result<()> {
                             if idx != last_index {
-                                let mut wtx = self.tx_keyspace.write_tx()?;
-                                self.handle_block(&mut wtx, block)?;
-                                self.blocks_gap_partition.update_gap_wtx(
-                                    &mut wtx,
-                                    indexer_db::headers::block_gaps::BlockGap {
-                                        from: block.header.hash.as_bytes(),
-                                        to,
-                                    },
-                                );
-                                wtx.commit()??;
+                                let _span = info_span!("Gap Block Update", block = %to.to_hex_64())
+                                    .entered();
+                                loop {
+                                    let mut wtx = self.tx_keyspace.write_tx()?;
+                                    self.handle_block(&mut wtx, block)?;
+                                    self.blocks_gap_partition.update_gap_wtx(
+                                        &mut wtx,
+                                        indexer_db::headers::block_gaps::BlockGap {
+                                            from: block.header.hash.as_bytes(),
+                                            to,
+                                        },
+                                    );
+                                    if wtx.commit()?.is_ok() {
+                                        break;
+                                    } else {
+                                        warn!("conflict detected, retry handling block")
+                                    }
+                                }
                                 if !is_shutdown {
                                     _ = self
                                         .processed_block_tx
@@ -236,10 +262,19 @@ impl BlockProcessor {
                                         });
                                 }
                             } else {
-                                let mut wtx = self.tx_keyspace.write_tx()?;
-                                self.handle_block(&mut wtx, block)?;
-                                self.blocks_gap_partition.remove_gap_wtx(&mut wtx, &to);
-                                wtx.commit()??;
+                                let _span =
+                                    info_span!("Gap Block Finishing", block = %to.to_hex_64())
+                                        .entered();
+                                loop {
+                                    let mut wtx = self.tx_keyspace.write_tx()?;
+                                    self.handle_block(&mut wtx, block)?;
+                                    self.blocks_gap_partition.remove_gap_wtx(&mut wtx, &to);
+                                    if wtx.commit()?.is_ok() {
+                                        break;
+                                    } else {
+                                        warn!("conflict detected, retry handling block")
+                                    }
+                                }
                                 if !is_shutdown {
                                     _ = self
                                         .processed_block_tx
