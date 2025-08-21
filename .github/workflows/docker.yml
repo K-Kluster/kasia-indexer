@@ -7,6 +7,11 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: read
+  # for provenance / attestations
+  id-token: write
+
 jobs:
   print-tag:
     runs-on: ubuntu-latest
@@ -20,9 +25,59 @@ jobs:
         uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-      - name: Build and push
+
+      - name: Extract metadata (tags, labels, annotations)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ vars.DOCKER_REPO }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.title=${{ github.event.repository.name }}
+            org.opencontainers.image.description=A lightweight, specialized indexer for the Kasia messenger application built on Kaspa BlockDAG
+            org.opencontainers.image.vendor=K-Kluster
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          annotations: |
+            org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.documentation=${{ github.server_url }}/${{ github.repository }}#readme
+          # TODO: figure out what license to use
+          # org.opencontainers.image.licenses=
+
+      - name: Build & Push (multi-arch, with OCI annotations)
         uses: docker/build-push-action@v6
         with:
           push: true
-          # :{tag}, :{sha1}, :latest (if on main branch)
-          tags: ${{ vars.DOCKER_REPO }}:${{ github.event.inputs.tag }},${{ vars.DOCKER_REPO }}:${{ github.sha }} ${{ github.ref != 'refs/heads/main' && '${{ vars.DOCKER_REPO }}:latest' || '' }}
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: |
+            ${{ steps.meta.outputs.annotations }}
+            index:org.opencontainers.image.ref.name=${{ github.ref_name }}
+            index:org.opencontainers.image.authors=K-Kluster
+          provenance: mode=max
+          sbom: true
+
+      - name: Inspect published image (annotations)
+        run: |
+          docker buildx imagetools inspect ${{ vars.DOCKER_REPO }}:${{ github.ref_name || 'latest' }} --format "{{json .}}" | jq .
+
+      - name: Export OCI layout (artifact)
+        run: |
+          mkdir -p dist
+          docker buildx build \
+            --platform linux/amd64 \
+            --output type=oci,dest=dist/oci-layout.tar \
+            --tag ${IMAGE_NAME}:oci-export \
+            --provenance=false \
+
+      - name: Upload OCI layout
+        uses: actions/upload-artifact@v4
+        with:
+          name: oci-layout
+          path: dist/oci-layout.tar
