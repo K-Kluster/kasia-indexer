@@ -13,6 +13,5 @@ FROM alpine:3.20
 WORKDIR /usr/src
 
 COPY --from=builder /usr/src/target/release/indexer .
-COPY --from=builder /usr/src/target/release/cli .
 
 CMD ["./indexer"]
