@@ -3,6 +3,7 @@ use crate::util::ToHex64;
 use fjall::TxKeyspace;
 use indexer_db::headers::block_compact_headers::BlockCompactHeaderPartition;
 use indexer_db::headers::daa_index::DaaIndexPartition;
+use indexer_db::messages::contextual_message::ContextualMessageBySenderPartition;
 use indexer_db::messages::handshake::{HandshakeBySenderPartition, TxIdToHandshakePartition};
 use indexer_db::messages::payment::{PaymentBySenderPartition, TxIdToPaymentPartition};
 use indexer_db::metadata::MetadataPartition;
@@ -38,6 +39,7 @@ pub struct PeriodicProcessor {
     tx_id_to_handshake_partition: TxIdToHandshakePartition,
     tx_id_to_payment_partition: TxIdToPaymentPartition,
     payment_by_sender_partition: PaymentBySenderPartition,
+    contextual_message_by_sender_partition: ContextualMessageBySenderPartition,
     handshake_by_sender_partition: HandshakeBySenderPartition,
 }
 
@@ -120,6 +122,10 @@ impl PeriodicProcessor {
             .set_payments_by_receiver(self.tx_id_to_payment_partition.approximate_len() as u64); // todo use len at startup and atomic for update
         self.metrics
             .set_payments_by_sender(self.payment_by_sender_partition.approximate_len() as u64);
+        self.metrics.set_contextual_messages(
+            self.contextual_message_by_sender_partition
+                .approximate_len() as u64,
+        );
         self.metrics.set_latest_block(
             self.metadata_partition
                 .get_latest_block_cursor()?

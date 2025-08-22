@@ -60,7 +60,6 @@ pub struct Entry<'a> {
     Debug, Clone, Copy, PartialEq, Eq, TryFromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
 )]
 pub enum Action {
-    ReplaceByKeySender,
     UpdateValueSender,
     InsertByKeySender,
 }

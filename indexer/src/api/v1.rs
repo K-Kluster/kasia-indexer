@@ -7,7 +7,9 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
 use indexer_actors::metrics::{IndexerMetricsSnapshot, SharedMetrics};
-use indexer_db::messages::contextual_message::ContextualMessageBySenderPartition;
+use indexer_db::messages::contextual_message::{
+    ContextualMessageBySenderPartition, TxIdToContextualMessagePartition,
+};
 use indexer_db::messages::handshake::{
     HandshakeByReceiverPartition, HandshakeBySenderPartition, TxIdToHandshakePartition,
 };
@@ -57,6 +59,7 @@ impl Api {
         handshake_by_sender_partition: HandshakeBySenderPartition,
         handshake_by_receiver_partition: HandshakeByReceiverPartition,
         contextual_message_by_sender_partition: ContextualMessageBySenderPartition,
+        tx_id_to_contextual_message_partition: TxIdToContextualMessagePartition,
         payment_by_sender_partition: PaymentBySenderPartition,
         payment_by_receiver_partition: PaymentByReceiverPartition,
         tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
@@ -78,6 +81,7 @@ impl Api {
             tx_keyspace.clone(),
             contextual_message_by_sender_partition,
             tx_id_to_acceptance_partition.clone(),
+            tx_id_to_contextual_message_partition,
             context.clone(),
         );
 

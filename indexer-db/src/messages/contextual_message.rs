@@ -1,6 +1,6 @@
 use crate::{AddressPayload, SharedImmutable};
-use anyhow::{Result, bail};
-use fjall::{PartitionCreateOptions, ReadTransaction, UserValue, WriteTransaction};
+use anyhow::Result;
+use fjall::{PartitionCreateOptions, ReadTransaction, WriteTransaction};
 use std::fmt::Debug;
 use zerocopy::big_endian::U64;
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
@@ -39,43 +39,17 @@ impl ContextualMessageBySenderPartition {
         Ok(self.0.inner().len()?)
     }
 
+    pub fn approximate_len(&self) -> usize {
+        self.0.approximate_len()
+    }
+
     pub fn is_empty(&self) -> Result<bool> {
         Ok(self.0.inner().is_empty()?)
     }
 
     /// Insert a contextual message
-    pub fn insert(
-        &self,
-        wtx: &mut WriteTransaction,
-        sender: AddressPayload,
-        alias: &[u8],
-        block_time: u64,
-        block_hash: [u8; 32],
-        receiver: AddressPayload,
-        version: u8,
-        tx_id: [u8; 32],
-        sealed_hex: &[u8],
-    ) -> Result<ContextualMessageBySenderKey> {
-        // todo no need to perform insertion if we already have entry with sender
-        if alias.len() > 16 {
-            bail!("Alias length cannot exceed 16 bytes, got {}", alias.len());
-        }
-
-        let mut alias_bytes = [0u8; 16];
-        alias_bytes[..alias.len()].copy_from_slice(alias);
-
-        let key = ContextualMessageBySenderKey {
-            sender,
-            alias: alias_bytes,
-            block_time: block_time.into(),
-            block_hash,
-            receiver,
-            version,
-            tx_id,
-        };
-
-        wtx.insert(&self.0, key.as_bytes(), sealed_hex);
-        Ok(key)
+    pub fn insert(&self, wtx: &mut WriteTransaction, key: &ContextualMessageBySenderKey) {
+        wtx.insert(&self.0, key.as_bytes(), [])
     }
 
     /// Get all contextual messages for a sender (prefix search)
@@ -83,37 +57,23 @@ impl ContextualMessageBySenderPartition {
         &self,
         rtx: &ReadTransaction,
         sender: &AddressPayload,
-    ) -> impl DoubleEndedIterator<
-        Item = Result<(
-            SharedImmutable<ContextualMessageBySenderKey>,
-            SharedImmutable<[u8]>,
-        )>,
-    > + '_ {
+    ) -> impl DoubleEndedIterator<Item = Result<SharedImmutable<ContextualMessageBySenderKey>>> + '_
+    {
         let prefix = sender.as_bytes();
         rtx.prefix(&self.0, prefix).map(|item| {
-            let (key_bytes, value_bytes) = item?;
-            Ok((
-                SharedImmutable::new(key_bytes),
-                SharedImmutable::new(value_bytes),
-            ))
+            let (key_bytes, _value_bytes) = item?;
+            Ok(SharedImmutable::new(key_bytes))
         })
     }
     /// Get all contextual messages (for admin/debug purposes)
     pub fn get_all(
         &self,
         rtx: &ReadTransaction,
-    ) -> impl DoubleEndedIterator<
-        Item = Result<(
-            SharedImmutable<ContextualMessageBySenderKey>,
-            SharedImmutable<[u8]>,
-        )>,
-    > + '_ {
+    ) -> impl DoubleEndedIterator<Item = Result<SharedImmutable<ContextualMessageBySenderKey>>> + '_
+    {
         rtx.iter(&self.0).map(|item| {
-            let (key_bytes, value_bytes) = item?;
-            Ok((
-                SharedImmutable::new(key_bytes),
-                SharedImmutable::new(value_bytes),
-            ))
+            let (key_bytes, _value_bytes) = item?;
+            Ok(SharedImmutable::new(key_bytes))
         })
     }
 
@@ -124,12 +84,8 @@ impl ContextualMessageBySenderPartition {
         sender: &AddressPayload,
         alias: &[u8; 16],
         from_block_time: u64,
-    ) -> impl DoubleEndedIterator<
-        Item = Result<(
-            SharedImmutable<ContextualMessageBySenderKey>,
-            SharedImmutable<[u8]>,
-        )>,
-    > + '_ {
+    ) -> impl DoubleEndedIterator<Item = Result<SharedImmutable<ContextualMessageBySenderKey>>> + '_
+    {
         // Create range start: sender (34 bytes) + alias (16 bytes) + block_time (8 bytes)
         let mut range_start = [0u8; 58]; // 34 + 16 + 8
         range_start[..34].copy_from_slice(sender.as_bytes());
@@ -142,33 +98,51 @@ impl ContextualMessageBySenderPartition {
         range_end[34..50].copy_from_slice(alias);
 
         rtx.range(&self.0, range_start..=range_end).map(|item| {
-            let (key_bytes, value_bytes) = item?;
-            Ok((
-                SharedImmutable::new(key_bytes),
-                SharedImmutable::new(value_bytes),
-            ))
+            let (key_bytes, _value_bytes) = item?;
+            Ok(SharedImmutable::new(key_bytes))
         })
     }
+}
 
-    /// Update sender address (when resolved from zeros)
-    pub fn replace_sender(
-        &self,
-        wtx: &mut WriteTransaction,
-        old_key: &ContextualMessageBySenderKey,
-        new_sender: AddressPayload,
-    ) -> Result<()> {
-        let mut value = UserValue::new(&[]);
-        wtx.fetch_update(&self.0, old_key.as_bytes(), |old_value| {
-            value = old_value.unwrap().clone();
-            None
-        })?;
-        wtx.remove(&self.0, old_key.as_bytes());
-        let k = ContextualMessageBySenderKey {
-            sender: new_sender,
-            ..*old_key
-        };
-        wtx.insert(&self.0, k.as_bytes(), value);
+#[derive(Clone)]
+pub struct TxIdToContextualMessagePartition(fjall::TxPartition);
 
+impl TxIdToContextualMessagePartition {
+    pub fn new(keyspace: &fjall::TxKeyspace) -> Result<Self> {
+        Ok(Self(keyspace.open_partition(
+            "tx-id-to-contextual-message",
+            PartitionCreateOptions::default(),
+        )?))
+    }
+
+    pub fn len(&self) -> Result<usize> {
+        Ok(self.0.inner().len()?)
+    }
+
+    pub fn is_empty(&self) -> Result<bool> {
+        Ok(self.0.inner().is_empty()?)
+    }
+
+    pub fn insert(&self, tx_id: &[u8; 32], sealed_hex: &[u8]) -> Result<()> {
+        self.0.insert(tx_id, sealed_hex)?;
         Ok(())
+    }
+
+    pub fn insert_wtx(&self, wtx: &mut WriteTransaction, tx_id: &[u8; 32], sealed_hex: &[u8]) {
+        wtx.insert(&self.0, tx_id, sealed_hex);
+    }
+
+    pub fn approximate_len(&self) -> usize {
+        self.0.approximate_len()
+    }
+
+    pub fn get_rtx(
+        &self,
+        rtx: &ReadTransaction,
+        tx_id: &[u8; 32],
+    ) -> Result<Option<SharedImmutable<[u8]>>> {
+        rtx.get(&self.0, tx_id)
+            .map(|bts| bts.map(SharedImmutable::new))
+            .map_err(anyhow::Error::from)
     }
 }

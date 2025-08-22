@@ -791,15 +791,15 @@ impl VirtualProcessor {
                         Ok(())
                     }
                     PartitionId::ContextualMessageBySender => {
-                        if !matches!(entry.action, Action::ReplaceByKeySender) {
+                        if !matches!(entry.action, Action::InsertByKeySender) {
                             panic!("Unexpected action")
                         }
-                        self.contextual_message_by_sender_partition.replace_sender(
-                            wtx,
-                            ContextualMessageBySenderKey::try_ref_from_bytes(entry.key)
-                                .map_err(|_| anyhow::anyhow!("Key conversion error"))?,
-                            sender,
-                        )
+                        let mut key = ContextualMessageBySenderKey::try_read_from_bytes(entry.key)
+                            .map_err(|_| anyhow::anyhow!("Key conversion error"))?;
+                        key.sender = sender;
+                        self.contextual_message_by_sender_partition
+                            .insert(wtx, &key);
+                        Ok(())
                     }
                     PartitionId::PaymentByReceiver => {
                         if !matches!(entry.action, Action::UpdateValueSender) {
