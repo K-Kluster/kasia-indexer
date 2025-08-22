@@ -1,6 +1,7 @@
 use crate::api::v1::contextual_messages::ContextualMessageApi;
 use crate::api::v1::handshakes::HandshakeApi;
 use crate::api::v1::payments::PaymentApi;
+use crate::api::v1::self_stash::SelfStashApi;
 use crate::context::IndexerContext;
 use axum::extract::State;
 use axum::response::IntoResponse;
@@ -16,14 +17,17 @@ use indexer_db::messages::handshake::{
 use indexer_db::messages::payment::{
     PaymentByReceiverPartition, PaymentBySenderPartition, TxIdToPaymentPartition,
 };
+use indexer_db::messages::self_stash::{SelfStashByOwnerPartition, TxIdToSelfStashPartition};
 use indexer_db::processing::tx_id_to_acceptance::TxIDToAcceptancePartition;
 use std::net::SocketAddr;
 use tower_http::cors::CorsLayer;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
+
 pub mod contextual_messages;
 pub mod handshakes;
 pub mod payments;
+pub mod self_stash;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -33,10 +37,11 @@ pub mod payments;
         contextual_messages::get_contextual_messages_by_sender,
         payments::get_payments_by_sender,
         payments::get_payments_by_receiver,
+        self_stash::get_self_stash_by_owner,
         get_metrics,
     ),
     components(
-        schemas(handshakes::HandshakeResponse, contextual_messages::ContextualMessageResponse, IndexerMetricsSnapshot)
+        schemas(handshakes::HandshakeResponse, contextual_messages::ContextualMessageResponse, payments::PaymentResponse, self_stash::SelfStashResponse, IndexerMetricsSnapshot)
     ),
     tags(
         (name = "Kasia Indexer API", description = "Kasia Indexer API")
@@ -49,6 +54,7 @@ pub struct Api {
     handshake_api: HandshakeApi,
     contextual_message_api: ContextualMessageApi,
     payment_api: PaymentApi,
+    self_stash_api: SelfStashApi,
     metrics: SharedMetrics,
 }
 
@@ -65,6 +71,8 @@ impl Api {
         tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
         tx_id_to_handshake_partition: TxIdToHandshakePartition,
         tx_id_to_payment_partition: TxIdToPaymentPartition,
+        self_stash_by_owner_partition: SelfStashByOwnerPartition,
+        tx_id_to_self_stash_partition: TxIdToSelfStashPartition,
         metrics: SharedMetrics,
         context: IndexerContext,
     ) -> Self {
@@ -86,18 +94,27 @@ impl Api {
         );
 
         let payment_api = PaymentApi::new(
-            tx_keyspace,
+            tx_keyspace.clone(),
             payment_by_sender_partition,
             payment_by_receiver_partition,
             tx_id_to_payment_partition,
-            tx_id_to_acceptance_partition,
+            tx_id_to_acceptance_partition.clone(),
             context.clone(),
+        );
+
+        let self_stash_api = SelfStashApi::new(
+            tx_keyspace,
+            self_stash_by_owner_partition,
+            tx_id_to_acceptance_partition,
+            tx_id_to_self_stash_partition,
+            context,
         );
 
         Self {
             handshake_api,
             contextual_message_api,
             payment_api,
+            self_stash_api,
             metrics,
         }
     }
@@ -133,6 +150,10 @@ impl Api {
             .nest(
                 "/payments",
                 PaymentApi::router().with_state(self.payment_api.clone()),
+            )
+            .nest(
+                "/self-stash",
+                SelfStashApi::router().with_state(self.self_stash_api.clone()),
             )
             .route(
                 "/metrics",

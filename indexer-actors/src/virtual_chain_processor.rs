@@ -14,6 +14,7 @@ use indexer_db::messages::handshake::{
 use indexer_db::messages::payment::{
     PaymentByReceiverPartition, PaymentBySenderPartition, PaymentKeyByReceiver, PaymentKeyBySender,
 };
+use indexer_db::messages::self_stash::{SelfStashByOwnerPartition, SelfStashKeyByOwner};
 use indexer_db::metadata::{Cursor as DbCursor, MetadataPartition};
 use indexer_db::processing::accepting_block_to_txs::AcceptingBlockToTxIDPartition;
 use indexer_db::processing::pending_senders::{
@@ -39,21 +40,19 @@ pub struct VirtualProcessor {
     synced_capacity: usize,
     processed_block_tx: flume::Receiver<CompactHeader>,
     realtime_vcc_tx: flume::Receiver<RealTimeVccNotification>,
-
     syncer_rx: flume::Receiver<SyncVccNotification>,
     syncer_tx: flume::Sender<SyncVccNotification>,
     command_tx: workflow_core::channel::Sender<Command>,
-
     tx_keyspace: TxKeyspace,
     metadata_partition: MetadataPartition,
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
     accepting_block_to_tx_id_partition: AcceptingBlockToTxIDPartition,
     pending_sender_resolution_partition: PendingSenderResolutionPartition,
-
     handshake_by_receiver_partition: HandshakeByReceiverPartition,
     handshake_by_sender_partition: HandshakeBySenderPartition,
-
     contextual_message_by_sender_partition: ContextualMessageBySenderPartition,
+    self_stash_by_owner_partition: SelfStashByOwnerPartition,
+
     payment_by_receiver_partition: PaymentByReceiverPartition,
     payment_by_sender_partition: PaymentBySenderPartition,
 
@@ -785,7 +784,8 @@ impl VirtualProcessor {
                     | PartitionId::TxIdToPayment
                     | PartitionId::AcceptingBlockToTxIds
                     | PartitionId::TxIdToAcceptance
-                    | PartitionId::PendingSenders => {
+                    | PartitionId::PendingSenders
+                    | PartitionId::TxIDToSelfStash => {
                         panic!("Unexpected partition id")
                     }
                     PartitionId::HandshakeByReceiver => size_of::<HandshakeKeyByReceiver>(),
@@ -795,6 +795,7 @@ impl VirtualProcessor {
                     }
                     PartitionId::PaymentByReceiver => size_of::<PaymentKeyByReceiver>(),
                     PartitionId::PaymentBySender => size_of::<PaymentKeyBySender>(),
+                    PartitionId::SelfStashByOwner => size_of::<SelfStashKeyByOwner>(),
                 },
                 |wtx, entry| match entry.partition_id {
                     PartitionId::Metadata
@@ -805,7 +806,8 @@ impl VirtualProcessor {
                     | PartitionId::TxIdToPayment
                     | PartitionId::AcceptingBlockToTxIds
                     | PartitionId::TxIdToAcceptance
-                    | PartitionId::PendingSenders => {
+                    | PartitionId::PendingSenders
+                    | PartitionId::TxIDToSelfStash => {
                         panic!("Unexpected partition id")
                     }
                     PartitionId::HandshakeByReceiver => {
@@ -860,6 +862,16 @@ impl VirtualProcessor {
                             .map_err(|_| anyhow::anyhow!("Key conversion error"))?;
                         key.sender = sender;
                         self.payment_by_sender_partition.insert_wtx(wtx, &key);
+                        Ok(())
+                    }
+                    PartitionId::SelfStashByOwner => {
+                        if !matches!(entry.action, Action::InsertByKeySender) {
+                            panic!("Unexpected action")
+                        }
+                        let mut key = SelfStashKeyByOwner::try_read_from_bytes(entry.key)
+                            .map_err(|_| anyhow::anyhow!("Key conversion error"))?;
+                        key.owner = sender;
+                        self.self_stash_by_owner_partition.insert_wtx(wtx, &key);
                         Ok(())
                     }
                 },
