@@ -171,11 +171,6 @@ impl IndexerMetrics {
             .store(count, Ordering::Relaxed);
     }
 
-    /// Update contextual messages count
-    pub fn increment_contextual_messages_count(&self) {
-        self.contextual_messages.fetch_add(1, Ordering::Relaxed);
-    }
-
     /// Increment blocks processed count by 1
     pub fn increment_blocks_processed(&self) {
         self.blocks_processed.fetch_add(1, Ordering::Relaxed);
@@ -225,6 +220,10 @@ impl IndexerMetrics {
     pub fn increment_pruned_blocks(&self, pruned_blocks: u64) {
         self.pruned_blocks
             .fetch_add(pruned_blocks, Ordering::Relaxed);
+    }
+
+    pub fn set_contextual_messages(&self, count: u64) {
+        self.contextual_messages.store(count, Ordering::Relaxed);
     }
 }
 

@@ -7,7 +7,9 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
 use indexer_db::AddressPayload;
-use indexer_db::messages::contextual_message::ContextualMessageBySenderPartition;
+use indexer_db::messages::contextual_message::{
+    ContextualMessageBySenderPartition, TxIdToContextualMessagePartition,
+};
 use indexer_db::processing::tx_id_to_acceptance::TxIDToAcceptancePartition;
 use serde::{Deserialize, Serialize};
 use tokio::task::spawn_blocking;
@@ -17,6 +19,7 @@ use utoipa::{IntoParams, ToSchema};
 pub struct ContextualMessageApi {
     tx_keyspace: fjall::TxKeyspace,
     contextual_message_by_sender_partition: ContextualMessageBySenderPartition,
+    tx_id_to_contextual_message_partition: TxIdToContextualMessagePartition,
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
     context: IndexerContext,
 }
@@ -26,11 +29,13 @@ impl ContextualMessageApi {
         tx_keyspace: fjall::TxKeyspace,
         contextual_message_by_sender_partition: ContextualMessageBySenderPartition,
         tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
+        tx_id_to_contextual_message_partition: TxIdToContextualMessagePartition,
         context: IndexerContext,
     ) -> Self {
         Self {
             tx_keyspace,
             contextual_message_by_sender_partition,
+            tx_id_to_contextual_message_partition,
             tx_id_to_acceptance_partition,
             context,
         }
@@ -142,7 +147,7 @@ async fn get_contextual_messages_by_sender(
             .get_by_sender_alias_from_block_time(&rtx, &sender, &alias_bytes, cursor)
             .take(limit)
         {
-            let (message_key, sealed_hex) = match message_result {
+            let message_key = match message_result {
                 Ok(res) => res,
                 Err(e) => bail!("Database error: {}", e),
             };
@@ -170,7 +175,10 @@ async fn get_contextual_messages_by_sender(
             } else {
                 (None, None)
             };
-
+            let sealed_hex = state
+                .tx_id_to_contextual_message_partition
+                .get_rtx(&rtx, &message_key.tx_id)?
+                .expect("Message not found");
             let message_payload = faster_hex::hex_string(sealed_hex.as_ref());
 
             messages.push(ContextualMessageResponse {

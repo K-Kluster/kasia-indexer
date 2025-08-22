@@ -13,7 +13,9 @@ use indexer_actors::virtual_chain_processor::{CompactHeader, VirtualProcessor};
 use indexer_db::headers::block_compact_headers::BlockCompactHeaderPartition;
 use indexer_db::headers::block_gaps::{BlockGap, BlockGapsPartition};
 use indexer_db::headers::daa_index::DaaIndexPartition;
-use indexer_db::messages::contextual_message::ContextualMessageBySenderPartition;
+use indexer_db::messages::contextual_message::{
+    ContextualMessageBySenderPartition, TxIdToContextualMessagePartition,
+};
 use indexer_db::messages::handshake::{
     HandshakeByReceiverPartition, HandshakeBySenderPartition, TxIdToHandshakePartition,
 };
@@ -66,6 +68,8 @@ async fn main() -> anyhow::Result<()> {
     let handshake_by_receiver_partition = HandshakeByReceiverPartition::new(&tx_keyspace)?;
     let tx_id_to_handshake_partition = TxIdToHandshakePartition::new(&tx_keyspace)?;
     let contextual_message_partition = ContextualMessageBySenderPartition::new(&tx_keyspace)?;
+    let tx_id_to_contextual_message_partition =
+        TxIdToContextualMessagePartition::new(&tx_keyspace)?;
     let payment_by_receiver_partition = PaymentByReceiverPartition::new(&tx_keyspace)?;
     let tx_id_to_payment_partition = TxIdToPaymentPartition::new(&tx_keyspace)?;
     let tx_id_to_acceptance_partition = TxIDToAcceptancePartition::new(&tx_keyspace)?;
@@ -135,6 +139,7 @@ async fn main() -> anyhow::Result<()> {
         .handshake_by_sender_partition(handshake_by_sender_partition.clone())
         .tx_id_to_handshake_partition(tx_id_to_handshake_partition.clone())
         .contextual_message_by_sender_partition(contextual_message_partition.clone())
+        .tx_id_to_contextual_message_partition(tx_id_to_contextual_message_partition.clone())
         .payment_by_receiver_partition(payment_by_receiver_partition.clone())
         .payment_by_sender_partition(payment_by_sender_partition.clone())
         .tx_id_to_payment_partition(tx_id_to_payment_partition.clone())
@@ -183,6 +188,7 @@ async fn main() -> anyhow::Result<()> {
         .tx_id_to_payment_partition(tx_id_to_payment_partition.clone())
         .payment_by_sender_partition(payment_by_sender_partition.clone())
         .handshake_by_sender_partition(handshake_by_sender_partition.clone())
+        .contextual_message_by_sender_partition(contextual_message_partition.clone())
         .build();
 
     let mut data_source = DataSource::new(
@@ -229,6 +235,7 @@ async fn main() -> anyhow::Result<()> {
         handshake_by_sender_partition,
         handshake_by_receiver_partition,
         contextual_message_partition,
+        tx_id_to_contextual_message_partition,
         payment_by_sender_partition,
         payment_by_receiver_partition,
         tx_id_to_acceptance_partition,

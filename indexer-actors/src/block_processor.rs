@@ -12,6 +12,7 @@ use indexer_db::headers::block_gaps::BlockGapsPartition;
 use indexer_db::headers::daa_index::DaaIndexPartition;
 use indexer_db::messages::contextual_message::{
     ContextualMessageBySenderKey, ContextualMessageBySenderPartition,
+    TxIdToContextualMessagePartition,
 };
 use indexer_db::messages::handshake::{
     HandshakeByReceiverPartition, HandshakeBySenderPartition, HandshakeKeyByReceiver,
@@ -54,6 +55,7 @@ pub struct BlockProcessor {
     handshake_by_sender_partition: HandshakeBySenderPartition,
     tx_id_to_handshake_partition: TxIdToHandshakePartition,
     contextual_message_by_sender_partition: ContextualMessageBySenderPartition,
+    tx_id_to_contextual_message_partition: TxIdToContextualMessagePartition,
     payment_by_receiver_partition: PaymentByReceiverPartition,
     payment_by_sender_partition: PaymentBySenderPartition,
     tx_id_to_payment_partition: TxIdToPaymentPartition,
@@ -397,8 +399,7 @@ impl BlockProcessor {
             }
             (SealedOperation::ContextualMessageV1(cm), None) => {
                 let key =
-                    self.handle_contextual_message(wtx, sender, block_header, tx_id, cm, receiver)?;
-                self.shared_metrics.increment_contextual_messages_count();
+                    self.handle_contextual_message(wtx, sender, block_header, tx_id, cm, receiver);
                 self.tx_id_to_acceptance_partition.insert_wtx(
                     wtx,
                     &AcceptanceKey {
@@ -407,7 +408,7 @@ impl BlockProcessor {
                     },
                     &[InsertionEntry {
                         partition_id: PartitionId::ContextualMessageBySender,
-                        action: Action::ReplaceByKeySender,
+                        action: Action::InsertByKeySender,
                         partition_key: &|| key.as_bytes(),
                     }],
                 )?;
@@ -462,7 +463,7 @@ impl BlockProcessor {
                     tx_id,
                     cm,
                     receiver,
-                )?;
+                );
                 self.tx_id_to_acceptance_partition.insert_wtx(
                     wtx,
                     &AcceptanceKey {
@@ -594,19 +595,26 @@ impl BlockProcessor {
         tx_id: RpcTransactionId,
         cm: SealedContextualMessageV1,
         receiver: AddressPayload,
-    ) -> anyhow::Result<ContextualMessageBySenderKey> {
+    ) -> ContextualMessageBySenderKey {
         debug!(%tx_id, sender = ?sender, receiver = ?receiver, alias = %cm.alias.to_hex(), "Handling contextual message");
-        self.contextual_message_by_sender_partition.insert(
-            wtx,
-            sender.unwrap_or_default(),
-            cm.alias,
-            header.timestamp,
-            header.hash.as_bytes(),
+        let mut alias = [0u8; 16];
+        alias.copy_from_slice(&cm.alias[..cm.alias.len().min(16)]);
+        self.tx_id_to_contextual_message_partition
+            .insert_wtx(wtx, tx_id.as_ref(), cm.sealed_hex);
+        let cmk = ContextualMessageBySenderKey {
+            sender: sender.unwrap_or_default(),
+            alias,
+            block_time: header.timestamp.into(),
+            block_hash: header.hash.as_bytes(),
             receiver,
-            1,
-            tx_id.as_bytes(),
-            cm.sealed_hex,
-        )
+            version: 1,
+            tx_id: tx_id.as_bytes(),
+        };
+        if sender.is_some() {
+            self.contextual_message_by_sender_partition
+                .insert(wtx, &cmk);
+        }
+        cmk
     }
 
     fn handle_payment(
