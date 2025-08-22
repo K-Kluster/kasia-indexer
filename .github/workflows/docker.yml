@@ -1,11 +1,6 @@
 name: Manual Trigger Docker Build & Push
 on:
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Docker tag"
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -13,7 +8,7 @@ permissions:
   id-token: write
 
 jobs:
-  print-tag:
+  docker-build:
     runs-on: ubuntu-latest
     steps:
       - name: Login to Docker Hub
@@ -67,14 +62,16 @@ jobs:
         run: |
           docker buildx imagetools inspect ${{ vars.DOCKER_REPO }}:${{ github.ref_name || 'latest' }} --format "{{json .}}" | jq .
 
-      - name: Export OCI layout (artifact)
+      - name: Create dist directory
         run: |
-          mkdir -p dist
-          docker buildx build \
-            --platform linux/amd64 \
-            --output type=oci,dest=dist/oci-layout.tar \
-            --tag ${IMAGE_NAME}:oci-export \
-            --provenance=false \
+          mkdir -p dist/
+
+      - name: Export OCI layout (artifact)
+        uses: docker/build-push-action@v6
+        with:
+          platforms: linux/amd64 #,linux/arm64 - not possible for the moment
+          push: false
+          outputs: type=oci,dest=dist/oci-layout.tar
 
       - name: Upload OCI layout
         uses: actions/upload-artifact@v4

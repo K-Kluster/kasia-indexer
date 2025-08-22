@@ -1,10 +1,10 @@
-FROM rust:1.88.0-alpine3.20 as builder
+FROM rust:1.88.0-alpine3.20 AS builder
 
 WORKDIR /usr/src
 
 RUN apk add --no-cache pcc-libs-dev musl-dev pkgconfig openssl-dev openssl-libs-static curl
 
-COPY . ./
+COPY . .
 
 RUN cargo build --release
 
