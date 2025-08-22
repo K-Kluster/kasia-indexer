@@ -3,6 +3,7 @@ use fjall::Config;
 use indexer_lib::database::headers::{
     BlockCompactHeaderPartition, BlockGapsPartition, DaaIndexPartition,
 };
+use indexer_lib::database::messages::self_stashes::SelfStashByOwnerPartition;
 use indexer_lib::database::messages::{
     ContextualMessageBySenderPartition, HandshakeByReceiverPartition, HandshakeBySenderPartition,
     PaymentByReceiverPartition, PaymentBySenderPartition, TxIdToHandshakePartition,
@@ -34,6 +35,7 @@ use std::time::Duration;
 use time::macros::format_description;
 use tracing::{error, info};
 use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::config::get_indexer_config;
@@ -69,6 +71,7 @@ async fn main() -> anyhow::Result<()> {
     let contextual_message_partition = ContextualMessageBySenderPartition::new(&tx_keyspace)?;
     let payment_by_receiver_partition = PaymentByReceiverPartition::new(&tx_keyspace)?;
     let tx_id_to_payment_partition = TxIdToPaymentPartition::new(&tx_keyspace)?;
+    let self_stash_by_owner_partition = SelfStashByOwnerPartition::new(&tx_keyspace)?;
     let tx_id_to_acceptance_partition = TxIDToAcceptancePartition::new(&tx_keyspace)?;
     let skip_tx_partition = SkipTxPartition::new(&tx_keyspace)?;
     let skip_tx_by_block_partition = SkipTxByBlockPartition::new(&tx_keyspace)?;
@@ -127,6 +130,7 @@ async fn main() -> anyhow::Result<()> {
         .tx_id_to_handshake_partition(tx_id_to_handshake_partition.clone())
         .contextual_message_partition(contextual_message_partition.clone())
         .payment_by_receiver_partition(payment_by_receiver_partition.clone())
+        .self_stash_by_owner_partition(self_stash_by_owner_partition.clone())
         .tx_id_to_payment_partition(tx_id_to_payment_partition.clone())
         .tx_id_to_acceptance_partition(tx_id_to_acceptance_partition.clone())
         .skip_tx_partition(skip_tx_partition.clone())
@@ -199,6 +203,7 @@ async fn main() -> anyhow::Result<()> {
         .payment_by_sender_partition(payment_by_sender_partition.clone())
         .tx_id_to_payment_partition(tx_id_to_payment_partition.clone())
         .tx_id_to_handshake_partition(tx_id_to_handshake_partition.clone())
+        .self_stash_by_owner_partition(self_stash_by_owner_partition.clone())
         .metrics(metrics.clone())
         .metrics_snapshot_interval(Duration::from_secs(10))
         .metadata_partition(metadata_partition.clone())
@@ -280,6 +285,7 @@ async fn main() -> anyhow::Result<()> {
         tx_id_to_acceptance_partition,
         tx_id_to_handshake_partition,
         tx_id_to_payment_partition,
+        self_stash_by_owner_partition,
         metrics.clone(),
         context.clone(),
     );
@@ -387,14 +393,14 @@ pub fn init_logs(context: &IndexerContext) -> anyhow::Result<(WorkerGuard, Worke
     let file_subscriber = tracing_subscriber::fmt::layer()
         .with_ansi(false)
         .with_writer(non_blocking_appender)
-        .with_filter(context.config.rust_log_file);
+        .with_filter(EnvFilter::from_default_env());
     let (non_blocking_appender, guard_stdout) = tracing_appender::non_blocking(std::io::stdout());
     let stdout_subscriber = tracing_subscriber::fmt::layer()
         .with_timer(tracing_subscriber::fmt::time::LocalTime::new(
             format_description!("[year]-[month]-[day] [hour]:[minute]:[second]"),
         ))
         .with_writer(non_blocking_appender)
-        .with_filter(context.config.rust_log);
+        .with_filter(EnvFilter::from_default_env());
 
     tracing_subscriber::registry()
         .with(file_subscriber)

@@ -1,6 +1,6 @@
 FROM rust:1.88.0-alpine3.20 as builder
 
-WORKDIR /usr/src/indexer
+WORKDIR /usr/src
 
 RUN apk add --no-cache pcc-libs-dev musl-dev pkgconfig openssl-dev openssl-libs-static curl
 
@@ -10,8 +10,8 @@ RUN cargo build --release
 
 FROM alpine:3.20
 
-WORKDIR /usr/src/indexer
+WORKDIR /usr/src
 
-COPY --from=builder /usr/src/indexer/target/release/indexer .
+COPY --from=builder /usr/src/target/release/indexer .
 
 CMD ["./indexer"]

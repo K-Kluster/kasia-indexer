@@ -2,6 +2,9 @@ use crate::APP_IS_RUNNING;
 use crate::RK_PRUNING_DEPTH;
 use crate::database::PartitionId;
 use crate::database::headers::{BlockCompactHeaderPartition, DaaIndexPartition};
+use crate::database::messages::AddressPayload;
+use crate::database::messages::self_stashes::SelfStashByOwnerPartition;
+use crate::database::messages::self_stashes::SelfStashKeyByOwner;
 use crate::database::messages::{
     ContextualMessageBySenderPartition, HandshakeByReceiverPartition, HandshakeBySenderPartition,
     HandshakeKeyByReceiver, HandshakeKeyBySender, PaymentByReceiverPartition,
@@ -93,6 +96,10 @@ pub struct PeriodicProcessor {
     payment_by_receiver_partition: PaymentByReceiverPartition,
     payment_by_sender_partition: PaymentBySenderPartition,
     tx_id_to_payment_partition: TxIdToPaymentPartition,
+
+    // self stash
+    self_stash_by_owner_partition: SelfStashByOwnerPartition,
+
     metadata_partition: MetadataPartition,
     metrics: SharedMetrics,
     metrics_snapshot_interval: Duration,
@@ -120,7 +127,10 @@ impl PeriodicProcessor {
                     self.handle_sender_resolution(r)?;
                 }
                 Notification::Tick => {
-                    self.tick_work()?;
+                    let _ = self.tick_work().inspect_err(|error| {
+                        error!("tick job finished with error: {}", error);
+                    });
+
                     self.job_done_tx.send_blocking(())?;
                 }
                 Notification::Shutdown => {
@@ -265,6 +275,19 @@ impl PeriodicProcessor {
                             self.pending_sender_resolution_partition
                                 .mark_payment_pending(wtx, accepting_daa, entry.tx_id, &pmk)?
                         }
+                        DaaResolutionLikeKey::SelfStashKey(ssk) => {
+                            self.tx_id_to_acceptance_partition
+                                .remove_by_tx_id(wtx, entry.tx_id)?;
+                            self.tx_id_to_acceptance_partition.insert_self_stash_wtx(
+                                wtx,
+                                entry.tx_id,
+                                &ssk,
+                                Some(accepting_daa),
+                                Some(accepting_block_hash.as_bytes()),
+                            );
+                            self.pending_sender_resolution_partition
+                                .mark_self_stash_pending(wtx, accepting_daa, entry.tx_id, &ssk)?
+                        }
                     }
                 }
             }
@@ -357,6 +380,22 @@ impl PeriodicProcessor {
                                 },
                                 Some(sender),
                             );
+                        }
+                        SenderResolutionLikeKey::SelfStashKey(ssk) => {
+                            self.self_stash_by_owner_partition.update_owner(
+                                &mut wtx,
+                                // building the current (soon to be called old) key
+                                &SelfStashKeyByOwner {
+                                    scope: ssk.scope,
+                                    // this is intended to build the old key
+                                    owner: AddressPayload::default(),
+                                    block_time: ssk.block_time,
+                                    block_hash: ssk.block_hash,
+                                    version: ssk.version,
+                                    tx_id: ssk.tx_id,
+                                },
+                                &sender,
+                            )?;
                         }
                     }
                 }
@@ -467,6 +506,22 @@ impl PeriodicProcessor {
                             );
 
                             extended_daa_requests.push_payment(*tx_id, &pmk);
+                            found_resolution = true;
+                            processed_any = true;
+                        }
+                        AcceptingBlockResolutionData::SelfStashKey(ssk) => {
+                            assert_eq!(key.partition_id, PartitionId::SelfStashByOwner as u8);
+                            self.tx_id_to_acceptance_partition
+                                .remove(&mut wtx, key.clone());
+                            self.tx_id_to_acceptance_partition.insert_self_stash_wtx(
+                                &mut wtx,
+                                key.tx_id,
+                                &ssk,
+                                None,
+                                Some(accepting_block_hash.as_bytes()),
+                            );
+
+                            extended_daa_requests.push_self_stash(*tx_id, &ssk);
                             found_resolution = true;
                             processed_any = true;
                         }
@@ -601,6 +656,21 @@ impl PeriodicProcessor {
                                         &mut wtx,
                                         pmk.tx_id,
                                         &pmk,
+                                        Some(daa),
+                                        Some(block.as_bytes()),
+                                    );
+                                }
+                                DaaResolutionLikeKey::SelfStashKey(ssk) => {
+                                    self.pending_sender_resolution_partition
+                                        .mark_self_stash_pending(&mut wtx, daa, ssk.tx_id, &ssk)?;
+
+                                    self.tx_id_to_acceptance_partition
+                                        .remove_by_tx_id(&mut wtx, ssk.tx_id)?;
+
+                                    self.tx_id_to_acceptance_partition.insert_self_stash_wtx(
+                                        &mut wtx,
+                                        ssk.tx_id,
+                                        &ssk,
                                         Some(daa),
                                         Some(block.as_bytes()),
                                     );

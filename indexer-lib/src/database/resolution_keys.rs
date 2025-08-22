@@ -1,4 +1,5 @@
 use crate::database::messages::AddressPayload;
+use crate::database::messages::self_stashes::SelfStashScope;
 use bytemuck::{AnyBitPattern, NoUninit};
 use fjall::UserKey;
 use std::fmt::Debug;
@@ -172,12 +173,70 @@ impl<T: AsRef<[u8]>> Debug for LikePaymentKeyForResolution<T> {
     }
 }
 
+/// SelfStash key for resolution - missing owner field (that's what we're resolving)
+#[derive(Clone, Copy, Debug, AnyBitPattern, NoUninit, PartialEq, Eq)]
+#[repr(C)]
+pub struct SelfStashKeyForResolution {
+    pub scope: SelfStashScope,
+    pub block_time: [u8; 8], // be
+    pub block_hash: [u8; 32],
+    pub version: u8,
+    pub tx_id: [u8; 32],
+    pub attempt_count: u8, // attempts remaining for resolution
+}
+
+#[repr(transparent)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct LikeSelfStashKeyForResolution<T: AsRef<[u8]>> {
+    bts: T,
+    phantom_data: PhantomData<SelfStashKeyForResolution>,
+}
+
+impl<T: AsRef<[u8]>> LikeSelfStashKeyForResolution<T> {
+    pub fn new(bts: T) -> Self {
+        let _ = bytemuck::from_bytes::<SelfStashKeyForResolution>(bts.as_ref());
+        Self {
+            bts,
+            phantom_data: PhantomData,
+        }
+    }
+
+    pub fn to_mutable(&self) -> LikeSelfStashKeyForResolution<Vec<u8>> {
+        LikeSelfStashKeyForResolution::new(self.bts.as_ref().to_vec())
+    }
+
+    pub fn inner(self) -> T {
+        self.bts
+    }
+}
+
+impl<T: AsRef<[u8]>> Deref for LikeSelfStashKeyForResolution<T> {
+    type Target = SelfStashKeyForResolution;
+
+    fn deref(&self) -> &Self::Target {
+        bytemuck::from_bytes(self.bts.as_ref())
+    }
+}
+
+impl DerefMut for LikeSelfStashKeyForResolution<Vec<u8>> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        bytemuck::from_bytes_mut(self.bts.as_mut())
+    }
+}
+
+impl<T: AsRef<[u8]>> Debug for LikeSelfStashKeyForResolution<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.deref().fmt(f)
+    }
+}
+
 /// Return type for DAA resolution - contains the appropriate Like key type for resolution
 #[derive(Debug, Clone)]
 pub enum DaaResolutionLikeKey<T: AsRef<[u8]> = UserKey> {
     HandshakeKey(LikeHandshakeKeyForResolution<T>),
     ContextualMessageKey(LikeContextualMessageKeyForResolution<T>),
     PaymentKey(LikePaymentKeyForResolution<T>),
+    SelfStashKey(LikeSelfStashKeyForResolution<T>),
 }
 
 impl<T: AsRef<[u8]>> DaaResolutionLikeKey<T> {
@@ -186,6 +245,7 @@ impl<T: AsRef<[u8]>> DaaResolutionLikeKey<T> {
             DaaResolutionLikeKey::HandshakeKey(hk) => hk.inner(),
             DaaResolutionLikeKey::ContextualMessageKey(cmk) => cmk.inner(),
             DaaResolutionLikeKey::PaymentKey(pk) => pk.inner(),
+            DaaResolutionLikeKey::SelfStashKey(ssk) => ssk.inner(),
         }
     }
 }
@@ -196,6 +256,7 @@ pub enum SenderResolutionLikeKey<T: AsRef<[u8]> + Clone = UserKey> {
     HandshakeKey(LikeHandshakeKeyForResolution<T>),
     ContextualMessageKey(LikeContextualMessageKeyForResolution<T>),
     PaymentKey(LikePaymentKeyForResolution<T>),
+    SelfStashKey(LikeSelfStashKeyForResolution<T>),
 }
 
 #[cfg(test)]
@@ -256,6 +317,25 @@ mod tests {
         assert_eq!(bytes.len(), 108);
 
         let deserialized: PaymentKeyForResolution = *bytemuck::from_bytes(bytes);
+        assert_eq!(deserialized, key);
+    }
+
+    #[test]
+    fn test_self_stash_key_for_resolution_serialization() {
+        let key = SelfStashKeyForResolution {
+            scope: SelfStashScope::ZERO,
+            block_time: 12345u64.to_be_bytes(),
+            block_hash: [1u8; 32],
+            version: 1,
+            tx_id: [2u8; 32],
+            attempt_count: 3,
+        };
+
+        let bytes = bytemuck::bytes_of(&key);
+
+        assert_eq!(bytes.len(), 329);
+
+        let deserialized: SelfStashKeyForResolution = *bytemuck::from_bytes(bytes);
         assert_eq!(deserialized, key);
     }
 

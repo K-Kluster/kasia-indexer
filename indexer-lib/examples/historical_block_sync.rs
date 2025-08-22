@@ -2,6 +2,7 @@ use fjall::{Config, TxKeyspace};
 use indexer_lib::database::headers::{
     BlockCompactHeaderPartition, BlockGapsPartition, DaaIndexPartition,
 };
+use indexer_lib::database::messages::self_stashes::SelfStashByOwnerPartition;
 use indexer_lib::database::messages::{
     ContextualMessageBySenderPartition, HandshakeByReceiverPartition, PaymentByReceiverPartition,
     TxIdToHandshakePartition, TxIdToPaymentPartition,
@@ -95,6 +96,7 @@ async fn run_syncer() -> anyhow::Result<()> {
         .tx_id_to_handshake_partition(TxIdToHandshakePartition::new(&tx_keyspace)?)
         .contextual_message_partition(ContextualMessageBySenderPartition::new(&tx_keyspace)?)
         .payment_by_receiver_partition(PaymentByReceiverPartition::new(&tx_keyspace)?)
+        .self_stash_by_owner_partition(SelfStashByOwnerPartition::new(&tx_keyspace)?)
         .tx_id_to_payment_partition(TxIdToPaymentPartition::new(&tx_keyspace)?)
         .tx_id_to_acceptance_partition(TxIDToAcceptancePartition::new(&tx_keyspace)?)
         .skip_tx_partition(SkipTxPartition::new(&tx_keyspace)?)

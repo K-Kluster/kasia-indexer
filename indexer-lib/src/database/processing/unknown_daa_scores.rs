@@ -1,7 +1,8 @@
 use crate::database::resolution_keys::{
     ContextualMessageKeyForResolution, DaaResolutionLikeKey, HandshakeKeyForResolution,
     LikeContextualMessageKeyForResolution, LikeHandshakeKeyForResolution,
-    LikePaymentKeyForResolution, PaymentKeyForResolution,
+    LikePaymentKeyForResolution, LikeSelfStashKeyForResolution, PaymentKeyForResolution,
+    SelfStashKeyForResolution,
 };
 use anyhow::Result;
 use bytemuck::{AnyBitPattern, NoUninit};
@@ -19,7 +20,10 @@ const fn max(a: usize, b: usize) -> usize {
 const MAX_RESOLUTION_KEY_SIZE: usize = max(
     max(
         std::mem::size_of::<HandshakeKeyForResolution>(),
-        std::mem::size_of::<ContextualMessageKeyForResolution>(),
+        max(
+            std::mem::size_of::<ContextualMessageKeyForResolution>(),
+            std::mem::size_of::<SelfStashKeyForResolution>(),
+        ),
     ),
     std::mem::size_of::<PaymentKeyForResolution>(),
 );
@@ -53,6 +57,12 @@ impl PaddedResolutionEntry {
                 let size = std::mem::size_of::<PaymentKeyForResolution>();
                 Ok(DaaResolutionLikeKey::PaymentKey(
                     LikePaymentKeyForResolution::new(&self.resolution_key_data[..size]),
+                ))
+            }
+            x if x == DaaResolutionPartitionType::SelfStashByOwner as u8 => {
+                let size = std::mem::size_of::<SelfStashKeyForResolution>();
+                Ok(DaaResolutionLikeKey::SelfStashKey(
+                    LikeSelfStashKeyForResolution::new(&self.resolution_key_data[..size]),
                 ))
             }
             _ => Err(anyhow::anyhow!(
@@ -189,6 +199,22 @@ impl ResolutionEntries<Vec<u8>> {
         self.bts.extend_from_slice(entry_bytes);
     }
 
+    /// Push a self stash resolution entry
+    pub fn push_self_stash(&mut self, tx_id: [u8; 32], key: &SelfStashKeyForResolution) {
+        let mut resolution_key_data = [0u8; MAX_RESOLUTION_KEY_SIZE];
+        let key_bytes = bytemuck::bytes_of(key);
+        resolution_key_data[..key_bytes.len()].copy_from_slice(key_bytes);
+
+        let entry = PaddedResolutionEntry {
+            tx_id,
+            partition_type: DaaResolutionPartitionType::SelfStashByOwner as u8,
+            resolution_key_data,
+        };
+
+        let entry_bytes = bytemuck::bytes_of(&entry);
+        self.bts.extend_from_slice(entry_bytes);
+    }
+
     pub fn decrement_attempt_count(&mut self) -> u8 {
         if !self.bts.is_empty() {
             self.bts[0] = self.bts[0].saturating_sub(1);
@@ -253,6 +279,7 @@ pub enum DaaResolutionPartitionType {
     HandshakeBySender = 0,
     ContextualMessageBySender = 1,
     PaymentBySender = 2,
+    SelfStashByOwner = 3,
 }
 
 // DaaResolutionLikeKey is now imported from resolution_keys module
