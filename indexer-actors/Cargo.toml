@@ -19,6 +19,7 @@ fstr.workspace = true
 futures-util.workspace = true
 kaspa-consensus-core.workspace = true
 kaspa-rpc-core.workspace = true
+kaspa-utils.workspace = true
 kaspa-wrpc-client.workspace = true
 ringmap.workspace = true
 serde = { workspace = true, optional = true }

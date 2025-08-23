@@ -22,6 +22,7 @@ kaspa-addresses = "1.*"
 kaspa-consensus-core = "1.*"
 kaspa-rpc-core = "1.*"
 kaspa-txscript = "1.*"
+kaspa-utils = "1.*"
 kaspa-wrpc-client = "1.*"
 rayon = "1.11.0"
 ringmap = "0.1.4"
@@ -54,6 +55,7 @@ indexer-db = { path = "indexer-db" }
 #kaspa-math = { git = "https://github.com/kaspanet/rusty-kaspa.git", tag = "v1.0.1" }
 #kaspa-rpc-core = { git = "https://github.com/kaspanet/rusty-kaspa.git", tag = "v1.0.1" }
 #kaspa-txscript = { git = "https://github.com/kaspanet/rusty-kaspa.git", tag = "v1.0.1" }
+#kaspa-utils = { git = "https://github.com/kaspanet/rusty-kaspa.git", tag = "v1.0.1" }
 #kaspa-wrpc-client = { git = "https://github.com/kaspanet/rusty-kaspa.git", tag = "v1.0.1" }
 
 kaspa-addresses = { git = "https://github.com/biryukovmaxim/rusty-kaspa.git", branch = "feat/get_block_with_payload_filter" }
@@ -61,6 +63,7 @@ kaspa-consensus-core = { git = "https://github.com/biryukovmaxim/rusty-kaspa.git
 kaspa-math = { git = "https://github.com/biryukovmaxim/rusty-kaspa.git", branch = "feat/get_block_with_payload_filter" }
 kaspa-rpc-core = { git = "https://github.com/biryukovmaxim/rusty-kaspa.git", branch = "feat/get_block_with_payload_filter" }
 kaspa-txscript = { git = "https://github.com/biryukovmaxim/rusty-kaspa.git", branch = "feat/get_block_with_payload_filter" }
+kaspa-utils = { git = "https://github.com/biryukovmaxim/rusty-kaspa.git", branch = "feat/get_block_with_payload_filter" }
 kaspa-wrpc-client = { git = "https://github.com/biryukovmaxim/rusty-kaspa.git", branch = "feat/get_block_with_payload_filter" }
 
 fjall = { git = "https://github.com/fjall-rs/fjall.git", branch = "improve-write-stalling" }
