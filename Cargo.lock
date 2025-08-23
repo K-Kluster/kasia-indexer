@@ -1575,6 +1575,7 @@ dependencies = [
  "indexer-db",
  "kaspa-consensus-core",
  "kaspa-rpc-core",
+ "kaspa-utils",
  "kaspa-wrpc-client",
  "protocol",
  "ringmap",
@@ -1709,7 +1710,7 @@ dependencies = [
 [[package]]
 name = "kaspa-addresses"
 version = "1.0.1"
-source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#481ea8a711b3456964d1bc7f456979f2b3ef82bb"
+source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#29df0fa1433ef46b9f330b5fd4b9c0614b1d5e07"
 dependencies = [
  "borsh",
  "js-sys",
@@ -1724,7 +1725,7 @@ dependencies = [
 [[package]]
 name = "kaspa-consensus-client"
 version = "1.0.1"
-source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#481ea8a711b3456964d1bc7f456979f2b3ef82bb"
+source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#29df0fa1433ef46b9f330b5fd4b9c0614b1d5e07"
 dependencies = [
  "ahash",
  "cfg-if",
@@ -1753,7 +1754,7 @@ dependencies = [
 [[package]]
 name = "kaspa-consensus-core"
 version = "1.0.1"
-source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#481ea8a711b3456964d1bc7f456979f2b3ef82bb"
+source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#29df0fa1433ef46b9f330b5fd4b9c0614b1d5e07"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -1789,7 +1790,7 @@ dependencies = [
 [[package]]
 name = "kaspa-consensus-notify"
 version = "1.0.1"
-source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#481ea8a711b3456964d1bc7f456979f2b3ef82bb"
+source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#29df0fa1433ef46b9f330b5fd4b9c0614b1d5e07"
 dependencies = [
  "async-channel 2.3.1",
  "cfg-if",
@@ -1809,7 +1810,7 @@ dependencies = [
 [[package]]
 name = "kaspa-consensus-wasm"
 version = "1.0.1"
-source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#481ea8a711b3456964d1bc7f456979f2b3ef82bb"
+source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#29df0fa1433ef46b9f330b5fd4b9c0614b1d5e07"
 dependencies = [
  "cfg-if",
  "faster-hex 0.9.0",
@@ -1834,7 +1835,7 @@ dependencies = [
 [[package]]
 name = "kaspa-core"
 version = "1.0.1"
-source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#481ea8a711b3456964d1bc7f456979f2b3ef82bb"
+source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#29df0fa1433ef46b9f330b5fd4b9c0614b1d5e07"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -1854,7 +1855,7 @@ dependencies = [
 [[package]]
 name = "kaspa-hashes"
 version = "1.0.1"
-source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#481ea8a711b3456964d1bc7f456979f2b3ef82bb"
+source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#29df0fa1433ef46b9f330b5fd4b9c0614b1d5e07"
 dependencies = [
  "blake2b_simd",
  "borsh",
@@ -1873,7 +1874,7 @@ dependencies = [
 [[package]]
 name = "kaspa-index-core"
 version = "1.0.1"
-source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#481ea8a711b3456964d1bc7f456979f2b3ef82bb"
+source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#29df0fa1433ef46b9f330b5fd4b9c0614b1d5e07"
 dependencies = [
  "async-channel 2.3.1",
  "async-trait",
@@ -1893,7 +1894,7 @@ dependencies = [
 [[package]]
 name = "kaspa-math"
 version = "1.0.1"
-source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#481ea8a711b3456964d1bc7f456979f2b3ef82bb"
+source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#29df0fa1433ef46b9f330b5fd4b9c0614b1d5e07"
 dependencies = [
  "borsh",
  "faster-hex 0.9.0",
@@ -1913,7 +1914,7 @@ dependencies = [
 [[package]]
 name = "kaspa-merkle"
 version = "1.0.1"
-source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#481ea8a711b3456964d1bc7f456979f2b3ef82bb"
+source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#29df0fa1433ef46b9f330b5fd4b9c0614b1d5e07"
 dependencies = [
  "kaspa-hashes",
 ]
@@ -1921,7 +1922,7 @@ dependencies = [
 [[package]]
 name = "kaspa-mining-errors"
 version = "1.0.1"
-source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#481ea8a711b3456964d1bc7f456979f2b3ef82bb"
+source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#29df0fa1433ef46b9f330b5fd4b9c0614b1d5e07"
 dependencies = [
  "kaspa-consensus-core",
  "thiserror 1.0.69",
@@ -1930,7 +1931,7 @@ dependencies = [
 [[package]]
 name = "kaspa-muhash"
 version = "1.0.1"
-source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#481ea8a711b3456964d1bc7f456979f2b3ef82bb"
+source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#29df0fa1433ef46b9f330b5fd4b9c0614b1d5e07"
 dependencies = [
  "kaspa-hashes",
  "kaspa-math",
@@ -1941,7 +1942,7 @@ dependencies = [
 [[package]]
 name = "kaspa-notify"
 version = "1.0.1"
-source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#481ea8a711b3456964d1bc7f456979f2b3ef82bb"
+source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#29df0fa1433ef46b9f330b5fd4b9c0614b1d5e07"
 dependencies = [
  "async-channel 2.3.1",
  "async-trait",
@@ -1973,7 +1974,7 @@ dependencies = [
 [[package]]
 name = "kaspa-rpc-core"
 version = "1.0.1"
-source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#481ea8a711b3456964d1bc7f456979f2b3ef82bb"
+source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#29df0fa1433ef46b9f330b5fd4b9c0614b1d5e07"
 dependencies = [
  "async-channel 2.3.1",
  "async-trait",
@@ -2015,7 +2016,7 @@ dependencies = [
 [[package]]
 name = "kaspa-rpc-macros"
 version = "1.0.1"
-source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#481ea8a711b3456964d1bc7f456979f2b3ef82bb"
+source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#29df0fa1433ef46b9f330b5fd4b9c0614b1d5e07"
 dependencies = [
  "convert_case 0.6.0",
  "proc-macro-error",
@@ -2028,7 +2029,7 @@ dependencies = [
 [[package]]
 name = "kaspa-txscript"
 version = "1.0.1"
-source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#481ea8a711b3456964d1bc7f456979f2b3ef82bb"
+source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#29df0fa1433ef46b9f330b5fd4b9c0614b1d5e07"
 dependencies = [
  "blake2b_simd",
  "borsh",
@@ -2059,7 +2060,7 @@ dependencies = [
 [[package]]
 name = "kaspa-txscript-errors"
 version = "1.0.1"
-source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#481ea8a711b3456964d1bc7f456979f2b3ef82bb"
+source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#29df0fa1433ef46b9f330b5fd4b9c0614b1d5e07"
 dependencies = [
  "secp256k1",
  "thiserror 1.0.69",
@@ -2068,7 +2069,7 @@ dependencies = [
 [[package]]
 name = "kaspa-utils"
 version = "1.0.1"
-source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#481ea8a711b3456964d1bc7f456979f2b3ef82bb"
+source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#29df0fa1433ef46b9f330b5fd4b9c0614b1d5e07"
 dependencies = [
  "arc-swap",
  "async-channel 2.3.1",
@@ -2098,7 +2099,7 @@ dependencies = [
 [[package]]
 name = "kaspa-wasm-core"
 version = "1.0.1"
-source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#481ea8a711b3456964d1bc7f456979f2b3ef82bb"
+source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#29df0fa1433ef46b9f330b5fd4b9c0614b1d5e07"
 dependencies = [
  "faster-hex 0.9.0",
  "hexplay",
@@ -2110,7 +2111,7 @@ dependencies = [
 [[package]]
 name = "kaspa-wrpc-client"
 version = "1.0.1"
-source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#481ea8a711b3456964d1bc7f456979f2b3ef82bb"
+source = "git+https://github.com/biryukovmaxim/rusty-kaspa.git?branch=feat%2Fget_block_with_payload_filter#29df0fa1433ef46b9f330b5fd4b9c0614b1d5e07"
 dependencies = [
  "async-std",
  "async-trait",

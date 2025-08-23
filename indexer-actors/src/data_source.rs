@@ -12,6 +12,7 @@ use kaspa_rpc_core::{
     GetUtxoReturnAddressResponse, GetVirtualChainFromBlockRequest,
     GetVirtualChainFromBlockResponse, Notification, RpcBlock, RpcHash,
 };
+use kaspa_utils::flattened_slice::FlattenedSliceBuilder;
 use kaspa_wrpc_client::KaspaRpcClient;
 use kaspa_wrpc_client::client::ConnectOptions;
 use kaspa_wrpc_client::prelude::{
@@ -143,10 +144,9 @@ impl DataSource {
         // register for notifications
         self.register_notification_listeners().await?;
         let info = self.rpc_client.get_block_dag_info().await?;
-
         let sink_blue_work = self
             .rpc_client
-            .get_block(info.sink, false, vec![])
+            .get_block(info.sink, false, vec![], vec![])
             .await?
             .header
             .blue_work;
@@ -422,6 +422,10 @@ impl DataSource {
                         blocks_from,
                         response_channel,
                     } => {
+                        let mut builder = FlattenedSliceBuilder::with_capacity(1, 1);
+                        builder.add_slice(PROTOCOL_PREFIX.as_bytes());
+                        let (tx_payload_prefixes_flattened, tx_payload_prefixes_lengths) =
+                            builder.into_inner();
                         match self
                             .rpc_client
                             .rpc_client()
@@ -431,7 +435,8 @@ impl DataSource {
                                     Some(RpcHash::from_bytes(blocks_from)),
                                     true,
                                     true,
-                                    PROTOCOL_PREFIX.as_bytes().to_vec(),
+                                    tx_payload_prefixes_flattened,
+                                    tx_payload_prefixes_lengths,
                                 )),
                             )
                             .await
