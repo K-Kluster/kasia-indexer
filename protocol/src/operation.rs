@@ -67,6 +67,11 @@ pub struct SealedPaymentV1<'a> {
     pub sealed_hex: &'a [u8],
 }
 
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct SealedHandshakeV2<'a> {
+    pub sealed_hex: &'a [u8],
+}
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct SealedMessageOrSealedHandshakeVNone<'a> {
     pub sealed_hex: &'a [u8],
@@ -96,6 +101,12 @@ pub enum SealedOperation<'a> {
      * "ciph_msg:1:self_stash:{{SealedSelfStash_as_json_string_as_hex}}"
      */
     SelfStashV1(SealedSelfStashV1<'a>),
+
+    // V2
+    /**
+     * "ciph_msg:1:handshake:{{SealedHandshake_as_hex}}"
+     */
+    SealedHandshakeV2(SealedHandshakeV2<'a>),
 }
 
 impl<'a> SealedOperation<'a> {
@@ -109,6 +120,7 @@ impl<'a> SealedOperation<'a> {
             SealedOperation::ContextualMessageV1(_) => "ContextualMessageV1",
             SealedOperation::PaymentV1(_) => "PaymentV1",
             SealedOperation::SelfStashV1(_) => "SelfStashV1",
+            SealedOperation::SealedHandshakeV2(_) => "HandshakeV2",
         }
     }
 }
@@ -179,6 +191,18 @@ mod tests {
             result,
             Some(SealedOperation::SelfStashV1(SealedSelfStashV1 {
                 key: None,
+                sealed_hex: b"abc123",
+            }))
+        )
+    }
+
+    #[test]
+    fn test_deserialize_sealed_handshake_v2() {
+        let payload = b"ciph_msg:1:handshake:abc123";
+        let result = parse_sealed_operation(payload);
+        assert_eq!(
+            result,
+            Some(SealedOperation::SealedHandshakeV2(SealedHandshakeV2 {
                 sealed_hex: b"abc123",
             }))
         );
