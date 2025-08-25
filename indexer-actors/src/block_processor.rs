@@ -32,8 +32,8 @@ use kaspa_rpc_core::{RpcBlock, RpcHeader, RpcTransaction, RpcTransactionId};
 pub use message::*;
 use protocol::operation::deserializer::parse_sealed_operation;
 use protocol::operation::{
-    SealedContextualMessageV1, SealedMessageOrSealedHandshakeVNone, SealedOperation,
-    SealedPaymentV1,
+    SealedContextualMessageV1, SealedHandhsakeV2, SealedMessageOrSealedHandshakeVNone,
+    SealedOperation, SealedPaymentV1,
 };
 use std::collections::HashMap;
 use tracing::{debug, error, info, info_span, trace, warn};
@@ -397,6 +397,37 @@ impl BlockProcessor {
                     ],
                 )?;
             }
+            (SealedOperation::SealedHandshakeV2(hk), None) => {
+                let by_receiver_key =
+                    self.handle_handshake_v2(wtx, block_header, tx_id, hk, receiver, None)?;
+                let by_sender_key = HandshakeKeyBySender {
+                    sender: sender.unwrap_or_default(),
+                    block_time: by_receiver_key.block_time,
+                    block_hash: by_receiver_key.block_hash,
+                    receiver,
+                    version: by_receiver_key.version,
+                    tx_id: by_receiver_key.tx_id,
+                };
+                self.tx_id_to_acceptance_partition.insert_wtx(
+                    wtx,
+                    &AcceptanceKey {
+                        tx_id: tx_id.as_bytes(),
+                        receiver,
+                    },
+                    &[
+                        InsertionEntry {
+                            partition_id: PartitionId::HandshakeBySender,
+                            action: Action::InsertByKeySender,
+                            partition_key: &|| by_sender_key.as_bytes(),
+                        },
+                        InsertionEntry {
+                            partition_id: PartitionId::HandshakeByReceiver,
+                            action: Action::UpdateValueSender,
+                            partition_key: &|| by_receiver_key.as_bytes(),
+                        },
+                    ],
+                )?;
+            }
             (SealedOperation::ContextualMessageV1(cm), None) => {
                 let key =
                     self.handle_contextual_message(wtx, sender, block_header, tx_id, cm, receiver);
@@ -446,6 +477,17 @@ impl BlockProcessor {
             }
             (SealedOperation::SealedMessageOrSealedHandshakeVNone(hk), Some(sender)) => {
                 self.handle_handshake(wtx, block_header, tx_id, hk, receiver, Some(sender))?;
+                self.tx_id_to_acceptance_partition.insert_wtx(
+                    wtx,
+                    &AcceptanceKey {
+                        tx_id: tx_id.as_bytes(),
+                        receiver,
+                    },
+                    &[],
+                )?;
+            }
+            (SealedOperation::SealedHandshakeV2(hk), Some(sender)) => {
+                self.handle_handshake_v2(wtx, block_header, tx_id, hk, receiver, Some(sender))?;
                 self.tx_id_to_acceptance_partition.insert_wtx(
                     wtx,
                     &AcceptanceKey {
@@ -553,6 +595,46 @@ impl BlockProcessor {
         block: &RpcHeader,
         tx_id: RpcTransactionId,
         op: SealedMessageOrSealedHandshakeVNone,
+        receiver: AddressPayload,
+        sender: Option<AddressPayload>,
+    ) -> anyhow::Result<HandshakeKeyByReceiver> {
+        debug!(%tx_id, sender = ?sender, receiver = ?receiver, "Handling handshake transaction");
+        self.tx_id_to_handshake_partition
+            .insert_wtx(wtx, tx_id.as_ref(), op.sealed_hex);
+        let hs_key = HandshakeKeyByReceiver {
+            receiver,
+            block_time: block.timestamp.into(),
+            block_hash: block.hash.as_bytes(),
+            version: 0,
+            tx_id: tx_id.as_bytes(),
+        };
+        self.handshake_by_receiver_partition
+            .insert_wtx(wtx, &hs_key, sender)?;
+
+        if let Some(sender) = sender {
+            trace!(sender = ?sender, "Inserting handshake by sender");
+            let by_sender_key = HandshakeKeyBySender {
+                sender,
+                block_time: hs_key.block_time,
+                block_hash: hs_key.block_hash,
+                receiver,
+                version: hs_key.version,
+                tx_id: hs_key.tx_id,
+            };
+            self.handshake_by_sender_partition
+                .insert_wtx(wtx, &by_sender_key);
+        } else {
+            trace!("No sender resolved for handshake");
+        }
+        Ok(hs_key)
+    }
+
+    fn handle_handshake_v2(
+        &self,
+        wtx: &mut WriteTransaction,
+        block: &RpcHeader,
+        tx_id: RpcTransactionId,
+        op: SealedHandhsakeV2,
         receiver: AddressPayload,
         sender: Option<AddressPayload>,
     ) -> anyhow::Result<HandshakeKeyByReceiver> {
