@@ -598,7 +598,8 @@ impl BlockProcessor {
     ) -> ContextualMessageBySenderKey {
         debug!(%tx_id, sender = ?sender, receiver = ?receiver, alias = %cm.alias.to_hex(), "Handling contextual message");
         let mut alias = [0u8; 16];
-        alias.copy_from_slice(&cm.alias[..cm.alias.len().min(16)]);
+        let len = cm.alias.len().min(16);
+        alias[..len].copy_from_slice(&cm.alias[..len]);
         self.tx_id_to_contextual_message_partition
             .insert_wtx(wtx, tx_id.as_ref(), cm.sealed_hex);
         let cmk = ContextualMessageBySenderKey {
