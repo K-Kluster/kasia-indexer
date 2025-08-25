@@ -638,21 +638,21 @@ impl BlockProcessor {
         receiver: AddressPayload,
         sender: Option<AddressPayload>,
     ) -> anyhow::Result<HandshakeKeyByReceiver> {
-        debug!(%tx_id, sender = ?sender, receiver = ?receiver, "Handling handshake transaction");
+        debug!(%tx_id, sender = ?sender, receiver = ?receiver, "Handling handshake v2 transaction");
         self.tx_id_to_handshake_partition
             .insert_wtx(wtx, tx_id.as_ref(), op.sealed_hex);
         let hs_key = HandshakeKeyByReceiver {
             receiver,
             block_time: block.timestamp.into(),
             block_hash: block.hash.as_bytes(),
-            version: 0,
+            version: 2,
             tx_id: tx_id.as_bytes(),
         };
         self.handshake_by_receiver_partition
             .insert_wtx(wtx, &hs_key, sender)?;
 
         if let Some(sender) = sender {
-            trace!(sender = ?sender, "Inserting handshake by sender");
+            trace!(sender = ?sender, "Inserting handshake v2 by sender");
             let by_sender_key = HandshakeKeyBySender {
                 sender,
                 block_time: hs_key.block_time,
@@ -664,7 +664,7 @@ impl BlockProcessor {
             self.handshake_by_sender_partition
                 .insert_wtx(wtx, &by_sender_key);
         } else {
-            trace!("No sender resolved for handshake");
+            trace!("No sender resolved for handshake v2");
         }
         Ok(hs_key)
     }
