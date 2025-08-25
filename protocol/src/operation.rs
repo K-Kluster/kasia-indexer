@@ -68,7 +68,7 @@ pub struct SealedPaymentV1<'a> {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub struct SealedHandhsakeV2<'a> {
+pub struct SealedHandshakeV2<'a> {
     pub sealed_hex: &'a [u8],
 }
 
@@ -100,7 +100,7 @@ pub enum SealedOperation<'a> {
     /**
      * "ciph_msg:1:handshake:{{SealedHandshake_as_hex}}"
      */
-    SealedHandshakeV2(SealedHandhsakeV2<'a>),
+    SealedHandshakeV2(SealedHandshakeV2<'a>),
 }
 
 impl<'a> SealedOperation<'a> {
@@ -169,7 +169,7 @@ mod tests {
         let result = parse_sealed_operation(payload);
         assert_eq!(
             result,
-            Some(SealedOperation::SealedHandshakeV2(SealedHandhsakeV2 {
+            Some(SealedOperation::SealedHandshakeV2(SealedHandshakeV2 {
                 sealed_hex: b"abc123",
             }))
         );

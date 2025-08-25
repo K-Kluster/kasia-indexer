@@ -32,7 +32,7 @@ use kaspa_rpc_core::{RpcBlock, RpcHeader, RpcTransaction, RpcTransactionId};
 pub use message::*;
 use protocol::operation::deserializer::parse_sealed_operation;
 use protocol::operation::{
-    SealedContextualMessageV1, SealedHandhsakeV2, SealedMessageOrSealedHandshakeVNone,
+    SealedContextualMessageV1, SealedHandshakeV2, SealedMessageOrSealedHandshakeVNone,
     SealedOperation, SealedPaymentV1,
 };
 use std::collections::HashMap;
@@ -634,7 +634,7 @@ impl BlockProcessor {
         wtx: &mut WriteTransaction,
         block: &RpcHeader,
         tx_id: RpcTransactionId,
-        op: SealedHandhsakeV2,
+        op: SealedHandshakeV2,
         receiver: AddressPayload,
         sender: Option<AddressPayload>,
     ) -> anyhow::Result<HandshakeKeyByReceiver> {

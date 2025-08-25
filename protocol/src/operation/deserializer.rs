@@ -1,5 +1,5 @@
 use crate::operation::{
-    SealedContextualMessageV1, SealedHandhsakeV2, SealedMessageOrSealedHandshakeVNone,
+    SealedContextualMessageV1, SealedHandshakeV2, SealedMessageOrSealedHandshakeVNone,
     SealedOperation, SealedPaymentV1,
 };
 use tracing::warn;
@@ -47,7 +47,7 @@ pub fn parse_sealed_operation(payload_bytes: &[u8]) -> Option<SealedOperation<'_
                 b':',
                 sealed_hex @ ..,
             ],
-        ) => Some(SealedOperation::SealedHandshakeV2(SealedHandhsakeV2 {
+        ) => Some(SealedOperation::SealedHandshakeV2(SealedHandshakeV2 {
             sealed_hex,
         })),
         Some([b'c', b'o', b'm', b'm', b':', remaining @ ..]) => {
