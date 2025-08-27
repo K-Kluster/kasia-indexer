@@ -1,6 +1,6 @@
 use crate::api::to_rpc_address;
 use crate::context::IndexerContext;
-use anyhow::bail;
+use anyhow::Context;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -137,12 +137,9 @@ async fn get_self_stash_by_owner(
 
     let result = spawn_blocking(move || {
         let rtx = state.tx_keyspace.read_tx();
-        let mut seen_tx_ids = HashSet::new();
+        let mut seen_tx_ids = HashSet::with_capacity(limit);
 
-        // REMOVE ME:
-        // Thank you for having a look <3
-
-        let messages: Result<Vec<Result<SelfStashResponse, anyhow::Error>>, anyhow::Error> = state
+        state
             .self_stash_by_owner_partition
             .iter_by_owner_and_scope_from_block_time_rtx(&rtx, &scope_bytes, owner, cursor)
             .process_results(|iter| {
@@ -151,15 +148,9 @@ async fn get_self_stash_by_owner(
                     .map(|self_stash_key| {
                         let block_time = self_stash_key.block_time.get();
                         let owner =
-                            match to_rpc_address(&self_stash_key.owner, state.context.network_type)
-                            {
-                                Ok(Some(addr)) => Some(addr.to_string()),
-                                Ok(None) => None,
-                                Err(e) => {
-                                    return Err(anyhow::anyhow!("Address conversion error: {}", e));
-                                }
-                            };
-
+                            to_rpc_address(&self_stash_key.owner, state.context.network_type)
+                                .context("Address conversion error")?
+                                .map(|addr| addr.to_string());
                         let acceptance = state
                             .tx_id_to_acceptance_partition
                             .acceptance_by_tx_id_rtx(&rtx, &self_stash_key.tx_id)?;
@@ -189,12 +180,9 @@ async fn get_self_stash_by_owner(
                             accepting_daa_score,
                         })
                     })
-                    .collect_vec()
-            });
-
-        // REMOVE ME: Here i wanted to iterate and see if there is an Err, if that's the case -> return Err(...)
-
-        messages
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .flatten()
     })
     .await;
 
