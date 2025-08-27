@@ -10,6 +10,7 @@ use indexer_db::AddressPayload;
 use indexer_db::messages::self_stash::{SelfStashByOwnerPartition, TxIdToSelfStashPartition};
 use indexer_db::processing::tx_id_to_acceptance::TxIDToAcceptancePartition;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use tokio::task::spawn_blocking;
 use utoipa::{IntoParams, ToSchema};
 
@@ -137,6 +138,8 @@ async fn get_self_stash_by_owner(
         let mut messages = vec![];
         let rtx = state.tx_keyspace.read_tx();
 
+        let mut seen_tx_ids = HashSet::new();
+
         for self_stash_result in state
             .self_stash_by_owner_partition
             .iter_by_owner_and_scope_from_block_time_rtx(&rtx, &scope_bytes, owner, cursor)
@@ -148,7 +151,11 @@ async fn get_self_stash_by_owner(
             };
 
             let block_time = self_stash_key.block_time.get();
-            let tx_id = faster_hex::hex_string(&self_stash_key.tx_id);
+
+            if seen_tx_ids.contains(&self_stash_key.tx_id) {
+                continue;
+            }
+            seen_tx_ids.insert(self_stash_key.tx_id);
 
             let owner = match to_rpc_address(&self_stash_key.owner, state.context.network_type) {
                 Ok(Some(addr)) => Some(addr.to_string()),
@@ -176,7 +183,7 @@ async fn get_self_stash_by_owner(
             let stashed_data_str = faster_hex::hex_string(stash.as_ref());
 
             messages.push(SelfStashResponse {
-                tx_id,
+                tx_id: faster_hex::hex_string(&self_stash_key.tx_id),
                 owner,
                 scope: params.scope.clone(),
                 stashed_data: stashed_data_str,

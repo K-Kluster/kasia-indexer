@@ -142,6 +142,8 @@ async fn get_contextual_messages_by_sender(
         let mut messages = vec![];
         let rtx = state.tx_keyspace.read_tx();
 
+        let mut seen_tx_ids = std::collections::HashSet::new();
+
         for message_result in state
             .contextual_message_by_sender_partition
             .get_by_sender_alias_from_block_time(&rtx, &sender, &alias_bytes, cursor)
@@ -153,7 +155,11 @@ async fn get_contextual_messages_by_sender(
             };
 
             let block_time = message_key.block_time.into();
-            let tx_id = faster_hex::hex_string(&message_key.tx_id);
+
+            if seen_tx_ids.contains(&message_key.tx_id) {
+                continue;
+            }
+            seen_tx_ids.insert(message_key.tx_id);
 
             let sender_str = match to_rpc_address(&message_key.sender, state.context.network_type) {
                 Ok(Some(addr)) => addr.to_string(),
@@ -182,7 +188,7 @@ async fn get_contextual_messages_by_sender(
             let message_payload = faster_hex::hex_string(sealed_hex.as_ref());
 
             messages.push(ContextualMessageResponse {
-                tx_id,
+                tx_id: faster_hex::hex_string(&message_key.tx_id),
                 sender: sender_str,
                 alias: alias.clone(), // todo use byteview
                 block_time,

@@ -12,6 +12,7 @@ use indexer_db::messages::payment::{
 };
 use indexer_db::processing::tx_id_to_acceptance::TxIDToAcceptancePartition;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use tokio::task::spawn_blocking;
 use utoipa::{IntoParams, ToSchema};
 
@@ -121,6 +122,8 @@ async fn get_payments_by_sender(
         let rtx = state.tx_keyspace.read_tx();
         let mut payments = Vec::new();
 
+        let mut seen_tx_ids = HashSet::new();
+
         for result in state
             .payment_by_sender_partition
             .get_by_sender_from_block_time(&rtx, &sender, cursor)
@@ -130,6 +133,11 @@ async fn get_payments_by_sender(
                 Ok(key) => key,
                 Err(e) => bail!("Database error: {}", e),
             };
+
+            if seen_tx_ids.contains(&key.tx_id) {
+                continue;
+            }
+            seen_tx_ids.insert(key.tx_id);
 
             let payment_data = match state.tx_id_to_payment_partition.get_rtx(&rtx, &key.tx_id) {
                 Ok(Some(data)) => data,
@@ -232,6 +240,8 @@ async fn get_payments_by_receiver(
         let rtx = state.tx_keyspace.read_tx();
         let mut payments = Vec::new();
 
+        let mut seen_tx_ids = HashSet::new();
+
         for result in state
             .payment_by_receiver_partition
             .get_by_receiver_from_block_time(&rtx, &receiver, cursor)
@@ -241,6 +251,11 @@ async fn get_payments_by_receiver(
                 Ok((key, sender)) => (key, sender),
                 Err(e) => bail!("Database error: {}", e),
             };
+
+            if seen_tx_ids.contains(&key.tx_id) {
+                continue;
+            }
+            seen_tx_ids.insert(key.tx_id);
 
             let payment_data = match state.tx_id_to_payment_partition.get_rtx(&rtx, &key.tx_id) {
                 Ok(Some(data)) => data,

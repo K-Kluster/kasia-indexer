@@ -13,6 +13,7 @@ use indexer_db::messages::handshake::{
 use indexer_db::processing::tx_id_to_acceptance::TxIDToAcceptancePartition;
 use kaspa_rpc_core::RpcAddress;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use tokio::task::spawn_blocking;
 use utoipa::{IntoParams, ToSchema};
 
@@ -120,6 +121,8 @@ async fn get_handshakes_by_sender(
 
         let rtx = state.tx_keyspace.read_tx();
 
+        let mut seen_tx_ids = HashSet::new();
+
         for handshake in state
             .handshake_by_sender_partition
             .iter_by_sender_from_block_time_rtx(&rtx, sender, cursor)
@@ -131,7 +134,11 @@ async fn get_handshakes_by_sender(
             };
             let block_time = handshake.block_time.into();
 
-            let tx_id = faster_hex::hex_string(&handshake.tx_id);
+            if seen_tx_ids.contains(&handshake.tx_id) {
+                continue;
+            }
+            seen_tx_ids.insert(handshake.tx_id);
+
             let sender_str = match to_rpc_address(&handshake.sender, state.context.network_type) {
                 Ok(Some(addr)) => addr.to_string(),
                 Ok(None) => String::new(),
@@ -169,7 +176,7 @@ async fn get_handshakes_by_sender(
             let message_payload = faster_hex::hex_string(payload_bytes.as_ref());
 
             handshakes.push(HandshakeResponse {
-                tx_id,
+                tx_id: faster_hex::hex_string(&handshake.tx_id),
                 sender: sender_str,
                 receiver: receiver_str,
                 block_time,
@@ -245,6 +252,8 @@ async fn get_handshakes_by_receiver(
 
         let rtx = state.tx_keyspace.read_tx();
 
+        let mut seen_tx_ids = HashSet::new();
+
         for handshake_result in state
             .handshake_by_receiver_partition
             .iter_by_receiver_from_block_time_rtx(&rtx, &receiver, cursor)
@@ -256,7 +265,11 @@ async fn get_handshakes_by_receiver(
             };
             let block_time = handshake.block_time.into();
 
-            let tx_id = faster_hex::hex_string(&handshake.tx_id);
+            if seen_tx_ids.contains(&handshake.tx_id) {
+                continue;
+            }
+            seen_tx_ids.insert(handshake.tx_id);
+
             let sender_str = match to_rpc_address(&sender_payload, state.context.network_type) {
                 Ok(Some(addr)) => addr.to_string(),
                 Ok(None) => String::new(),
@@ -294,7 +307,7 @@ async fn get_handshakes_by_receiver(
             };
 
             handshakes.push(HandshakeResponse {
-                tx_id,
+                tx_id: faster_hex::hex_string(&handshake.tx_id),
                 sender: sender_str,
                 receiver: receiver_str,
                 block_time,
