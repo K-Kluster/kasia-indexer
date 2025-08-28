@@ -1,6 +1,6 @@
 use crate::api::to_rpc_address;
 use crate::context::IndexerContext;
-use anyhow::bail;
+use anyhow::{Context, bail};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -11,9 +11,11 @@ use indexer_db::messages::handshake::{
     HandshakeByReceiverPartition, HandshakeBySenderPartition, TxIdToHandshakePartition,
 };
 use indexer_db::processing::tx_id_to_acceptance::TxIDToAcceptancePartition;
+use itertools::Itertools;
 use kaspa_rpc_core::RpcAddress;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::ops::Deref;
 use tokio::task::spawn_blocking;
 use utoipa::{IntoParams, ToSchema};
 
@@ -117,76 +119,76 @@ async fn get_handshakes_by_sender(
     };
 
     let result = spawn_blocking(move || {
-        let mut handshakes = vec![];
-
         let rtx = state.tx_keyspace.read_tx();
 
         let mut seen_tx_ids = HashSet::new();
 
-        for handshake in state
+        state
             .handshake_by_sender_partition
             .iter_by_sender_from_block_time_rtx(&rtx, sender, cursor)
-            .take(limit)
-        {
-            let handshake = match handshake {
-                Ok(hs) => hs,
-                Err(e) => bail!("Database error: {}", e),
-            };
-            let block_time = handshake.block_time.into();
+            .process_results(|iter| {
+                iter.filter(|hs| seen_tx_ids.insert(hs.tx_id))
+                    .take(limit)
+                    .map(|handshake| {
+                        let block_time = handshake.block_time.into();
 
-            if seen_tx_ids.contains(&handshake.tx_id) {
-                continue;
-            }
-            seen_tx_ids.insert(handshake.tx_id);
+                        let sender_str =
+                            to_rpc_address(&handshake.sender, state.context.network_type)
+                                .context("Sender address conversion error")?
+                                .map(|addr| addr.to_string())
+                                .unwrap_or_default();
 
-            let sender_str = match to_rpc_address(&handshake.sender, state.context.network_type) {
-                Ok(Some(addr)) => addr.to_string(),
-                Ok(None) => String::new(),
-                Err(e) => bail!("Address conversion error: {}", e),
-            };
-            let receiver_str = match to_rpc_address(&handshake.receiver, state.context.network_type)
-            {
-                Ok(Some(addr)) => addr.to_string(),
-                Ok(None) => bail!("Database consistency error: receiver address has EMPTY_VERSION"),
-                Err(e) => bail!("Address conversion error: {}", e),
-            };
+                        let receiver_str = to_rpc_address(
+                            &handshake.receiver,
+                            state.context.network_type,
+                        )
+                        // @QUESTION: is there a better way to differenciate Ok(None) and Err(_) with context?
+                        .with_context(|| {
+                            format!(
+                                "receiver address conversion failed (receiver={:?})",
+                                handshake.receiver
+                            )
+                        })?
+                        .context("Database consistency error: receiver address has EMPTY_VERSION")?
+                        .to_string();
 
-            let acceptance = state
-                .tx_id_to_acceptance_partition
-                .acceptance_by_tx_id_rtx(&rtx, &handshake.tx_id)?;
+                        let acceptance = state
+                            .tx_id_to_acceptance_partition
+                            .acceptance_by_tx_id_rtx(&rtx, &handshake.tx_id)?;
 
-            let (accepting_block, accepting_daa_score) = if let Some(acceptance) = acceptance {
-                (
-                    Some(faster_hex::hex_string(
-                        &acceptance.header.accepting_block_hash,
-                    )),
-                    Some(acceptance.header.accepting_daa.into()),
-                )
-            } else {
-                (None, None)
-            };
-            let payload_bytes = match state
-                .tx_id_to_handshake_partition
-                .get_rtx(&rtx, &handshake.tx_id)
-            {
-                Ok(Some(bts)) => bts,
-                Ok(None) => bail!("Missing handshake payload"),
-                Err(e) => bail!("Database error: {}", e),
-            };
-            let message_payload = faster_hex::hex_string(payload_bytes.as_ref());
+                        let (accepting_block, accepting_daa_score) =
+                            if let Some(acceptance) = acceptance {
+                                (
+                                    Some(faster_hex::hex_string(
+                                        &acceptance.header.accepting_block_hash,
+                                    )),
+                                    Some(acceptance.header.accepting_daa.into()),
+                                )
+                            } else {
+                                (None, None)
+                            };
 
-            handshakes.push(HandshakeResponse {
-                tx_id: faster_hex::hex_string(&handshake.tx_id),
-                sender: sender_str,
-                receiver: receiver_str,
-                block_time,
-                accepting_block,
-                accepting_daa_score,
-                message_payload,
-            });
-        }
+                        let payload_bytes = state
+                            .tx_id_to_handshake_partition
+                            .get_rtx(&rtx, &handshake.tx_id)
+                            .with_context(|| "Database error")?
+                            .context("Missing handshake payload")?;
 
-        Ok(handshakes)
+                        let message_payload = faster_hex::hex_string(payload_bytes.as_ref());
+
+                        Ok(HandshakeResponse {
+                            tx_id: faster_hex::hex_string(&handshake.tx_id),
+                            sender: sender_str,
+                            receiver: receiver_str,
+                            block_time,
+                            accepting_block,
+                            accepting_daa_score,
+                            message_payload,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .flatten()
     })
     .await;
 
@@ -248,76 +250,77 @@ async fn get_handshakes_by_receiver(
     };
 
     let result = spawn_blocking(move || {
-        let mut handshakes = vec![];
-
         let rtx = state.tx_keyspace.read_tx();
 
         let mut seen_tx_ids = HashSet::new();
 
-        for handshake_result in state
+        state
             .handshake_by_receiver_partition
             .iter_by_receiver_from_block_time_rtx(&rtx, &receiver, cursor)
-            .take(limit)
-        {
-            let (handshake, sender_payload) = match handshake_result {
-                Ok(res) => res,
-                Err(e) => bail!("Database error: {}", e),
-            };
-            let block_time = handshake.block_time.into();
+            .process_results(|iter| {
+                iter.filter(|hs_key_payload_tuple| seen_tx_ids.insert(hs_key_payload_tuple.0.tx_id))
+                    .take(limit)
+                    .map(|handshake_key_payload_tuple| {
+                        let (handshake, sender_payload) = handshake_key_payload_tuple;
 
-            if seen_tx_ids.contains(&handshake.tx_id) {
-                continue;
-            }
-            seen_tx_ids.insert(handshake.tx_id);
+                        let block_time = handshake.block_time.into();
 
-            let sender_str = match to_rpc_address(&sender_payload, state.context.network_type) {
-                Ok(Some(addr)) => addr.to_string(),
-                Ok(None) => String::new(),
-                Err(e) => bail!("Address conversion error: {}", e),
-            };
-            let receiver_str = match to_rpc_address(&handshake.receiver, state.context.network_type)
-            {
-                Ok(Some(addr)) => addr.to_string(),
-                Ok(None) => bail!("Database consistency error: receiver address has EMPTY_VERSION"),
-                Err(e) => bail!("Address conversion error: {}", e),
-            };
+                        let sender_str =
+                            to_rpc_address(&sender_payload, state.context.network_type)
+                                .context(format!(
+                                    "Address conversion error (sender_payload={:?})",
+                                    &sender_payload.deref()
+                                ))?
+                                .map(|a| a.to_string())
+                                .unwrap_or_default();
 
-            let acceptance = state
-                .tx_id_to_acceptance_partition
-                .acceptance_by_tx_id_rtx(&rtx, &handshake.tx_id)?;
+                        let receiver_str =
+                            match to_rpc_address(&handshake.receiver, state.context.network_type) {
+                                Ok(Some(addr)) => addr.to_string(),
+                                Ok(None) => bail!(
+                                    "Database consistency error: receiver address has EMPTY_VERSION"
+                                ),
+                                Err(e) => bail!("Address conversion error: {}", e),
+                            };
 
-            let payload_bytes = match state
-                .tx_id_to_handshake_partition
-                .get_rtx(&rtx, &handshake.tx_id)
-            {
-                Ok(Some(bts)) => bts,
-                Ok(None) => bail!("Missing handshake payload"),
-                Err(e) => bail!("Database error: {}", e),
-            };
-            let message_payload = faster_hex::hex_string(payload_bytes.as_ref());
-            let (accepting_block, accepting_daa_score) = if let Some(acceptance) = acceptance {
-                (
-                    Some(faster_hex::hex_string(
-                        &acceptance.header.accepting_block_hash,
-                    )),
-                    Some(acceptance.header.accepting_daa.into()),
-                )
-            } else {
-                (None, None)
-            };
+                        let acceptance = state
+                            .tx_id_to_acceptance_partition
+                            .acceptance_by_tx_id_rtx(&rtx, &handshake.tx_id)?;
 
-            handshakes.push(HandshakeResponse {
-                tx_id: faster_hex::hex_string(&handshake.tx_id),
-                sender: sender_str,
-                receiver: receiver_str,
-                block_time,
-                accepting_block,
-                accepting_daa_score,
-                message_payload,
-            });
-        }
+                        let payload_bytes = match state
+                            .tx_id_to_handshake_partition
+                            .get_rtx(&rtx, &handshake.tx_id)
+                        {
+                            Ok(Some(bts)) => bts,
+                            Ok(None) => bail!("Missing handshake payload"),
+                            Err(e) => bail!("Database error: {}", e),
+                        };
+                        let message_payload = faster_hex::hex_string(payload_bytes.as_ref());
+                        let (accepting_block, accepting_daa_score) =
+                            if let Some(acceptance) = acceptance {
+                                (
+                                    Some(faster_hex::hex_string(
+                                        &acceptance.header.accepting_block_hash,
+                                    )),
+                                    Some(acceptance.header.accepting_daa.into()),
+                                )
+                            } else {
+                                (None, None)
+                            };
 
-        Ok(handshakes)
+                        Ok(HandshakeResponse {
+                            tx_id: faster_hex::hex_string(&handshake.tx_id),
+                            sender: sender_str,
+                            receiver: receiver_str,
+                            block_time,
+                            accepting_block,
+                            accepting_daa_score,
+                            message_payload,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .flatten()
     })
     .await;
 

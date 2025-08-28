@@ -11,6 +11,7 @@ use indexer_db::messages::contextual_message::{
     ContextualMessageBySenderPartition, TxIdToContextualMessagePartition,
 };
 use indexer_db::processing::tx_id_to_acceptance::TxIDToAcceptancePartition;
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use tokio::task::spawn_blocking;
 use utoipa::{IntoParams, ToSchema};
@@ -139,66 +140,60 @@ async fn get_contextual_messages_by_sender(
     let alias = params.alias;
 
     let result = spawn_blocking(move || {
-        let mut messages = vec![];
         let rtx = state.tx_keyspace.read_tx();
 
         let mut seen_tx_ids = std::collections::HashSet::new();
 
-        for message_result in state
+        state
             .contextual_message_by_sender_partition
             .get_by_sender_alias_from_block_time(&rtx, &sender, &alias_bytes, cursor)
-            .take(limit)
-        {
-            let message_key = match message_result {
-                Ok(res) => res,
-                Err(e) => bail!("Database error: {}", e),
-            };
+            .process_results(|iter| {
+                iter.filter(|message| seen_tx_ids.insert(message.tx_id))
+                    .take(limit)
+                    .map(|message_key| {
+                        let block_time = message_key.block_time.into();
 
-            let block_time = message_key.block_time.into();
+                        let sender_str =
+                            match to_rpc_address(&message_key.sender, state.context.network_type) {
+                                Ok(Some(addr)) => addr.to_string(),
+                                Ok(None) => String::new(),
+                                Err(e) => bail!("Address conversion error: {}", e),
+                            };
 
-            if seen_tx_ids.contains(&message_key.tx_id) {
-                continue;
-            }
-            seen_tx_ids.insert(message_key.tx_id);
+                        let acceptance = state
+                            .tx_id_to_acceptance_partition
+                            .acceptance_by_tx_id_rtx(&rtx, &message_key.tx_id)?;
 
-            let sender_str = match to_rpc_address(&message_key.sender, state.context.network_type) {
-                Ok(Some(addr)) => addr.to_string(),
-                Ok(None) => String::new(),
-                Err(e) => bail!("Address conversion error: {}", e),
-            };
+                        let (accepting_block, accepting_daa_score) =
+                            if let Some(acceptance) = acceptance {
+                                (
+                                    Some(faster_hex::hex_string(
+                                        &acceptance.header.accepting_block_hash,
+                                    )),
+                                    Some(acceptance.header.accepting_daa.into()),
+                                )
+                            } else {
+                                (None, None)
+                            };
+                        let sealed_hex = state
+                            .tx_id_to_contextual_message_partition
+                            .get_rtx(&rtx, &message_key.tx_id)?
+                            .expect("Message not found");
+                        let message_payload = faster_hex::hex_string(sealed_hex.as_ref());
 
-            let acceptance = state
-                .tx_id_to_acceptance_partition
-                .acceptance_by_tx_id_rtx(&rtx, &message_key.tx_id)?;
-
-            let (accepting_block, accepting_daa_score) = if let Some(acceptance) = acceptance {
-                (
-                    Some(faster_hex::hex_string(
-                        &acceptance.header.accepting_block_hash,
-                    )),
-                    Some(acceptance.header.accepting_daa.into()),
-                )
-            } else {
-                (None, None)
-            };
-            let sealed_hex = state
-                .tx_id_to_contextual_message_partition
-                .get_rtx(&rtx, &message_key.tx_id)?
-                .expect("Message not found");
-            let message_payload = faster_hex::hex_string(sealed_hex.as_ref());
-
-            messages.push(ContextualMessageResponse {
-                tx_id: faster_hex::hex_string(&message_key.tx_id),
-                sender: sender_str,
-                alias: alias.clone(), // todo use byteview
-                block_time,
-                accepting_block,
-                accepting_daa_score,
-                message_payload,
-            });
-        }
-
-        Ok(messages)
+                        Ok(ContextualMessageResponse {
+                            tx_id: faster_hex::hex_string(&message_key.tx_id),
+                            sender: sender_str,
+                            alias: alias.clone(), // todo use byteview
+                            block_time,
+                            accepting_block,
+                            accepting_daa_score,
+                            message_payload,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .flatten()
     })
     .await;
 
