@@ -14,7 +14,6 @@ use indexer_db::processing::tx_id_to_acceptance::TxIDToAcceptancePartition;
 use itertools::Itertools;
 use kaspa_rpc_core::RpcAddress;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::ops::Deref;
 use tokio::task::spawn_blocking;
 use utoipa::{IntoParams, ToSchema};
@@ -121,7 +120,7 @@ async fn get_handshakes_by_sender(
     let result = spawn_blocking(move || {
         let rtx = state.tx_keyspace.read_tx();
 
-        let mut seen_tx_ids = HashSet::new();
+        let mut seen_tx_ids = std::collections::HashSet::with_capacity(limit);
 
         state
             .handshake_by_sender_partition
@@ -252,7 +251,7 @@ async fn get_handshakes_by_receiver(
     let result = spawn_blocking(move || {
         let rtx = state.tx_keyspace.read_tx();
 
-        let mut seen_tx_ids = HashSet::new();
+        let mut seen_tx_ids = std::collections::HashSet::with_capacity(limit);
 
         state
             .handshake_by_receiver_partition

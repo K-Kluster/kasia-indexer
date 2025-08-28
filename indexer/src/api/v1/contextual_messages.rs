@@ -142,7 +142,7 @@ async fn get_contextual_messages_by_sender(
     let result = spawn_blocking(move || {
         let rtx = state.tx_keyspace.read_tx();
 
-        let mut seen_tx_ids = std::collections::HashSet::new();
+        let mut seen_tx_ids = std::collections::HashSet::with_capacity(limit);
 
         state
             .contextual_message_by_sender_partition
