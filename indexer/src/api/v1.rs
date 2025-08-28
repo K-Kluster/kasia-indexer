@@ -7,21 +7,20 @@ use axum::extract::State;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
-use futures_util::FutureExt;
-use indexer_lib::database::messages::contextual_messages::ContextualMessageBySenderPartition;
-use indexer_lib::database::messages::handshakes::{
-    HandshakeByReceiverPartition, HandshakeBySenderPartition,
+use indexer_actors::metrics::{IndexerMetricsSnapshot, SharedMetrics};
+use indexer_db::messages::contextual_message::{
+    ContextualMessageBySenderPartition, TxIdToContextualMessagePartition,
 };
-use indexer_lib::database::messages::self_stashes::SelfStashByOwnerPartition;
-use indexer_lib::database::messages::{
-    PaymentByReceiverPartition, PaymentBySenderPartition, TxIdToHandshakePartition,
-    TxIdToPaymentPartition,
+use indexer_db::messages::handshake::{
+    HandshakeByReceiverPartition, HandshakeBySenderPartition, TxIdToHandshakePartition,
 };
-use indexer_lib::database::processing::TxIDToAcceptancePartition;
-use indexer_lib::metrics::{IndexerMetricsSnapshot, SharedMetrics};
+use indexer_db::messages::payment::{
+    PaymentByReceiverPartition, PaymentBySenderPartition, TxIdToPaymentPartition,
+};
+use indexer_db::messages::self_stash::{SelfStashByOwnerPartition, TxIdToSelfStashPartition};
+use indexer_db::processing::tx_id_to_acceptance::TxIDToAcceptancePartition;
 use std::net::SocketAddr;
 use tower_http::cors::CorsLayer;
-use tracing::error;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -60,17 +59,20 @@ pub struct Api {
 }
 
 impl Api {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         tx_keyspace: fjall::TxKeyspace,
         handshake_by_sender_partition: HandshakeBySenderPartition,
         handshake_by_receiver_partition: HandshakeByReceiverPartition,
         contextual_message_by_sender_partition: ContextualMessageBySenderPartition,
+        tx_id_to_contextual_message_partition: TxIdToContextualMessagePartition,
         payment_by_sender_partition: PaymentBySenderPartition,
         payment_by_receiver_partition: PaymentByReceiverPartition,
         tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
         tx_id_to_handshake_partition: TxIdToHandshakePartition,
         tx_id_to_payment_partition: TxIdToPaymentPartition,
         self_stash_by_owner_partition: SelfStashByOwnerPartition,
+        tx_id_to_self_stash_partition: TxIdToSelfStashPartition,
         metrics: SharedMetrics,
         context: IndexerContext,
     ) -> Self {
@@ -87,6 +89,7 @@ impl Api {
             tx_keyspace.clone(),
             contextual_message_by_sender_partition,
             tx_id_to_acceptance_partition.clone(),
+            tx_id_to_contextual_message_partition,
             context.clone(),
         );
 
@@ -103,6 +106,7 @@ impl Api {
             tx_keyspace,
             self_stash_by_owner_partition,
             tx_id_to_acceptance_partition,
+            tx_id_to_self_stash_partition,
             context,
         );
 
@@ -118,16 +122,16 @@ impl Api {
     pub async fn serve(
         self,
         bind_address: &str,
-        shutdown: tokio::sync::oneshot::Receiver<()>,
+        mut shutdown: tokio::sync::mpsc::Receiver<()>,
     ) -> anyhow::Result<()> {
         let addr: SocketAddr = bind_address.parse()?;
         let app = self.router();
         let listener = tokio::net::TcpListener::bind(addr).await?;
         tracing::info!("Starting API server on {}", addr);
         axum::serve(listener, app.into_make_service())
-            .with_graceful_shutdown(shutdown.map(|v| {
-                _ = v.inspect_err(|_err| error!("shutdown receive error"));
-            }))
+            .with_graceful_shutdown(async move {
+                shutdown.recv().await;
+            })
             .await?;
         Ok(())
     }

@@ -6,9 +6,9 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
-use indexer_lib::database::messages::AddressPayload;
-use indexer_lib::database::messages::self_stashes::SelfStashByOwnerPartition;
-use indexer_lib::database::processing::TxIDToAcceptancePartition;
+use indexer_db::AddressPayload;
+use indexer_db::messages::self_stash::{SelfStashByOwnerPartition, TxIdToSelfStashPartition};
+use indexer_db::processing::tx_id_to_acceptance::TxIDToAcceptancePartition;
 use serde::{Deserialize, Serialize};
 use tokio::task::spawn_blocking;
 use utoipa::{IntoParams, ToSchema};
@@ -18,6 +18,7 @@ pub struct SelfStashApi {
     tx_keyspace: fjall::TxKeyspace,
     self_stash_by_owner_partition: SelfStashByOwnerPartition,
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
+    tx_id_to_self_stash_partition: TxIdToSelfStashPartition,
     context: IndexerContext,
 }
 
@@ -26,12 +27,14 @@ impl SelfStashApi {
         tx_keyspace: fjall::TxKeyspace,
         self_stash_by_owner_partition: SelfStashByOwnerPartition,
         tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
+        tx_id_to_self_stash_partition: TxIdToSelfStashPartition,
         context: IndexerContext,
     ) -> Self {
         Self {
             tx_keyspace,
             self_stash_by_owner_partition,
             tx_id_to_acceptance_partition,
+            tx_id_to_self_stash_partition,
             context,
         }
     }
@@ -139,12 +142,12 @@ async fn get_self_stash_by_owner(
             .iter_by_owner_and_scope_from_block_time_rtx(&rtx, &scope_bytes, owner, cursor)
             .take(limit)
         {
-            let (self_stash_key, self_stash_data) = match self_stash_result {
+            let self_stash_key = match self_stash_result {
                 Ok(res) => res,
                 Err(e) => bail!("Database error: {}", e),
             };
 
-            let block_time = u64::from_be_bytes(self_stash_key.block_time);
+            let block_time = self_stash_key.block_time.get();
             let tx_id = faster_hex::hex_string(&self_stash_key.tx_id);
 
             let owner = match to_rpc_address(&self_stash_key.owner, state.context.network_type) {
@@ -155,20 +158,22 @@ async fn get_self_stash_by_owner(
 
             let acceptance = state
                 .tx_id_to_acceptance_partition
-                .get_by_tx_id(&rtx, &self_stash_key.tx_id)
-                .flatten()
-                .next();
+                .acceptance_by_tx_id_rtx(&rtx, &self_stash_key.tx_id)?;
 
-            let (accepting_block, accepting_daa_score) = if let Some((key, _)) = acceptance {
+            let (accepting_block, accepting_daa_score) = if let Some(key) = acceptance {
                 (
-                    Some(faster_hex::hex_string(&key.accepted_by_block_hash)),
-                    Some(u64::from_be_bytes(key.accepted_at_daa)),
+                    Some(faster_hex::hex_string(&key.accepting_block_hash)),
+                    Some(key.accepting_daa.get()),
                 )
             } else {
                 (None, None)
             };
 
-            let stashed_data_str = faster_hex::hex_string(self_stash_data.as_ref());
+            let stash = state
+                .tx_id_to_self_stash_partition
+                .get_rtx(&rtx, &self_stash_key.tx_id)?
+                .expect("Self stash not found");
+            let stashed_data_str = faster_hex::hex_string(stash.as_ref());
 
             messages.push(SelfStashResponse {
                 tx_id,

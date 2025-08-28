@@ -1,13 +1,13 @@
 use crate::operation::{
-    SealedContextualMessageV1, SealedMessageOrSealedHandshakeVNone, SealedOperation,
-    SealedPaymentV1, SealedSelfStashV1,
+    SealedContextualMessageV1, SealedHandshakeV2, SealedMessageOrSealedHandshakeVNone,
+    SealedOperation, SealedPaymentV1, SealedSelfStashV1,
 };
 use tracing::warn;
 
 pub const PROTOCOL_PREFIX: &str = "ciph_msg:";
 pub const VERSION_1_PART: &str = "1:";
 
-pub fn parse_sealed_operation(payload_bytes: &[u8]) -> Option<SealedOperation> {
+pub fn parse_sealed_operation(payload_bytes: &[u8]) -> Option<SealedOperation<'_>> {
     let payload_without_protocol = payload_bytes.strip_prefix(PROTOCOL_PREFIX.as_bytes())?;
     if payload_without_protocol.is_empty() {
         return None;
@@ -33,6 +33,23 @@ pub fn parse_sealed_operation(payload_bytes: &[u8]) -> Option<SealedOperation> {
                 sealed_hex @ ..,
             ],
         ) => Some(SealedOperation::PaymentV1(SealedPaymentV1 { sealed_hex })),
+        Some(
+            [
+                b'h',
+                b'a',
+                b'n',
+                b'd',
+                b's',
+                b'h',
+                b'a',
+                b'k',
+                b'e',
+                b':',
+                sealed_hex @ ..,
+            ],
+        ) => Some(SealedOperation::SealedHandshakeV2(SealedHandshakeV2 {
+            sealed_hex,
+        })),
         Some([b'c', b'o', b'm', b'm', b':', remaining @ ..]) => {
             let delimiter_idx = remaining.iter().position(|b| b == &b':')?;
             let alias = &remaining[..delimiter_idx];
@@ -73,7 +90,7 @@ pub fn parse_sealed_operation(payload_bytes: &[u8]) -> Option<SealedOperation> {
                 }
                 None => Some(SealedOperation::SelfStashV1(SealedSelfStashV1 {
                     key: None,
-                    sealed_hex: &remaining,
+                    sealed_hex: remaining,
                 })),
             }
         }

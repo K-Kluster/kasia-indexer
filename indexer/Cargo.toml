@@ -7,6 +7,7 @@ edition = "2024"
 anyhow = { workspace = true }
 axum.workspace = true
 dotenv = { workspace = true }
+envy = { workspace = true }
 faster-hex = { workspace = true }
 fjall = { workspace = true }
 flume = { workspace = true }
@@ -14,7 +15,7 @@ futures-util = { workspace = true }
 kaspa-addresses = { workspace = true }
 kaspa-rpc-core = { workspace = true }
 kaspa-wrpc-client = { workspace = true }
-parking_lot = { workspace = true }
+rayon.workspace = true
 rolling-file = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 time = { workspace = true, features = ["macros"] }
@@ -29,7 +30,6 @@ tracing-subscriber = { workspace = true, features = [
 utoipa = { workspace = true, features = ["axum_extras"] }
 utoipa-swagger-ui = { workspace = true, features = ["axum"] }
 workflow-core = { workspace = true }
-serde_with = { workspace = true }
-envy = { workspace = true }
 
-indexer-lib = { path = "../indexer-lib", features = ["utoipa"] }
+indexer-db = { path = "../indexer-db" }
+indexer-actors = { path = "../indexer-actors", features = ["serde", "utoipa"] }
