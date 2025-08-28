@@ -22,6 +22,9 @@ use indexer_db::messages::payment::{
     PaymentByReceiverPartition, PaymentBySenderPartition, PaymentKeyByReceiver, PaymentKeyBySender,
     TxIdToPaymentPartition,
 };
+use indexer_db::messages::self_stash::{
+    SelfStashByOwnerPartition, SelfStashKeyByOwner, SelfStashScope, TxIdToSelfStashPartition,
+};
 use indexer_db::metadata::MetadataPartition;
 use indexer_db::processing::tx_id_to_acceptance::{
     AcceptanceKey, Action, InsertionEntry, TxIDToAcceptancePartition,
@@ -33,7 +36,7 @@ pub use message::*;
 use protocol::operation::deserializer::parse_sealed_operation;
 use protocol::operation::{
     SealedContextualMessageV1, SealedHandshakeV2, SealedMessageOrSealedHandshakeVNone,
-    SealedOperation, SealedPaymentV1,
+    SealedOperation, SealedPaymentV1, SealedSelfStashV1,
 };
 use std::collections::HashMap;
 use tracing::{debug, error, info, info_span, trace, warn};
@@ -56,6 +59,8 @@ pub struct BlockProcessor {
     tx_id_to_handshake_partition: TxIdToHandshakePartition,
     contextual_message_by_sender_partition: ContextualMessageBySenderPartition,
     tx_id_to_contextual_message_partition: TxIdToContextualMessagePartition,
+    tx_id_to_self_stash_partition: TxIdToSelfStashPartition,
+    self_stash_by_owner_partition: SelfStashByOwnerPartition,
     payment_by_receiver_partition: PaymentByReceiverPartition,
     payment_by_sender_partition: PaymentBySenderPartition,
     tx_id_to_payment_partition: TxIdToPaymentPartition,
@@ -444,6 +449,21 @@ impl BlockProcessor {
                     }],
                 )?;
             }
+            (SealedOperation::SelfStashV1(sss), None) => {
+                let key = self.handle_self_stash(wtx, sender, block_header, tx_id, sss, receiver);
+                self.tx_id_to_acceptance_partition.insert_wtx(
+                    wtx,
+                    &AcceptanceKey {
+                        tx_id: tx_id.as_bytes(),
+                        receiver,
+                    },
+                    &[InsertionEntry {
+                        partition_id: PartitionId::SelfStashByOwner,
+                        action: Action::InsertByKeySender,
+                        partition_key: &|| key.as_bytes(),
+                    }],
+                )?;
+            }
             (SealedOperation::PaymentV1(pm), None) => {
                 let by_receiver_key =
                     self.handle_payment(wtx, block_header, tx_id, receiver, amount, pm, None)?;
@@ -506,6 +526,17 @@ impl BlockProcessor {
                     cm,
                     receiver,
                 );
+                self.tx_id_to_acceptance_partition.insert_wtx(
+                    wtx,
+                    &AcceptanceKey {
+                        tx_id: tx_id.as_bytes(),
+                        receiver,
+                    },
+                    &[],
+                )?;
+            }
+            (SealedOperation::SelfStashV1(sss), Some(sender)) => {
+                self.handle_self_stash(wtx, Some(sender), block_header, tx_id, sss, receiver);
                 self.tx_id_to_acceptance_partition.insert_wtx(
                     wtx,
                     &AcceptanceKey {
@@ -738,6 +769,31 @@ impl BlockProcessor {
             trace!("No sender resolved for payment");
         }
         Ok(pm_key)
+    }
+
+    fn handle_self_stash(
+        &self,
+        wtx: &mut WriteTransaction,
+        sender: Option<AddressPayload>,
+        block_header: &RpcHeader,
+        tx_id: RpcTransactionId,
+        sss: SealedSelfStashV1,
+        _receiver: AddressPayload,
+    ) -> SelfStashKeyByOwner {
+        self.tx_id_to_self_stash_partition
+            .insert_wtx(wtx, tx_id.as_ref(), sss.sealed_hex);
+        let key = SelfStashKeyByOwner {
+            owner: sender.unwrap_or_default(),
+            scope: SelfStashScope::from(sss.key.unwrap_or_default()),
+            block_time: block_header.timestamp.into(),
+            block_hash: block_header.hash.as_bytes(),
+            version: 1,
+            tx_id: tx_id.as_bytes(),
+        };
+        if sender.is_some() {
+            self.self_stash_by_owner_partition.insert_wtx(wtx, &key);
+        }
+        key
     }
 }
 

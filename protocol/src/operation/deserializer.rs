@@ -1,6 +1,6 @@
 use crate::operation::{
     SealedContextualMessageV1, SealedHandshakeV2, SealedMessageOrSealedHandshakeVNone,
-    SealedOperation, SealedPaymentV1,
+    SealedOperation, SealedPaymentV1, SealedSelfStashV1,
 };
 use tracing::warn;
 
@@ -60,6 +60,39 @@ pub fn parse_sealed_operation(payload_bytes: &[u8]) -> Option<SealedOperation<'_
                     sealed_hex: contextual_message_hex,
                 },
             ))
+        }
+        Some(
+            [
+                b's',
+                b'e',
+                b'l',
+                b'f',
+                b'_',
+                b's',
+                b't',
+                b'a',
+                b's',
+                b'h',
+                b':',
+                remaining @ ..,
+            ],
+        ) => {
+            let delimiter_idx_option = remaining.iter().position(|b| b == &b':');
+
+            match delimiter_idx_option {
+                Some(delimiter_idx) => {
+                    let key = &remaining[..delimiter_idx];
+                    let sealed_data = &remaining[delimiter_idx + 1..];
+                    Some(SealedOperation::SelfStashV1(SealedSelfStashV1 {
+                        key: Some(key),
+                        sealed_hex: sealed_data,
+                    }))
+                }
+                None => Some(SealedOperation::SelfStashV1(SealedSelfStashV1 {
+                    key: None,
+                    sealed_hex: remaining,
+                })),
+            }
         }
         Some(msg_type_and_content) => {
             let msg_type_and_content = faster_hex::hex_string(msg_type_and_content);

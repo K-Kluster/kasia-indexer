@@ -77,12 +77,14 @@ pub struct SealedMessageOrSealedHandshakeVNone<'a> {
     pub sealed_hex: &'a [u8],
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub struct SealedSelfStashV1<'a> {
+    pub key: Option<&'a [u8]>,
+    pub sealed_hex: &'a [u8],
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum SealedOperation<'a> {
-    /**
-     * "ciph_msg:{{SealedHandshake_as_json_string_as_hex}}"
-     */
-
     /**
      * "ciph_msg:{{SealedMessage_as_json_string_as_hex}}"
      */
@@ -95,6 +97,10 @@ pub enum SealedOperation<'a> {
      * "ciph_msg:1:payment:{{SealedPayment_as_json_string_as_hex}}"
      */
     PaymentV1(SealedPaymentV1<'a>),
+    /**
+     * "ciph_msg:1:self_stash:{{SealedSelfStash_as_json_string_as_hex}}"
+     */
+    SelfStashV1(SealedSelfStashV1<'a>),
 
     // V2
     /**
@@ -113,6 +119,7 @@ impl<'a> SealedOperation<'a> {
             SealedOperation::SealedMessageOrSealedHandshakeVNone(_) => "HandshakeVNone",
             SealedOperation::ContextualMessageV1(_) => "ContextualMessageV1",
             SealedOperation::PaymentV1(_) => "PaymentV1",
+            SealedOperation::SelfStashV1(_) => "SelfStashV1",
             SealedOperation::SealedHandshakeV2(_) => "HandshakeV2",
         }
     }
@@ -161,6 +168,32 @@ mod tests {
                 }
             ))
         );
+    }
+
+    #[test]
+    fn test_deserialize_sealed_self_stash_with_key() {
+        let payload = b"ciph_msg:1:self_stash:key:abc123";
+        let result = parse_sealed_operation(payload);
+        assert_eq!(
+            result,
+            Some(SealedOperation::SelfStashV1(SealedSelfStashV1 {
+                key: Some(b"key"),
+                sealed_hex: b"abc123",
+            }))
+        );
+    }
+
+    #[test]
+    fn test_deserialize_sealed_self_stash_without_key() {
+        let payload = b"ciph_msg:1:self_stash:abc123";
+        let result = parse_sealed_operation(payload);
+        assert_eq!(
+            result,
+            Some(SealedOperation::SelfStashV1(SealedSelfStashV1 {
+                key: None,
+                sealed_hex: b"abc123",
+            }))
+        )
     }
 
     #[test]
