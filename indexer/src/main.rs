@@ -44,6 +44,7 @@ use workflow_core::channel::Channel;
 mod api;
 mod config;
 mod context;
+mod signals;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -56,6 +57,8 @@ async fn main() -> anyhow::Result<()> {
     let context = get_indexer_context(&config)?;
 
     let _g = init_logs(&context)?;
+
+    info!("Using DB Path: {}", context.db_path.to_string_lossy());
 
     let config = Config::new(context.clone().db_path).max_write_buffer_size(512 * 1024 * 1024);
     let tx_keyspace = config.open_transactional()?;
@@ -276,10 +279,10 @@ async fn main() -> anyhow::Result<()> {
         ticker: shutdown_ticker_tx,
     };
     tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
+        _ = signals::wait_for_signal_impl() => {
             info!("Termination signal received. Shutting down...");
             shutdown.shutdown(None).await
-        }
+        },
         r = api_handle => {
            _ = r.inspect(|_| info!("api has stopped"))
                 .inspect_err(|err| error!("api has stopped with error: {}", err));
