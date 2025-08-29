@@ -1,6 +1,6 @@
 use crate::api::to_rpc_address;
 use crate::context::IndexerContext;
-use anyhow::bail;
+use anyhow::Context;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -9,7 +9,9 @@ use axum::{Json, Router};
 use indexer_db::AddressPayload;
 use indexer_db::messages::self_stash::{SelfStashByOwnerPartition, TxIdToSelfStashPartition};
 use indexer_db::processing::tx_id_to_acceptance::TxIDToAcceptancePartition;
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use tokio::task::spawn_blocking;
 use utoipa::{IntoParams, ToSchema};
 
@@ -134,59 +136,53 @@ async fn get_self_stash_by_owner(
     };
 
     let result = spawn_blocking(move || {
-        let mut messages = vec![];
         let rtx = state.tx_keyspace.read_tx();
+        let mut seen_tx_ids = HashSet::with_capacity(limit);
 
-        for self_stash_result in state
+        state
             .self_stash_by_owner_partition
             .iter_by_owner_and_scope_from_block_time_rtx(&rtx, &scope_bytes, owner, cursor)
-            .take(limit)
-        {
-            let self_stash_key = match self_stash_result {
-                Ok(res) => res,
-                Err(e) => bail!("Database error: {}", e),
-            };
+            .process_results(|iter| {
+                iter.filter(|self_stash_key| seen_tx_ids.insert(self_stash_key.tx_id))
+                    .take(limit)
+                    .map(|self_stash_key| {
+                        let block_time = self_stash_key.block_time.get();
+                        let owner =
+                            to_rpc_address(&self_stash_key.owner, state.context.network_type)
+                                .context("Address conversion error")?
+                                .map(|addr| addr.to_string());
+                        let acceptance = state
+                            .tx_id_to_acceptance_partition
+                            .acceptance_by_tx_id_rtx(&rtx, &self_stash_key.tx_id)?;
 
-            let block_time = self_stash_key.block_time.get();
-            let tx_id = faster_hex::hex_string(&self_stash_key.tx_id);
+                        let (accepting_block, accepting_daa_score) = if let Some(key) = acceptance {
+                            (
+                                Some(faster_hex::hex_string(&key.accepting_block_hash)),
+                                Some(key.accepting_daa.get()),
+                            )
+                        } else {
+                            (None, None)
+                        };
 
-            let owner = match to_rpc_address(&self_stash_key.owner, state.context.network_type) {
-                Ok(Some(addr)) => Some(addr.to_string()),
-                Ok(None) => None,
-                Err(e) => bail!("Address conversion error: {}", e),
-            };
+                        let stash = state
+                            .tx_id_to_self_stash_partition
+                            .get_rtx(&rtx, &self_stash_key.tx_id)?
+                            .ok_or_else(|| anyhow::anyhow!("Self stash not found"))?;
+                        let stashed_data_str = faster_hex::hex_string(stash.as_ref());
 
-            let acceptance = state
-                .tx_id_to_acceptance_partition
-                .acceptance_by_tx_id_rtx(&rtx, &self_stash_key.tx_id)?;
-
-            let (accepting_block, accepting_daa_score) = if let Some(key) = acceptance {
-                (
-                    Some(faster_hex::hex_string(&key.accepting_block_hash)),
-                    Some(key.accepting_daa.get()),
-                )
-            } else {
-                (None, None)
-            };
-
-            let stash = state
-                .tx_id_to_self_stash_partition
-                .get_rtx(&rtx, &self_stash_key.tx_id)?
-                .expect("Self stash not found");
-            let stashed_data_str = faster_hex::hex_string(stash.as_ref());
-
-            messages.push(SelfStashResponse {
-                tx_id,
-                owner,
-                scope: params.scope.clone(),
-                stashed_data: stashed_data_str,
-                block_time,
-                accepting_block,
-                accepting_daa_score,
-            });
-        }
-
-        Ok(messages)
+                        Ok(SelfStashResponse {
+                            tx_id: faster_hex::hex_string(&self_stash_key.tx_id),
+                            owner,
+                            scope: params.scope.clone(),
+                            stashed_data: stashed_data_str,
+                            block_time,
+                            accepting_block,
+                            accepting_daa_score,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .flatten()
     })
     .await;
 

@@ -30,6 +30,7 @@ tracing-subscriber = { workspace = true, features = [
 utoipa = { workspace = true, features = ["axum_extras"] }
 utoipa-swagger-ui = { workspace = true, features = ["axum"] }
 workflow-core = { workspace = true }
+itertools = { workspace = true }
 
 indexer-db = { path = "../indexer-db" }
 indexer-actors = { path = "../indexer-actors", features = ["serde", "utoipa"] }
