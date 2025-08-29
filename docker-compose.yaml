@@ -2,7 +2,7 @@ services:
   kasia-indexer:
     stdin_open: true
     tty: true
-    image: kluster/kasia-indexer
+    image: kkluster/kasia-indexer
     build:
       context: .
       dockerfile: Dockerfile
@@ -13,7 +13,7 @@ services:
       NETWORK_TYPE: ${NETWORK_TYPE}
       RUST_BACKTRACE: 1
     ports:
-      - 1337:8080
+      - 8080:8080
     volumes:
       - indexer-data:/app/data
 

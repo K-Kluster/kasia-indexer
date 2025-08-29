@@ -40,8 +40,8 @@ The indexer consists of several key components:
 Useful commands:
 
 - run locally: `RUST_LOG=info cargo run -r -p indexer`
-- build docker image `docker build -t kasia-indexer .`
-- run docker container: `docker run -v ./data:/root/.kasia-indexer -e RUST_LOG=info --restart always kasia-indexer ./indexer`
+- build docker image `docker build -t kkluster/kasia-indexer .`
+- run as docker-compose: `docker compose up -d`
 
 ## API
 
@@ -54,11 +54,11 @@ Useful commands:
 RUST_LOG=info
 
 # default to home_dir/.kasia-indexer/mainnet, must be an existing directory with read/write permissions
-# KASIA_INDEXER_DB_ROOT=
+#KASIA_INDEXER_DB_ROOT=
 
 # default to mainnet, allowed values: mainnet, testnet
 NETWORK_TYPE=mainnet
 
 # if not defined, fallback to public kaspa network, if specified, the `ws://{ip}:{port}` node url
-KASPA_NODE_WBORSH_URL=
+#KASPA_NODE_WBORSH_URL=
 ```
