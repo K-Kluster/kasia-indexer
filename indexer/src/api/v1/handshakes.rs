@@ -137,19 +137,17 @@ async fn get_handshakes_by_sender(
                                 .map(|addr| addr.to_string())
                                 .unwrap_or_default();
 
-                        let receiver_str = to_rpc_address(
-                            &handshake.receiver,
-                            state.context.network_type,
-                        )
-                        // @QUESTION: is there a better way to differenciate Ok(None) and Err(_) with context?
-                        .with_context(|| {
-                            format!(
-                                "receiver address conversion failed (receiver={:?})",
-                                handshake.receiver
-                            )
-                        })?
-                        .context("Database consistency error: receiver address has EMPTY_VERSION")?
-                        .to_string();
+                        let receiver_str =
+                            match to_rpc_address(&handshake.receiver, state.context.network_type) {
+                                Ok(None) => bail!(
+                                    "Database consistency error: receiver address has EMPTY_VERSION"
+                                ),
+                                Err(error) => bail!(error.context(format!(
+                                    "receiver address conversion failed (receiver={:?})",
+                                    handshake.receiver
+                                ))),
+                                Ok(Some(address)) => address.to_string(),
+                            };
 
                         let acceptance = state
                             .tx_id_to_acceptance_partition
