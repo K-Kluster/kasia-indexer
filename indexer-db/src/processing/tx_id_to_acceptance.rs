@@ -1,5 +1,6 @@
 use crate::{AddressPayload, PartitionId, SharedImmutable};
 use fjall::{PartitionCreateOptions, ReadTransaction, WriteTransaction};
+use smallvec::SmallVec;
 use std::ops::Deref;
 use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes, KnownLayout, TryFromBytes, Unaligned};
 
@@ -64,10 +65,10 @@ pub enum Action {
     InsertByKeySender,
 }
 
-pub struct InsertionEntry<'a> {
+pub struct InsertionEntry<const N: usize = 160> {
     pub partition_id: PartitionId,
     pub action: Action,
-    pub partition_key: &'a dyn Fn() -> &'a [u8],
+    pub partition_key: SmallVec<[u8; N]>,
 }
 
 impl TxIDToAcceptancePartition {
@@ -78,15 +79,15 @@ impl TxIDToAcceptancePartition {
         )?))
     }
 
-    pub fn insert_wtx<'a>(
+    pub fn insert_wtx(
         &self,
         wtx: &mut WriteTransaction,
         k: &AcceptanceKey,
-        entries: &[InsertionEntry<'a>],
+        entries: &[InsertionEntry],
     ) -> anyhow::Result<()> {
         let entries_size: usize = entries
             .iter()
-            .map(|entry| (entry.partition_key)().len() + 2)
+            .map(|entry| entry.partition_key.len() + 2)
             .sum();
         wtx.fetch_update(&self.0, k.as_bytes(), |old_value| match old_value {
             None => {
@@ -95,7 +96,7 @@ impl TxIDToAcceptancePartition {
                 entries.iter().for_each(|entry| {
                     v.extend_from_slice(entry.partition_id.as_bytes());
                     v.extend_from_slice(entry.action.as_bytes());
-                    v.extend_from_slice((entry.partition_key)());
+                    v.extend_from_slice(entry.partition_key.as_slice());
                 });
                 Some(v.into())
             }
@@ -105,7 +106,7 @@ impl TxIDToAcceptancePartition {
                 entries.iter().for_each(|entry| {
                     v.extend_from_slice(entry.partition_id.as_bytes());
                     v.extend_from_slice(entry.action.as_bytes());
-                    v.extend_from_slice((entry.partition_key)());
+                    v.extend_from_slice(entry.partition_key.as_slice());
                 });
                 Some(v.into())
             }

@@ -26,6 +26,7 @@ rayon = "1.11.0"
 ringmap = "0.1.4"
 rolling-file = "0.2.0"
 serde = "1.0"
+smallvec = { version = "1.15.1", features = ["const_generics"] }
 thiserror = "2.0.12"
 time = "0.3.41"
 tokio = "1.45.1"

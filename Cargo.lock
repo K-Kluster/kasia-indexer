@@ -1580,6 +1580,7 @@ dependencies = [
  "protocol",
  "ringmap",
  "serde",
+ "smallvec",
  "thiserror 2.0.12",
  "tokio",
  "tracing",
@@ -1599,6 +1600,7 @@ dependencies = [
  "kaspa-addresses",
  "kaspa-consensus-core",
  "kaspa-txscript",
+ "smallvec",
  "zerocopy",
 ]
 

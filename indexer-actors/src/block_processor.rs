@@ -38,7 +38,9 @@ use protocol::operation::{
     SealedContextualMessageV1, SealedHandshakeV2, SealedMessageOrSealedHandshakeVNone,
     SealedOperation, SealedPaymentV1, SealedSelfStashV1,
 };
+use smallvec::SmallVec;
 use std::collections::HashMap;
+use std::iter;
 use tracing::{debug, error, info, info_span, trace, warn};
 
 #[derive(bon::Builder)]
@@ -370,195 +372,63 @@ impl BlockProcessor {
         } else {
             None
         };
-        match (op, sender) {
-            (SealedOperation::SealedMessageOrSealedHandshakeVNone(hk), None) => {
-                let by_receiver_key =
-                    self.handle_handshake(wtx, block_header, tx_id, hk, receiver, None)?;
-                let by_sender_key = HandshakeKeyBySender {
-                    sender: sender.unwrap_or_default(),
-                    block_time: by_receiver_key.block_time,
-                    block_hash: by_receiver_key.block_hash,
-                    receiver,
-                    version: by_receiver_key.version,
-                    tx_id: by_receiver_key.tx_id,
-                };
-                self.tx_id_to_acceptance_partition.insert_wtx(
-                    wtx,
-                    &AcceptanceKey {
-                        tx_id: tx_id.as_bytes(),
-                        receiver,
-                    },
-                    &[
-                        InsertionEntry {
-                            partition_id: PartitionId::HandshakeBySender,
-                            action: Action::InsertByKeySender,
-                            partition_key: &|| by_sender_key.as_bytes(),
-                        },
-                        InsertionEntry {
-                            partition_id: PartitionId::HandshakeByReceiver,
-                            action: Action::UpdateValueSender,
-                            partition_key: &|| by_receiver_key.as_bytes(),
-                        },
-                    ],
-                )?;
+        let mut entries: SmallVec<[_; 1]> = SmallVec::new();
+        iter::once(op).try_for_each(|op| match op {
+            SealedOperation::SealedMessageOrSealedHandshakeVNone(hk) => {
+                self.handle_handshake(&mut entries, wtx, block_header, tx_id, hk, receiver, sender)
             }
-            (SealedOperation::SealedHandshakeV2(hk), None) => {
-                let by_receiver_key =
-                    self.handle_handshake_v2(wtx, block_header, tx_id, hk, receiver, None)?;
-                let by_sender_key = HandshakeKeyBySender {
-                    sender: sender.unwrap_or_default(),
-                    block_time: by_receiver_key.block_time,
-                    block_hash: by_receiver_key.block_hash,
-                    receiver,
-                    version: by_receiver_key.version,
-                    tx_id: by_receiver_key.tx_id,
-                };
-                self.tx_id_to_acceptance_partition.insert_wtx(
-                    wtx,
-                    &AcceptanceKey {
-                        tx_id: tx_id.as_bytes(),
-                        receiver,
-                    },
-                    &[
-                        InsertionEntry {
-                            partition_id: PartitionId::HandshakeBySender,
-                            action: Action::InsertByKeySender,
-                            partition_key: &|| by_sender_key.as_bytes(),
-                        },
-                        InsertionEntry {
-                            partition_id: PartitionId::HandshakeByReceiver,
-                            action: Action::UpdateValueSender,
-                            partition_key: &|| by_receiver_key.as_bytes(),
-                        },
-                    ],
-                )?;
-            }
-            (SealedOperation::ContextualMessageV1(cm), None) => {
-                let key =
-                    self.handle_contextual_message(wtx, sender, block_header, tx_id, cm, receiver);
-                self.tx_id_to_acceptance_partition.insert_wtx(
-                    wtx,
-                    &AcceptanceKey {
-                        tx_id: tx_id.as_bytes(),
-                        receiver,
-                    },
-                    &[InsertionEntry {
-                        partition_id: PartitionId::ContextualMessageBySender,
-                        action: Action::InsertByKeySender,
-                        partition_key: &|| key.as_bytes(),
-                    }],
-                )?;
-            }
-            (SealedOperation::SelfStashV1(sss), None) => {
-                let key = self.handle_self_stash(wtx, sender, block_header, tx_id, sss, receiver);
-                self.tx_id_to_acceptance_partition.insert_wtx(
-                    wtx,
-                    &AcceptanceKey {
-                        tx_id: tx_id.as_bytes(),
-                        receiver,
-                    },
-                    &[InsertionEntry {
-                        partition_id: PartitionId::SelfStashByOwner,
-                        action: Action::InsertByKeySender,
-                        partition_key: &|| key.as_bytes(),
-                    }],
-                )?;
-            }
-            (SealedOperation::PaymentV1(pm), None) => {
-                let by_receiver_key =
-                    self.handle_payment(wtx, block_header, tx_id, receiver, amount, pm, None)?;
-                let by_sender_key = PaymentKeyBySender {
-                    sender: sender.unwrap_or_default(),
-                    block_time: by_receiver_key.block_time,
-                    block_hash: by_receiver_key.block_hash,
-                    receiver,
-                    version: by_receiver_key.version,
-                    tx_id: by_receiver_key.tx_id,
-                };
-                self.tx_id_to_acceptance_partition.insert_wtx(
-                    wtx,
-                    &AcceptanceKey {
-                        tx_id: tx_id.as_bytes(),
-                        receiver,
-                    },
-                    &[
-                        InsertionEntry {
-                            partition_id: PartitionId::PaymentByReceiver,
-                            action: Action::UpdateValueSender,
-                            partition_key: &|| by_receiver_key.as_bytes(),
-                        },
-                        InsertionEntry {
-                            partition_id: PartitionId::PaymentBySender,
-                            action: Action::InsertByKeySender,
-                            partition_key: &|| by_sender_key.as_bytes(),
-                        },
-                    ],
-                )?;
-            }
-            (SealedOperation::SealedMessageOrSealedHandshakeVNone(hk), Some(sender)) => {
-                self.handle_handshake(wtx, block_header, tx_id, hk, receiver, Some(sender))?;
-                self.tx_id_to_acceptance_partition.insert_wtx(
-                    wtx,
-                    &AcceptanceKey {
-                        tx_id: tx_id.as_bytes(),
-                        receiver,
-                    },
-                    &[],
-                )?;
-            }
-            (SealedOperation::SealedHandshakeV2(hk), Some(sender)) => {
-                self.handle_handshake_v2(wtx, block_header, tx_id, hk, receiver, Some(sender))?;
-                self.tx_id_to_acceptance_partition.insert_wtx(
-                    wtx,
-                    &AcceptanceKey {
-                        tx_id: tx_id.as_bytes(),
-                        receiver,
-                    },
-                    &[],
-                )?;
-            }
-            (SealedOperation::ContextualMessageV1(cm), Some(sender)) => {
+            SealedOperation::SealedHandshakeV2(hk) => self.handle_handshake_v2(
+                &mut entries,
+                wtx,
+                block_header,
+                tx_id,
+                hk,
+                receiver,
+                sender,
+            ),
+            SealedOperation::ContextualMessageV1(cm) => {
                 self.handle_contextual_message(
+                    &mut entries,
                     wtx,
-                    Some(sender),
+                    sender,
                     block_header,
                     tx_id,
                     cm,
                     receiver,
                 );
-                self.tx_id_to_acceptance_partition.insert_wtx(
-                    wtx,
-                    &AcceptanceKey {
-                        tx_id: tx_id.as_bytes(),
-                        receiver,
-                    },
-                    &[],
-                )?;
+                Ok(())
             }
-            (SealedOperation::SelfStashV1(sss), Some(sender)) => {
-                self.handle_self_stash(wtx, Some(sender), block_header, tx_id, sss, receiver);
-                self.tx_id_to_acceptance_partition.insert_wtx(
+            SealedOperation::PaymentV1(pm) => self.handle_payment(
+                &mut entries,
+                wtx,
+                block_header,
+                tx_id,
+                receiver,
+                amount,
+                pm,
+                sender,
+            ),
+            SealedOperation::SelfStashV1(sss) => {
+                self.handle_self_stash(
+                    &mut entries,
                     wtx,
-                    &AcceptanceKey {
-                        tx_id: tx_id.as_bytes(),
-                        receiver,
-                    },
-                    &[],
-                )?;
+                    sender,
+                    block_header,
+                    tx_id,
+                    sss,
+                    receiver,
+                );
+                Ok(())
             }
-            (SealedOperation::PaymentV1(pm), Some(sender)) => {
-                self.handle_payment(wtx, block_header, tx_id, receiver, amount, pm, Some(sender))?;
-                self.tx_id_to_acceptance_partition.insert_wtx(
-                    wtx,
-                    &AcceptanceKey {
-                        tx_id: tx_id.as_bytes(),
-                        receiver,
-                    },
-                    &[],
-                )?;
-            }
-        }
-
+        })?;
+        self.tx_id_to_acceptance_partition.insert_wtx(
+            wtx,
+            &AcceptanceKey {
+                tx_id: tx_id.as_bytes(),
+                receiver,
+            },
+            &entries,
+        )?;
         Ok(())
     }
 
@@ -620,15 +490,16 @@ impl BlockProcessor {
         self.metadata_partition.set_latest_block_cursor(wtx, hash)
     }
 
-    fn handle_handshake(
+    fn handle_handshake<const ENTRIES_LEN: usize, const KEY_SIZE: usize>(
         &self,
+        entries: &mut SmallVec<[InsertionEntry<KEY_SIZE>; ENTRIES_LEN]>,
         wtx: &mut WriteTransaction,
         block: &RpcHeader,
         tx_id: RpcTransactionId,
         op: SealedMessageOrSealedHandshakeVNone,
         receiver: AddressPayload,
         sender: Option<AddressPayload>,
-    ) -> anyhow::Result<HandshakeKeyByReceiver> {
+    ) -> anyhow::Result<()> {
         debug!(%tx_id, sender = ?sender, receiver = ?receiver, "Handling handshake transaction");
         self.tx_id_to_handshake_partition
             .insert_wtx(wtx, tx_id.as_ref(), op.sealed_hex);
@@ -639,36 +510,47 @@ impl BlockProcessor {
             version: 0,
             tx_id: tx_id.as_bytes(),
         };
+
         self.handshake_by_receiver_partition
             .insert_wtx(wtx, &hs_key, sender)?;
-
+        let by_sender_key = HandshakeKeyBySender {
+            sender: sender.unwrap_or_default(),
+            block_time: hs_key.block_time,
+            block_hash: hs_key.block_hash,
+            receiver,
+            version: hs_key.version,
+            tx_id: hs_key.tx_id,
+        };
         if let Some(sender) = sender {
             trace!(sender = ?sender, "Inserting handshake by sender");
-            let by_sender_key = HandshakeKeyBySender {
-                sender,
-                block_time: hs_key.block_time,
-                block_hash: hs_key.block_hash,
-                receiver,
-                version: hs_key.version,
-                tx_id: hs_key.tx_id,
-            };
             self.handshake_by_sender_partition
                 .insert_wtx(wtx, &by_sender_key);
         } else {
             trace!("No sender resolved for handshake");
+            entries.push(InsertionEntry {
+                partition_id: PartitionId::HandshakeByReceiver,
+                action: Action::UpdateValueSender,
+                partition_key: SmallVec::from_slice(hs_key.as_bytes()),
+            });
+            entries.push(InsertionEntry {
+                partition_id: PartitionId::HandshakeBySender,
+                action: Action::InsertByKeySender,
+                partition_key: SmallVec::from_slice(by_sender_key.as_bytes()),
+            });
         }
-        Ok(hs_key)
+        Ok(())
     }
 
-    fn handle_handshake_v2(
+    fn handle_handshake_v2<const ENTRIES_LEN: usize, const KEY_SIZE: usize>(
         &self,
+        entries: &mut SmallVec<[InsertionEntry<KEY_SIZE>; ENTRIES_LEN]>,
         wtx: &mut WriteTransaction,
         block: &RpcHeader,
         tx_id: RpcTransactionId,
         op: SealedHandshakeV2,
         receiver: AddressPayload,
         sender: Option<AddressPayload>,
-    ) -> anyhow::Result<HandshakeKeyByReceiver> {
+    ) -> anyhow::Result<()> {
         debug!(%tx_id, sender = ?sender, receiver = ?receiver, "Handling handshake v2 transaction");
         self.tx_id_to_handshake_partition
             .insert_wtx(wtx, tx_id.as_ref(), op.sealed_hex);
@@ -681,34 +563,44 @@ impl BlockProcessor {
         };
         self.handshake_by_receiver_partition
             .insert_wtx(wtx, &hs_key, sender)?;
-
+        let by_sender_key = HandshakeKeyBySender {
+            sender: sender.unwrap_or_default(),
+            block_time: hs_key.block_time,
+            block_hash: hs_key.block_hash,
+            receiver,
+            version: hs_key.version,
+            tx_id: hs_key.tx_id,
+        };
         if let Some(sender) = sender {
             trace!(sender = ?sender, "Inserting handshake v2 by sender");
-            let by_sender_key = HandshakeKeyBySender {
-                sender,
-                block_time: hs_key.block_time,
-                block_hash: hs_key.block_hash,
-                receiver,
-                version: hs_key.version,
-                tx_id: hs_key.tx_id,
-            };
             self.handshake_by_sender_partition
                 .insert_wtx(wtx, &by_sender_key);
         } else {
             trace!("No sender resolved for handshake v2");
+            entries.push(InsertionEntry {
+                partition_id: PartitionId::HandshakeBySender,
+                action: Action::InsertByKeySender,
+                partition_key: SmallVec::from_slice(by_sender_key.as_bytes()),
+            });
+            entries.push(InsertionEntry {
+                partition_id: PartitionId::HandshakeByReceiver,
+                action: Action::UpdateValueSender,
+                partition_key: SmallVec::from_slice(hs_key.as_bytes()),
+            });
         }
-        Ok(hs_key)
+        Ok(())
     }
 
-    fn handle_contextual_message(
+    fn handle_contextual_message<const ENTRIES_LEN: usize, const KEY_SIZE: usize>(
         &self,
+        entries: &mut SmallVec<[InsertionEntry<KEY_SIZE>; ENTRIES_LEN]>,
         wtx: &mut WriteTransaction,
         sender: Option<AddressPayload>,
         header: &RpcHeader,
         tx_id: RpcTransactionId,
         cm: SealedContextualMessageV1,
         receiver: AddressPayload,
-    ) -> ContextualMessageBySenderKey {
+    ) {
         debug!(%tx_id, sender = ?sender, receiver = ?receiver, alias = %cm.alias.to_hex(), "Handling contextual message");
         let mut alias = [0u8; 16];
         let len = cm.alias.len().min(16);
@@ -727,12 +619,18 @@ impl BlockProcessor {
         if sender.is_some() {
             self.contextual_message_by_sender_partition
                 .insert(wtx, &cmk);
+        } else {
+            entries.push(InsertionEntry {
+                partition_id: PartitionId::ContextualMessageBySender,
+                action: Action::InsertByKeySender,
+                partition_key: SmallVec::from_slice(cmk.as_bytes()),
+            })
         }
-        cmk
     }
 
-    fn handle_payment(
+    fn handle_payment<const ENTRIES_LEN: usize, const KEY_SIZE: usize>(
         &self,
+        entries: &mut SmallVec<[InsertionEntry<KEY_SIZE>; ENTRIES_LEN]>,
         wtx: &mut WriteTransaction,
         header: &RpcHeader,
         tx_id: RpcTransactionId,
@@ -740,7 +638,7 @@ impl BlockProcessor {
         amount: u64,
         pm: SealedPaymentV1,
         sender: Option<AddressPayload>,
-    ) -> anyhow::Result<PaymentKeyByReceiver> {
+    ) -> anyhow::Result<()> {
         debug!(%tx_id, sender = ?sender, receiver = ?receiver, amount, "Handling payment transaction");
         self.tx_id_to_payment_partition
             .insert_wtx(wtx, tx_id.as_ref(), amount, pm.sealed_hex)?;
@@ -753,33 +651,44 @@ impl BlockProcessor {
         };
         self.payment_by_receiver_partition
             .insert_wtx(wtx, &pm_key, sender)?;
+        let by_sender_key = PaymentKeyBySender {
+            sender: sender.unwrap_or_default(),
+            block_time: pm_key.block_time,
+            block_hash: pm_key.block_hash,
+            receiver,
+            version: pm_key.version,
+            tx_id: pm_key.tx_id,
+        };
         if let Some(sender) = sender {
             trace!(sender = ?sender, "Inserting payment by sender");
-            let by_sender_key = PaymentKeyBySender {
-                sender,
-                block_time: pm_key.block_time,
-                block_hash: pm_key.block_hash,
-                receiver,
-                version: pm_key.version,
-                tx_id: pm_key.tx_id,
-            };
             self.payment_by_sender_partition
                 .insert_wtx(wtx, &by_sender_key);
         } else {
             trace!("No sender resolved for payment");
+            entries.push(InsertionEntry {
+                partition_id: PartitionId::PaymentByReceiver,
+                action: Action::UpdateValueSender,
+                partition_key: SmallVec::from_slice(pm_key.as_bytes()),
+            });
+            entries.push(InsertionEntry {
+                partition_id: PartitionId::PaymentBySender,
+                action: Action::InsertByKeySender,
+                partition_key: SmallVec::from_slice(by_sender_key.as_bytes()),
+            });
         }
-        Ok(pm_key)
+        Ok(())
     }
 
-    fn handle_self_stash(
+    fn handle_self_stash<const ENTRIES_LEN: usize, const KEY_SIZE: usize>(
         &self,
+        entries: &mut SmallVec<[InsertionEntry<KEY_SIZE>; ENTRIES_LEN]>,
         wtx: &mut WriteTransaction,
         sender: Option<AddressPayload>,
         block_header: &RpcHeader,
         tx_id: RpcTransactionId,
         sss: SealedSelfStashV1,
         _receiver: AddressPayload,
-    ) -> SelfStashKeyByOwner {
+    ) {
         self.tx_id_to_self_stash_partition
             .insert_wtx(wtx, tx_id.as_ref(), sss.sealed_hex);
         let key = SelfStashKeyByOwner {
@@ -792,8 +701,13 @@ impl BlockProcessor {
         };
         if sender.is_some() {
             self.self_stash_by_owner_partition.insert_wtx(wtx, &key);
+        } else {
+            entries.push(InsertionEntry {
+                partition_id: PartitionId::SelfStashByOwner,
+                action: Action::InsertByKeySender,
+                partition_key: SmallVec::from_slice(key.as_bytes()),
+            });
         }
-        key
     }
 }
 

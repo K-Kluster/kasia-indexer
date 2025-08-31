@@ -912,3 +912,23 @@ impl From<Cursor> for DbCursor {
 
 type DaaScore = u64;
 type Continue = bool;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::any::type_name;
+
+    #[test]
+    fn print_key_sizes() {
+        fn print_size<K>() {
+            println!("{}:{}", type_name::<K>(), size_of::<K>());
+        }
+
+        print_size::<HandshakeKeyByReceiver>();
+        print_size::<HandshakeKeyBySender>();
+        print_size::<ContextualMessageBySenderKey>();
+        print_size::<PaymentKeyByReceiver>();
+        print_size::<PaymentKeyBySender>();
+        print_size::<SelfStashKeyByOwner>();
+    }
+}

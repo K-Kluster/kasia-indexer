@@ -7,6 +7,7 @@ edition = "2024"
 anyhow.workspace = true
 arrayref = "0.3.9"
 fjall.workspace = true
+smallvec.workspace = true
 #tracing.workspace = true
 zerocopy = { workspace = true, features = ["derive"] }
 
