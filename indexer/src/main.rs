@@ -24,13 +24,13 @@ use indexer_db::messages::payment::{
 };
 use indexer_db::messages::self_stash::{SelfStashByOwnerPartition, TxIdToSelfStashPartition};
 use indexer_db::metadata::MetadataPartition;
+use indexer_db::migration::apply_migrations;
 use indexer_db::processing::accepting_block_to_txs::AcceptingBlockToTxIDPartition;
 use indexer_db::processing::pending_senders::PendingSenderResolutionPartition;
 use indexer_db::processing::tx_id_to_acceptance::TxIDToAcceptancePartition;
 use kaspa_rpc_core::RpcBlueWorkType;
 use kaspa_wrpc_client::client::{ConnectOptions, ConnectStrategy};
 use kaspa_wrpc_client::prelude::NetworkType;
-use rayon::prelude::*;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
@@ -68,6 +68,7 @@ async fn main() -> anyhow::Result<()> {
     {
         metadata_partition.0.inner().major_compact()?;
     }
+    apply_migrations(&metadata_partition, &tx_keyspace)?;
 
     let handshake_by_receiver_partition = HandshakeByReceiverPartition::new(&tx_keyspace)?;
     let tx_id_to_handshake_partition = TxIdToHandshakePartition::new(&tx_keyspace)?;
@@ -212,29 +213,19 @@ async fn main() -> anyhow::Result<()> {
     let rtx = tx_keyspace.read_tx();
     let processed_blocks = block_daa_index_partition
         .iter_lt(&rtx, u64::MAX)
-        .rev()
-        .map(|r| r.map(|kv| kv.1))
+        .rev() // we need to get values from the end (desc order)
+        .map(|r| {
+            r.map(|k| CompactHeader {
+                block_hash: k.block_hash,
+                blue_work: RpcBlueWorkType::from_be_bytes(k.blue_work),
+                daa_score: k.daa_score.get(),
+            })
+        })
         .take(3_000_000)
         .collect::<Result<Vec<_>, _>>()?;
-    let mut processed_blocks = processed_blocks
-        .par_iter()
-        .rev()
-        .map(|hash| {
-            block_compact_header_partition
-                .get_compact_header(hash)
-                .transpose()
-                .unwrap()
-                .map(|db_compact_header| CompactHeader {
-                    block_hash: *hash,
-                    blue_work: RpcBlueWorkType::from_le_bytes(db_compact_header.blue_work),
-                    daa_score: db_compact_header.daa_score.into(),
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    processed_blocks.par_sort_by_key(|h| h.daa_score);
     let block_processor_handle = std::thread::spawn(move || block_processor.process());
     let virtual_processor_handle =
-        std::thread::spawn(move || virtual_processor.process(processed_blocks));
+        std::thread::spawn(move || virtual_processor.process(processed_blocks, false));
     let periodic_processor_handle = std::thread::spawn(move || periodic_processor.process());
     let data_source_handle = tokio::spawn(async move { data_source.task().await });
     let ticker_handle = tokio::spawn(async move { ticker.process().await });

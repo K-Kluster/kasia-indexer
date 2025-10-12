@@ -2,7 +2,7 @@ use crate::metrics::SharedMetrics;
 use crate::util::ToHex64;
 use fjall::TxKeyspace;
 use indexer_db::headers::block_compact_headers::BlockCompactHeaderPartition;
-use indexer_db::headers::daa_index::DaaIndexPartition;
+use indexer_db::headers::daa_index::{DaaIndexKey, DaaIndexPartition};
 use indexer_db::messages::contextual_message::ContextualMessageBySenderPartition;
 use indexer_db::messages::handshake::{HandshakeBySenderPartition, TxIdToHandshakePartition};
 use indexer_db::messages::payment::{PaymentBySenderPartition, TxIdToPaymentPartition};
@@ -86,11 +86,17 @@ impl PeriodicProcessor {
         let read_tx = self.tx_keyspace.read_tx();
         let mut pruned = 0;
         for r in self.daa_index_partition.iter_lt(&read_tx, prune_threshold) {
-            let (daa, hash) = r?;
-            trace!(hash = %hash.to_hex_64(), daa_score = daa, "Pruning block");
-            self.block_compact_header_partition.remove(&hash)?;
-            self.daa_index_partition.delete(daa, &hash)?;
-            self.accepting_block_to_tx_id_partition.remove(&hash)?;
+            let DaaIndexKey {
+                daa_score,
+                blue_work,
+                block_hash,
+            } = r?;
+            trace!(hash = %block_hash.to_hex_64(), %daa_score, "Pruning block");
+            self.block_compact_header_partition.remove(&block_hash)?;
+            self.daa_index_partition
+                .delete(daa_score.get(), block_hash, blue_work)?;
+            self.accepting_block_to_tx_id_partition
+                .remove(&block_hash)?;
             pruned += 1;
         }
         if pruned > 0 {

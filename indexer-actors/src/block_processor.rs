@@ -325,8 +325,11 @@ impl BlockProcessor {
             debug!(hash = %block.header.hash.as_bytes().to_hex_64(), "Skipping already processed block");
             return Ok(());
         }
-        self.daa_index_partition
-            .insert(block.header.daa_score, block.header.hash.as_ref())?;
+        self.daa_index_partition.insert(
+            block.header.daa_score,
+            block.header.hash.as_bytes(),
+            block.header.blue_work.to_be_bytes(),
+        )?;
         debug!(hash = %block.header.hash.as_bytes().to_hex_64(), tx_count = block.transactions.len(), "Processing block transactions");
         for tx in &block.transactions {
             self.handle_transaction(wtx, &block.header, tx)?;

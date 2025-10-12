@@ -1,16 +1,24 @@
+use crate::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
 use anyhow::{Result, bail};
 use fjall::{PartitionCreateOptions, ReadTransaction};
+use zerocopy::TryFromBytes;
 
-/// Secondary index partition for compact headers, indexed by DAA score (u64 BE bytes) + block hash
+/// Secondary index partition for compact headers, indexed by DAA score, blue work, and block hash
 /// Used for efficient pruning of old blocks with DAA score < threshold
-/// Keys: [daa_score_be_bytes (8)] + [block_hash_bytes (32)]
+/// Keys: [daa_score_be_bytes (8)] + [blue_work_be_bytes (24)] + [block_hash_bytes (32)]
 /// Values: empty (data stored in primary partition)
 #[derive(Clone)]
-pub struct DaaIndexPartition(fjall::TxPartition);
+pub struct DaaIndexPartition(pub(crate) fjall::TxPartition);
+
+#[derive(Copy, Clone, Unaligned, Immutable, KnownLayout, IntoBytes, FromBytes)]
+#[repr(C)]
+pub struct DaaIndexKey {
+    pub daa_score: zerocopy::U64<zerocopy::BigEndian>,
+    pub blue_work: [u8; 24], // BE
+    pub block_hash: [u8; 32],
+}
 
 impl DaaIndexPartition {
-    const KEY_LEN: usize = 8 + 32;
-
     pub fn new(keyspace: &fjall::TxKeyspace) -> Result<Self> {
         Ok(Self(
             keyspace.open_partition(
@@ -27,44 +35,51 @@ impl DaaIndexPartition {
         ))
     }
 
-    fn make_key(daa_score: u64, block_hash: &[u8; 32]) -> [u8; Self::KEY_LEN] {
-        let mut key = [0u8; Self::KEY_LEN];
-        key[0..8].copy_from_slice(&daa_score.to_be_bytes());
-        key[8..].copy_from_slice(block_hash.as_ref());
-        key
+    fn make_key(daa_score: u64, block_hash: [u8; 32], blue_work_be: [u8; 24]) -> DaaIndexKey {
+        DaaIndexKey {
+            daa_score: daa_score.into(),
+            blue_work: blue_work_be,
+            block_hash,
+        }
     }
 
-    pub fn insert(&self, daa_score: u64, block_hash: &[u8; 32]) -> Result<()> {
-        let key = Self::make_key(daa_score, block_hash);
-        self.0.insert(key, [])?;
+    pub fn insert(
+        &self,
+        daa_score: u64,
+        block_hash: [u8; 32],
+        blue_work_be: [u8; 24],
+    ) -> Result<()> {
+        let key = Self::make_key(daa_score, block_hash, blue_work_be);
+        self.0.insert(key.as_bytes(), [])?;
         Ok(())
     }
 
-    pub fn delete(&self, daa_score: u64, block_hash: &[u8; 32]) -> Result<()> {
-        let key = Self::make_key(daa_score, block_hash);
-        self.0.remove(key)?;
+    pub fn delete(
+        &self,
+        daa_score: u64,
+        block_hash: [u8; 32],
+        blue_work_be: [u8; 24],
+    ) -> Result<()> {
+        let key = Self::make_key(daa_score, block_hash, blue_work_be);
+        self.0.remove(key.as_bytes())?;
         Ok(())
     }
 
-    /// Returns an iterator over (daa_score, block_hash) where daa_score < max_daa.
-    /// Assumes the underlying store iterates in sorted key order.
+    /// Returns an iterator over (daa_score, blue_work, block_hash) where daa_score < max_daa.
+    /// Keys are ordered first by DAA score, then by blue work (both in big-endian), then by block hash.
     pub fn iter_lt<'a>(
         &'a self,
         rtx: &'a ReadTransaction,
         max_daa: u64,
-    ) -> impl DoubleEndedIterator<Item = Result<(u64, [u8; 32])>> + 'a {
+    ) -> impl DoubleEndedIterator<Item = Result<DaaIndexKey>> + 'a {
         let max_prefix = max_daa.to_be_bytes();
         rtx.range(&self.0, ..max_prefix).map(move |res| {
             let (key, value) = res?;
-            if key.len() != Self::KEY_LEN {
-                bail!("Invalid key length: {}", key.len());
-            }
             if !value.is_empty() {
                 bail!("Unexpected non-empty value");
             }
-            let daa_score = u64::from_be_bytes(key[0..8].try_into().unwrap());
-            let block_hash: [u8; 32] = key[8..].try_into().unwrap();
-            Ok((daa_score, block_hash))
+            DaaIndexKey::try_read_from_bytes(key.as_bytes())
+                .map_err(|_| anyhow::anyhow!("db corrupted, failed to read daa index key"))
         })
     }
 
@@ -74,11 +89,5 @@ impl DaaIndexPartition {
 
     pub fn is_empty(&self) -> Result<bool> {
         Ok(self.0.inner().is_empty()?)
-    }
-
-    pub fn latest_daa(&self) -> Result<Option<u64>> {
-        let k = self.0.last_key_value()?;
-        k.map(|(k, _v)| -> anyhow::Result<_> { Ok(u64::from_be_bytes(k.as_ref().try_into()?)) })
-            .transpose()
     }
 }

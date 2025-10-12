@@ -69,9 +69,9 @@ struct State {
 }
 
 impl State {
-    fn new(processed_blocks: Vec<CompactHeader>) -> Self {
+    fn new(processed_blocks: Vec<CompactHeader>, asc_order: bool) -> Self {
         Self {
-            shared_state: StateShared::new(processed_blocks),
+            shared_state: StateShared::new(processed_blocks, asc_order),
             sync_state: SyncState::default(),
         }
     }
@@ -85,20 +85,24 @@ struct StateShared {
 }
 
 impl StateShared {
-    fn new(processed_blocks: Vec<CompactHeader>) -> Self {
+    fn new(processed_blocks: Vec<CompactHeader>, asc_order: bool) -> Self {
         let mut latest_known_block = (Default::default(), Default::default());
-        let processed_blocks = ringmap::RingMap::from_iter(processed_blocks.into_iter().map(
-            |CompactHeader {
-                 blue_work,
-                 block_hash,
-                 daa_score,
-             }| {
-                if blue_work > latest_known_block.1 {
-                    latest_known_block = (block_hash, blue_work);
-                }
-                (block_hash, (daa_score, blue_work))
-            },
-        ));
+        let mapper = |CompactHeader {
+                          blue_work,
+                          block_hash,
+                          daa_score,
+                      }| {
+            if blue_work > latest_known_block.1 {
+                latest_known_block = (block_hash, blue_work);
+            }
+            (block_hash, (daa_score, blue_work))
+        };
+        let processed_blocks = if asc_order {
+            ringmap::RingMap::from_iter(processed_blocks.into_iter().map(mapper))
+        } else {
+            ringmap::RingMap::from_iter(processed_blocks.into_iter().rev().map(mapper))
+        };
+
         Self {
             shutting_down: false,
             processed_blocks,
@@ -126,9 +130,13 @@ enum SyncState {
 }
 
 impl VirtualProcessor {
-    pub fn process(&mut self, processed_blocks: Vec<CompactHeader>) -> anyhow::Result<()> {
+    pub fn process(
+        &mut self,
+        processed_blocks: Vec<CompactHeader>,
+        asc_order: bool,
+    ) -> anyhow::Result<()> {
         info!("Virtual chain processor started");
-        let state = &mut State::new(processed_blocks);
+        let state = &mut State::new(processed_blocks, asc_order);
         loop {
             match self.select_input()? {
                 ProcessedBlockOrVccOrSyncer::Vcc(RealTimeVccNotification::Connected {

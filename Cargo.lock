@@ -1600,7 +1600,9 @@ dependencies = [
  "kaspa-addresses",
  "kaspa-consensus-core",
  "kaspa-txscript",
+ "rayon",
  "smallvec",
+ "tracing",
  "zerocopy",
 ]
 
