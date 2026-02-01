@@ -214,62 +214,61 @@ impl BlockProcessor {
                     info!(to = %to.to_hex_64(), "Gap filler hit pruned data");
                     let from = gaps_fillers.remove(&to).map(|(from, _)| from);
                     self.gaps_filling_in_progress -= 1;
-                    if !is_shutdown {
-                        if let (Some(pruning_point), Some(from_block)) =
+                    if !is_shutdown
+                        && let (Some(pruning_point), Some(from_block)) =
                             (pruning_point_at_connect, from)
-                        {
-                            if from_block != pruning_point {
-                                info!(
-                                    from = %from_block.to_hex_64(),
-                                    pp = %pruning_point.to_hex_64(),
-                                    to = %to.to_hex_64(),
-                                    "Gap fill failed, retrying from pruning point"
-                                );
-                                loop {
-                                    let mut wtx = self.tx_keyspace.write_tx()?;
+                        && from_block != pruning_point
+                    {
+                        info!(
+                            from = %from_block.to_hex_64(),
+                            pp = %pruning_point.to_hex_64(),
+                            to = %to.to_hex_64(),
+                            "Gap fill failed, retrying from pruning point"
+                        );
+                        loop {
+                            let mut wtx = self.tx_keyspace.write_tx()?;
 
-                                    // change the gap in case of a recovery, starting from pruning point
-                                    // TODO: this isn't reliable as pp might move on the next block filling task
-                                    //       find a way to either trigger is now (synced) or maybe let a handler fetch pp on the fly
-                                    //     => important thing is to stop trying to fill gaps we cannot fill (lost)
-                                    self.blocks_gap_partition.remove_gap_wtx(&mut wtx, &to);
-                                    self.blocks_gap_partition.add_gap_wtx(
-                                        &mut wtx,
-                                        indexer_db::headers::block_gaps::BlockGap {
-                                            from: pruning_point,
-                                            to,
-                                        },
-                                    );
-                                    if wtx.commit()?.is_ok() {
-                                        break;
-                                    } else {
-                                        warn!("Conflict detected while updating gap after error");
-                                    }
-                                }
-
-                                let (interrupt_tx, interrupt_rx) = tokio::sync::oneshot::channel();
-                                self.runtime_handle.spawn({
-                                    let filler = BlockGapFiller::new(
-                                        pruning_point,
-                                        to,
-                                        self.gap_result_tx.clone(),
-                                        self.command_tx.clone(),
-                                        interrupt_rx,
-                                    );
-                                    async move {
-                                        _ = filler.sync().await.inspect_err(
-                                            |err| error!(%err, "Error in block gap filler"),
-                                        );
-                                    }
-                                });
-                                gaps_fillers.insert(to, (pruning_point, interrupt_tx));
-                                self.gaps_filling_in_progress += 1;
-                                info!(
-                                    self.gaps_filling_in_progress,
-                                    "Retrying gap filling from pruning point"
-                                );
+                            // change the gap in case of a recovery, starting from pruning point
+                            // TODO: this isn't reliable as pp might move on the next block filling task
+                            //       find a way to either trigger is now (synced) or maybe let a handler fetch pp on the fly
+                            //     => important thing is to stop trying to fill gaps we cannot fill (lost)
+                            self.blocks_gap_partition.remove_gap_wtx(&mut wtx, &to);
+                            self.blocks_gap_partition.add_gap_wtx(
+                                &mut wtx,
+                                indexer_db::headers::block_gaps::BlockGap {
+                                    from: pruning_point,
+                                    to,
+                                },
+                            );
+                            if wtx.commit()?.is_ok() {
+                                break;
+                            } else {
+                                warn!("Conflict detected while updating gap after error");
                             }
                         }
+
+                        let (interrupt_tx, interrupt_rx) = tokio::sync::oneshot::channel();
+                        self.runtime_handle.spawn({
+                            let filler = BlockGapFiller::new(
+                                pruning_point,
+                                to,
+                                self.gap_result_tx.clone(),
+                                self.command_tx.clone(),
+                                interrupt_rx,
+                            );
+                            async move {
+                                _ = filler
+                                    .sync()
+                                    .await
+                                    .inspect_err(|err| error!(%err, "Error in block gap filler"));
+                            }
+                        });
+                        gaps_fillers.insert(to, (pruning_point, interrupt_tx));
+                        self.gaps_filling_in_progress += 1;
+                        info!(
+                            self.gaps_filling_in_progress,
+                            "Retrying gap filling from pruning point"
+                        );
                     }
                 }
                 NotificationOrGapResult::GapFilling(GapFillingProgress::Update {
