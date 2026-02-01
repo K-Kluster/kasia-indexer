@@ -1,9 +1,13 @@
+use crate::virtual_chain_processor::CompactHeader;
 use kaspa_rpc_core::RpcBlock;
 use std::sync::Arc;
 
 #[derive(Debug)]
 pub enum BlockNotification {
-    Connected { sink: [u8; 32], pp: [u8; 32] },
+    Connected {
+        sink: [u8; 32],
+        pp_header: CompactHeader,
+    },
     Disconnected,
     Shutdown,
     Notification(Arc<RpcBlock>),
@@ -21,6 +25,9 @@ pub enum GapFillingProgress {
     Finished {
         target: [u8; 32],
         blocks: Vec<RpcBlock>,
+    },
+    Pruned {
+        target: [u8; 32],
     },
     Error {
         target: [u8; 32],

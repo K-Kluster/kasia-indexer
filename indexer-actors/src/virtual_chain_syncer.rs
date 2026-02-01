@@ -1,9 +1,10 @@
-use crate::data_source::{Command, Request};
+use crate::data_source::{Command, Request, RequestError};
 use crate::util::ToHex64;
 use crate::virtual_chain_processor::SyncVccNotification;
 use anyhow::Context;
 use futures_util::FutureExt;
-use tracing::{error, info};
+use std::time::Duration;
+use tracing::{error, info, warn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationAck {
@@ -17,6 +18,12 @@ pub struct VirtualChainSyncer {
     vcc_tx: flume::Sender<SyncVccNotification>,
     commands_tx: workflow_core::channel::Sender<Command>,
     ack_rx: workflow_core::channel::Receiver<NotificationAck>,
+}
+
+enum VirtualChainRequestOutcome {
+    Sent,
+    Pruned,
+    Stopped,
 }
 
 impl VirtualChainSyncer {
@@ -40,56 +47,78 @@ impl VirtualChainSyncer {
         let mut from = self.from;
         info!(from = %from.to_hex_64(), "Starting VirtualChainSyncer");
 
-        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-
-        self.commands_tx
-            .send(Command::Request(Request::RequestVirtualChain {
-                vc_from: from,
-                response_channel: resp_tx,
-            }))
-            .await?;
-        tokio::select! {
-            r = resp_rx => {
-                let r = r??;
-                from = r.added_chain_block_hashes.last().map(|h| h.as_bytes()).unwrap_or(from);
-                self.vcc_tx.send(SyncVccNotification::VirtualChain {syncer_id: self.syncer_id,virtual_chain: r}).context("Failed to send first virtual chain")?;
-            },
-            r = self.ack_rx.recv().fuse() => {
-                let r = r.context("Failed to receive first ack")?;
-                match r {
-                    NotificationAck::Continue => unreachable!(),
-                    NotificationAck::Stop => {
-                        return Ok(())
-                    }
-                }
+        match self.request_and_send(&mut from).await? {
+            VirtualChainRequestOutcome::Sent => {}
+            VirtualChainRequestOutcome::Pruned | VirtualChainRequestOutcome::Stopped => {
+                return Ok(());
             }
         }
         loop {
             match self.ack_rx.recv().await.context("Failed to receive ack")? {
                 NotificationAck::Stop => return Ok(()),
-                NotificationAck::Continue => {
-                    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                    self.commands_tx
-                        .send(Command::Request(Request::RequestVirtualChain {
-                            vc_from: from,
-                            response_channel: resp_tx,
-                        }))
-                        .await
-                        .context("Failed to send request")?;
-                    tokio::select! {
-                        r = resp_rx => {
-                            let r = r.context("Failed to receive response")?.context("Failed response")?;
-                            from = r.added_chain_block_hashes.last().map(|h| h.as_bytes()).unwrap_or(from);
-                            self.vcc_tx.send_async(SyncVccNotification::VirtualChain {syncer_id: self.syncer_id,virtual_chain: r}).await.context("Failed to send virtual chain")?;
-                        },
-                        r = self.ack_rx.recv().fuse() => {
-                            let r = r.context("Failed to receive ack")?;
-                            match r {
-                                NotificationAck::Continue => unreachable!(),
-                                NotificationAck::Stop => {
-                                    return Ok(())
-                                }
-                            }
+                NotificationAck::Continue => match self.request_and_send(&mut from).await? {
+                    VirtualChainRequestOutcome::Sent => {}
+                    VirtualChainRequestOutcome::Pruned | VirtualChainRequestOutcome::Stopped => {
+                        return Ok(());
+                    }
+                },
+            }
+        }
+    }
+
+    async fn request_and_send(
+        &self,
+        from: &mut [u8; 32],
+    ) -> anyhow::Result<VirtualChainRequestOutcome> {
+        loop {
+            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+            self.commands_tx
+                .send(Command::Request(Request::RequestVirtualChain {
+                    vc_from: *from,
+                    response_channel: resp_tx,
+                }))
+                .await
+                .context("Failed to send request")?;
+            tokio::select! {
+                r = resp_rx => {
+                    let r = r.context("Failed to receive response")?;
+                    match r {
+                        Ok(r) => {
+                            *from = r.added_chain_block_hashes.last().map(|h| h.as_bytes()).unwrap_or(*from);
+                            self.vcc_tx
+                                .send_async(SyncVccNotification::VirtualChain {
+                                    syncer_id: self.syncer_id,
+                                    virtual_chain: r,
+                                })
+                                .await
+                                .context("Failed to send virtual chain")?;
+                            return Ok(VirtualChainRequestOutcome::Sent);
+                        }
+                        Err(RequestError::Pruned) => {
+                            _ = self
+                                .vcc_tx
+                                .send_async(SyncVccNotification::Pruned {
+                                    syncer_id: self.syncer_id,
+                                    from: *from,
+                                    err: "pruned".to_string(),
+                                })
+                                .await;
+                            return Ok(VirtualChainRequestOutcome::Pruned);
+                        }
+                        Err(RequestError::ShuttingDown) => return Ok(VirtualChainRequestOutcome::Stopped),
+                        Err(RequestError::RpcError(err)) => {
+                            warn!(error = %err, "Virtual chain request failed, retrying");
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                            continue;
+                        }
+                    }
+                },
+                r = self.ack_rx.recv().fuse() => {
+                    let r = r.context("Failed to receive ack")?;
+                    match r {
+                        NotificationAck::Continue => unreachable!(),
+                        NotificationAck::Stop => {
+                            return Ok(VirtualChainRequestOutcome::Stopped)
                         }
                     }
                 }

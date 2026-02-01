@@ -76,21 +76,28 @@ impl BlockProcessor {
     pub fn process(&mut self) -> anyhow::Result<()> {
         info!("Block worker started");
         let mut has_first_connect = false;
-        let mut gaps_fillers = HashMap::new();
+        let mut gaps_fillers: HashMap<[u8; 32], ([u8; 32], tokio::sync::oneshot::Sender<()>)> =
+            HashMap::new();
         let mut is_shutdown = false;
         let mut last_processed_block: Option<[u8; 32]> = None;
+        let mut pruning_point_at_connect: Option<[u8; 32]> = None;
         // let mut gaps_filling_in_progress = 0;
         loop {
             match self.select_input()? {
                 NotificationOrGapResult::Notification(BlockNotification::Connected {
                     sink,
-                    pp,
+                    pp_header,
                 }) => {
-                    info!(sink = %sink.to_hex_64(), pp = %pp.to_hex_64(), "Received connection notification");
+                    info!(
+                        sink = %sink.to_hex_64(),
+                        pp = %pp_header.block_hash.to_hex_64(),
+                        "Received connection notification"
+                    );
+                    pruning_point_at_connect = Some(pp_header.block_hash);
                     if !has_first_connect {
                         has_first_connect = true;
                         info!("Handling first connection");
-                        let gaps = self.handle_first_connect(sink, pp)?;
+                        let gaps = self.handle_first_connect(sink, pp_header.block_hash)?;
                         info!(gap_count = gaps.len(), "Found gaps to fill");
                         gaps_fillers = gaps
                             .into_iter()
@@ -110,7 +117,7 @@ impl BlockProcessor {
                                         );
                                     }
                                 });
-                                (gap.to_block, interrupt_tx)
+                                (gap.to_block, (gap.from_block, interrupt_tx))
                             })
                             .collect();
                         self.gaps_filling_in_progress = gaps_fillers.len();
@@ -134,33 +141,33 @@ impl BlockProcessor {
                                     .inspect_err(|err| error!(%err, "Error in block gap filler"));
                             }
                         });
-                        gaps_fillers.insert(sink, interrupt_tx);
+                        gaps_fillers.insert(sink, (last_processed_block, interrupt_tx));
                         self.gaps_filling_in_progress += 1;
                         info!(self.gaps_filling_in_progress, "New block gap added");
                     }
                 }
                 NotificationOrGapResult::Notification(BlockNotification::Disconnected) => {
                     info!("Received disconnection notification, stopping gap fillers");
-                    std::mem::take(&mut gaps_fillers)
-                        .into_iter()
-                        .for_each(|(_to, interrupt_tx)| {
+                    std::mem::take(&mut gaps_fillers).into_iter().for_each(
+                        |(_to, (_from, interrupt_tx))| {
                             info!("send interruption signal");
                             let _ = interrupt_tx.send(()).inspect_err(|_err| {
                                 error!("Error sending interrupt to block gap filler")
                             });
-                        })
+                        },
+                    )
                 }
                 NotificationOrGapResult::Notification(BlockNotification::Shutdown) => {
                     info!("Received shutdown notification");
                     is_shutdown = true;
-                    std::mem::take(&mut gaps_fillers)
-                        .into_iter()
-                        .for_each(|(_to, interrupt_tx)| {
+                    std::mem::take(&mut gaps_fillers).into_iter().for_each(
+                        |(_to, (_from, interrupt_tx))| {
                             info!("send interruption signal");
                             let _ = interrupt_tx.send(()).inspect_err(|_err| {
                                 error!("Error sending interrupt to block gap filler")
                             });
-                        })
+                        },
+                    )
                 }
                 NotificationOrGapResult::Notification(BlockNotification::Notification(block)) => {
                     let hash = block.header.hash.as_bytes();
@@ -202,6 +209,67 @@ impl BlockProcessor {
                     error!(to = %to.to_hex_64(), %err, "Error in block gap filler");
                     gaps_fillers.remove(&to);
                     self.gaps_filling_in_progress -= 1;
+                }
+                NotificationOrGapResult::GapFilling(GapFillingProgress::Pruned { target: to }) => {
+                    info!(to = %to.to_hex_64(), "Gap filler hit pruned data");
+                    let from = gaps_fillers.remove(&to).map(|(from, _)| from);
+                    self.gaps_filling_in_progress -= 1;
+                    if !is_shutdown
+                        && let (Some(pruning_point), Some(from_block)) =
+                            (pruning_point_at_connect, from)
+                        && from_block != pruning_point
+                    {
+                        info!(
+                            from = %from_block.to_hex_64(),
+                            pp = %pruning_point.to_hex_64(),
+                            to = %to.to_hex_64(),
+                            "Gap fill failed, retrying from pruning point"
+                        );
+                        loop {
+                            let mut wtx = self.tx_keyspace.write_tx()?;
+
+                            // change the gap in case of a recovery, starting from pruning point
+                            // TODO: this isn't reliable as pp might move on the next block filling task
+                            //       find a way to either trigger is now (synced) or maybe let a handler fetch pp on the fly
+                            //     => important thing is to stop trying to fill gaps we cannot fill (lost)
+                            self.blocks_gap_partition.remove_gap_wtx(&mut wtx, &to);
+                            self.blocks_gap_partition.add_gap_wtx(
+                                &mut wtx,
+                                indexer_db::headers::block_gaps::BlockGap {
+                                    from: pruning_point,
+                                    to,
+                                },
+                            );
+                            if wtx.commit()?.is_ok() {
+                                break;
+                            } else {
+                                warn!("Conflict detected while updating gap after error");
+                            }
+                        }
+
+                        let (interrupt_tx, interrupt_rx) = tokio::sync::oneshot::channel();
+                        self.runtime_handle.spawn({
+                            let filler = BlockGapFiller::new(
+                                pruning_point,
+                                to,
+                                self.gap_result_tx.clone(),
+                                self.command_tx.clone(),
+                                interrupt_rx,
+                            );
+                            async move {
+                                _ = filler
+                                    .sync()
+                                    .await
+                                    .inspect_err(|err| error!(%err, "Error in block gap filler"));
+                            }
+                        });
+                        gaps_fillers.insert(to, (pruning_point, interrupt_tx));
+                        self.gaps_filling_in_progress += 1;
+                        info!(
+                            self.gaps_filling_in_progress,
+                            "Retrying gap filling from pruning point"
+                        );
+                    }
                 }
                 NotificationOrGapResult::GapFilling(GapFillingProgress::Update {
                     target: to,

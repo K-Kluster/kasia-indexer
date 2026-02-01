@@ -1,4 +1,5 @@
 use crate::block_processor::BlockNotification;
+use crate::virtual_chain_processor::CompactHeader;
 use crate::virtual_chain_processor::RealTimeVccNotification;
 use anyhow::Context;
 use futures_util::future::FutureExt;
@@ -149,13 +150,18 @@ impl DataSource {
             .await?
             .header
             .blue_work;
+        let pp_block = self
+            .rpc_client
+            .get_block(info.pruning_point_hash, false)
+            .await?;
+        let pp_header: CompactHeader = (&pp_block.header).into();
         self.connected = true;
         let pair = futures_util::future::join(
             async {
                 self.block_sender
                     .send_async(BlockNotification::Connected {
                         sink: info.sink.as_bytes(),
-                        pp: info.pruning_point_hash.as_bytes(),
+                        pp_header,
                     })
                     .await
                     .context("block handler connect send failed")
@@ -165,7 +171,7 @@ impl DataSource {
                     .send_async(RealTimeVccNotification::Connected {
                         sink: info.sink.as_bytes(),
                         sink_blue_work,
-                        pp: info.pruning_point_hash.as_bytes(),
+                        pp_header,
                     })
                     .await
                     .context("vcc handler connect send failed")
@@ -448,8 +454,13 @@ impl DataSource {
                                 });
                             }
                             Err(e) => {
+                                let err = if is_pruned_error(&e) {
+                                    RequestError::Pruned
+                                } else {
+                                    RequestError::RpcError(e)
+                                };
                                 _ = response_channel
-                                    .send(Err(e.into()))
+                                    .send(Err(err))
                                     .inspect_err(|_err| error!("sending blocks result err"));
                             }
                         }
@@ -521,8 +532,13 @@ impl DataSource {
                                     });
                             }
                             Err(e) => {
+                                let err = if is_pruned_error(&e) {
+                                    RequestError::Pruned
+                                } else {
+                                    RequestError::RpcError(e)
+                                };
                                 _ = response_channel
-                                    .send(Err(e.into()))
+                                    .send(Err(err))
                                     .inspect_err(|_err| error!("sending vcc result err"));
                             }
                         }
@@ -564,6 +580,14 @@ pub enum Request {
 pub enum RequestError {
     #[error("Shutting down")]
     ShuttingDown,
+    #[error("Pruned block data unavailable")]
+    Pruned,
     #[error("RPC error: {0}")]
     RpcError(#[from] workflow_rpc::client::error::Error),
+}
+
+fn is_pruned_error(err: &workflow_rpc::client::error::Error) -> bool {
+    err.to_string()
+        .to_lowercase()
+        .contains("cannot find header")
 }

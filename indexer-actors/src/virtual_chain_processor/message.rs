@@ -9,7 +9,7 @@ pub enum RealTimeVccNotification {
     Connected {
         sink: [u8; 32],
         sink_blue_work: BlueWorkType,
-        pp: [u8; 32],
+        pp_header: CompactHeader,
     },
     Disconnected,
     Shutdown,
@@ -26,6 +26,11 @@ pub enum SyncVccNotification {
     VirtualChain {
         syncer_id: u64,
         virtual_chain: GetVirtualChainFromBlockResponse,
+    },
+    Pruned {
+        syncer_id: u64,
+        from: [u8; 32],
+        err: String,
     },
     Stopped {
         syncer_id: u64,
