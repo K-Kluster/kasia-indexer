@@ -536,10 +536,14 @@ impl VirtualProcessor {
         }
 
         self.record_acceptance_gap(cursor.block_hash, from_daa, pruning_point, to_daa)?;
-        let (cleared_blocks, cleared_txs) = self.purge_acceptance_gap_data(from_daa, to_daa)?;
+
+        let PurgeAcceptanceGapReport {
+            block_count,
+            txs_count,
+        } = self.purge_acceptance_gap_data(from_daa, to_daa)?;
         info!(
             from_daa,
-            to_daa, cleared_blocks, cleared_txs, "Acceptance recovery cleanup completed"
+            to_daa, block_count, txs_count, "Acceptance recovery cleanup completed"
         );
 
         let new_syncer_id = syncer_id + 1;
@@ -592,7 +596,11 @@ impl VirtualProcessor {
 
     // TODO: I'm not convinced by the introduced complexity here
     // I assume the number of data here should be low
-    fn purge_acceptance_gap_data(&self, from_daa: u64, to_daa: u64) -> anyhow::Result<(u64, u64)> {
+    fn purge_acceptance_gap_data(
+        &self,
+        from_daa: u64,
+        to_daa: u64,
+    ) -> anyhow::Result<PurgeAcceptanceGapReport> {
         if from_daa > to_daa {
             anyhow::bail!("Invalid acceptance gap range (from_daa {from_daa} > to_daa {to_daa})");
         }
@@ -610,13 +618,18 @@ impl VirtualProcessor {
         drop(rtx);
 
         if blocks.is_empty() {
-            return Ok((0, 0));
+            return Ok(PurgeAcceptanceGapReport {
+                block_count: 0,
+                txs_count: 0,
+            });
         }
 
         let mut cleared_blocks = 0u64;
         let mut cleared_txs = 0u64;
         const BATCH: usize = 256;
         for chunk in blocks.chunks(BATCH) {
+            const MAX_RETRY_CIRCUIT_BREAKER: u8 = u8::MAX;
+            let mut iteration_count = 0;
             loop {
                 let mut wtx = self.tx_keyspace.write_tx()?;
                 let mut chunk_blocks = 0u64;
@@ -654,10 +667,24 @@ impl VirtualProcessor {
                 } else {
                     debug!("Conflict detected while clearing acceptance window");
                 }
+
+                if iteration_count == MAX_RETRY_CIRCUIT_BREAKER {
+                    // not sure how to handle this.
+                    // throwing or not: will leave dangling data
+                    anyhow::bail!(
+                        "Failed to clear acceptance window after {} tries.",
+                        MAX_RETRY_CIRCUIT_BREAKER
+                    );
+                }
+
+                iteration_count += 1;
             }
         }
 
-        Ok((cleared_blocks, cleared_txs))
+        Ok(PurgeAcceptanceGapReport {
+            block_count: cleared_blocks,
+            txs_count: cleared_txs,
+        })
     }
 
     fn spawn_syncer(&self, syncer_id: u64, from: [u8; 32]) -> Sender<NotificationAck> {
@@ -1119,6 +1146,11 @@ impl From<Cursor> for DbCursor {
             daa_score: value.daa_score.into(),
         }
     }
+}
+
+struct PurgeAcceptanceGapReport {
+    pub block_count: u64,
+    pub txs_count: u64,
 }
 
 type DaaScore = u64;
