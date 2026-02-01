@@ -74,6 +74,14 @@ impl BlockGapFiller {
                 }))
                 .await?;
             match rx.await? {
+                Err(RequestError::Pruned) => {
+                    self.gap_result_tx
+                        .send_async(GapFillingProgress::Pruned {
+                            target: self.target_block,
+                        })
+                        .await?;
+                    return Ok(());
+                }
                 Err(RequestError::RpcError(err)) => {
                     self.gap_result_tx
                         .send_async(GapFillingProgress::Error {

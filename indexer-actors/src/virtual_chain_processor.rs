@@ -4,6 +4,7 @@ use crate::data_source::{Command, Request};
 use crate::util::ToHex64;
 use crate::virtual_chain_syncer::{NotificationAck, VirtualChainSyncer};
 use fjall::{TxKeyspace, WriteTransaction};
+use indexer_db::headers::daa_index::DaaIndexPartition;
 use indexer_db::messages::contextual_message::{
     ContextualMessageBySenderKey, ContextualMessageBySenderPartition,
 };
@@ -16,6 +17,9 @@ use indexer_db::messages::payment::{
 };
 use indexer_db::messages::self_stash::{SelfStashByOwnerPartition, SelfStashKeyByOwner};
 use indexer_db::metadata::{Cursor as DbCursor, MetadataPartition};
+use indexer_db::processing::acceptance_gaps::{
+    AcceptanceGap as DbAcceptanceGap, AcceptanceGapsPartition,
+};
 use indexer_db::processing::accepting_block_to_txs::AcceptingBlockToTxIDPartition;
 use indexer_db::processing::pending_senders::{
     PendingResolutionKey, PendingSenderResolutionPartition,
@@ -47,6 +51,8 @@ pub struct VirtualProcessor {
 
     tx_keyspace: TxKeyspace,
     metadata_partition: MetadataPartition,
+    acceptance_gaps_partition: AcceptanceGapsPartition,
+    daa_index_partition: DaaIndexPartition,
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
     accepting_block_to_tx_id_partition: AcceptingBlockToTxIDPartition,
     pending_sender_resolution_partition: PendingSenderResolutionPartition,
@@ -82,6 +88,8 @@ struct StateShared {
     processed_blocks: ringmap::RingMap<[u8; 32], (DaaScore, BlueWorkType)>, // when we get synced keep only blocks in ~10 mins interval. realloc it
     realtime_queue_vcc: VecDeque<VirtualChainChangedNotification>, // perform realloc when sync is finished if queue is too big
     processed_time_or_warn: std::time::Instant,
+    /// initialized only once on connect, used in case of recovery when we missed past pp data
+    pruning_point_at_startup: Option<CompactHeader>,
 }
 
 impl StateShared {
@@ -108,6 +116,7 @@ impl StateShared {
             processed_blocks,
             realtime_queue_vcc: VecDeque::new(),
             processed_time_or_warn: Instant::now(),
+            pruning_point_at_startup: None,
         }
     }
 }
@@ -142,10 +151,14 @@ impl VirtualProcessor {
                 ProcessedBlockOrVccOrSyncer::Vcc(RealTimeVccNotification::Connected {
                     sink,
                     sink_blue_work,
-                    pp,
+                    pp_header,
                 }) => {
-                    info!(sink = %sink.to_hex_64(), pp = %pp.to_hex_64(), "Received VCC connection notification");
-                    self.handle_connect(state, sink, sink_blue_work, pp)?;
+                    info!(
+                        sink = %sink.to_hex_64(),
+                        pp = %pp_header.block_hash.to_hex_64(),
+                        "Received VCC connection notification"
+                    );
+                    self.handle_connect(state, sink, sink_blue_work, pp_header)?;
                 }
                 ProcessedBlockOrVccOrSyncer::Vcc(RealTimeVccNotification::Disconnected) => {
                     info!("Received VCC disconnection notification");
@@ -158,6 +171,24 @@ impl VirtualProcessor {
                     debug!(syncer_id, "Received syncer virtual chain notification");
                     self.handle_syncer_vc(state, syncer_id, virtual_chain)?;
                     // todo: process real time queue if get synced
+                }
+                ProcessedBlockOrVccOrSyncer::Syncer(SyncVccNotification::Pruned {
+                    syncer_id,
+                    from,
+                    err,
+                }) => {
+                    warn!(
+                        syncer_id,
+                        from = %from.to_hex_64(),
+                        error = %err,
+                        "Syncer reported pruned data"
+                    );
+                    let cont = self.handle_syncer_pruned(state, syncer_id, from)?;
+                    if cont {
+                        continue;
+                    } else {
+                        return Ok(());
+                    }
                 }
                 ProcessedBlockOrVccOrSyncer::Vcc(RealTimeVccNotification::Shutdown) => {
                     info!("Received VCC shutdown notification");
@@ -216,8 +247,9 @@ impl VirtualProcessor {
         state: &mut State,
         sink: [u8; 32],
         sink_blue_work: BlueWorkType,
-        pp: [u8; 32],
+        pp_header: CompactHeader,
     ) -> anyhow::Result<()> {
+        state.shared_state.pruning_point_at_startup = Some(pp_header);
         debug!("Handling virtual chain connection, requesting all pending senders");
         match &mut state.sync_state {
             SyncState::Initial => {
@@ -238,10 +270,11 @@ impl VirtualProcessor {
                 debug!(last_accepting_block = ?last_accepting_block, "Checked last accepting block from database");
                 match last_accepting_block {
                     None => {
-                        info!(pp = %pp.to_hex_64(), "No last accepting block, starting sync from pruning point");
-                        let syncer = self.spawn_syncer(0, pp);
+                        let pp_hash = pp_header.block_hash;
+                        info!(pp = %pp_hash.to_hex_64(), "No last accepting block, starting sync from pruning point");
+                        let syncer = self.spawn_syncer(0, pp_hash);
                         state.sync_state = SyncState::Syncing {
-                            last_accepting_block: (pp, Default::default()),
+                            last_accepting_block: (pp_hash, Default::default()),
                             syncer,
                             syncer_id: 0,
                             target_block: (sink, sink_blue_work),
@@ -455,6 +488,176 @@ impl VirtualProcessor {
             // ignore previous syncers
             _ => Ok(true),
         }
+    }
+
+    /// If: vcc is syncing, syncer is noted as in progress by state, app isn't shutting down
+    ///     pruning point is known
+    /// Then, try to recover:
+    ///     record the acceptance gap, clear acceptance data in that range,
+    ///     and start a new vcc syncer from pp
+    /// TODO: same as block processor: this isn't reliable as pp might move on the next block filling task
+    fn handle_syncer_pruned(
+        &self,
+        state: &mut State,
+        syncer_id: u64,
+        from: [u8; 32],
+    ) -> anyhow::Result<Continue> {
+        let (current_syncer_id, (target_hash, target_blue_work)) = match &state.sync_state {
+            SyncState::Syncing {
+                syncer_id,
+                target_block,
+                ..
+            } => (*syncer_id, *target_block),
+            _ => return Ok(true),
+        };
+        if syncer_id != current_syncer_id {
+            return Ok(true);
+        }
+        if state.shared_state.shutting_down {
+            return Ok(false);
+        }
+        let Some(pruning_point_header) = state.shared_state.pruning_point_at_startup else {
+            anyhow::bail!("Cannot recover from pruned sync: pruning point header missing");
+        };
+
+        let latest_cursor = self
+            .metadata_partition
+            .get_latest_accepting_block_cursor()?;
+        let Some(cursor) = latest_cursor else {
+            anyhow::bail!("Cannot recover from pruned sync: latest accepting cursor missing");
+        };
+        let from_daa = cursor.daa_score.get();
+        let pruning_point = pruning_point_header.block_hash;
+        let to_daa = pruning_point_header.daa_score;
+        if to_daa < from_daa {
+            anyhow::bail!(
+                "Cannot recover from pruned sync: invalid gap range (from_daa {from_daa} > to_daa {to_daa})"
+            );
+        }
+
+        self.record_acceptance_gap(cursor.block_hash, from_daa, pruning_point, to_daa)?;
+        let (cleared_blocks, cleared_txs) = self.purge_acceptance_gap_data(from_daa, to_daa)?;
+        info!(
+            from_daa,
+            to_daa, cleared_blocks, cleared_txs, "Acceptance recovery cleanup completed"
+        );
+
+        let new_syncer_id = syncer_id + 1;
+        let syncer = self.spawn_syncer(new_syncer_id, pruning_point_header.block_hash);
+        state.shared_state.realtime_queue_vcc.clear();
+        state.shared_state.processed_time_or_warn = Instant::now();
+        state.sync_state = SyncState::Syncing {
+            last_accepting_block: (pruning_point_header.block_hash, Default::default()),
+            syncer,
+            syncer_id: new_syncer_id,
+            target_block: (target_hash, target_blue_work),
+            sync_queue: None,
+        };
+        info!(
+            from = %from.to_hex_64(),
+            pp = %pruning_point_header.block_hash.to_hex_64(),
+            "Restarted syncer from pruning point after error"
+        );
+        Ok(true)
+    }
+
+    fn record_acceptance_gap(
+        &self,
+        from_hash: [u8; 32],
+        from_daa: u64,
+        to_hash: [u8; 32],
+        to_daa: u64,
+    ) -> anyhow::Result<()> {
+        loop {
+            let mut wtx = self.tx_keyspace.write_tx()?;
+            self.acceptance_gaps_partition.add_gap_wtx(
+                &mut wtx,
+                DbAcceptanceGap {
+                    from_daa,
+                    to_daa,
+                    from_block_hash: from_hash,
+                    to_block_hash: to_hash,
+                },
+            );
+            self.metadata_partition
+                .remove_latest_accepting_block_cursor(&mut wtx)?;
+            if wtx.commit()?.is_ok() {
+                break;
+            } else {
+                debug!("Conflict detected while persisting acceptance gap");
+            }
+        }
+        Ok(())
+    }
+
+    // TODO: I'm not convinced by the introduced complexity here
+    // I assume the number of data here should be low
+    fn purge_acceptance_gap_data(&self, from_daa: u64, to_daa: u64) -> anyhow::Result<(u64, u64)> {
+        if from_daa > to_daa {
+            anyhow::bail!("Invalid acceptance gap range (from_daa {from_daa} > to_daa {to_daa})");
+        }
+        let rtx = self.tx_keyspace.read_tx();
+        let mut blocks = Vec::new();
+        let upper = to_daa.saturating_add(1);
+        for key in self.daa_index_partition.iter_lt(&rtx, upper) {
+            let key = key?;
+            let daa = key.daa_score.get();
+            if daa < from_daa {
+                continue;
+            }
+            blocks.push((daa, key.block_hash));
+        }
+        drop(rtx);
+
+        if blocks.is_empty() {
+            return Ok((0, 0));
+        }
+
+        let mut cleared_blocks = 0u64;
+        let mut cleared_txs = 0u64;
+        const BATCH: usize = 256;
+        for chunk in blocks.chunks(BATCH) {
+            loop {
+                let mut wtx = self.tx_keyspace.write_tx()?;
+                let mut chunk_blocks = 0u64;
+                let mut chunk_txs = 0u64;
+                for (daa, block_hash) in chunk {
+                    let Some(tracked_tx_ids) = self
+                        .accepting_block_to_tx_id_partition
+                        .remove_wtx(&mut wtx, block_hash)?
+                    else {
+                        continue;
+                    };
+                    chunk_blocks += 1;
+                    for tx_id in tracked_tx_ids.as_ref() {
+                        let Some(key) = self.tx_id_to_acceptance_partition.key_by_tx_id(tx_id)?
+                        else {
+                            continue;
+                        };
+                        let _ = self
+                            .tx_id_to_acceptance_partition
+                            .clear_acceptance_wtx(&mut wtx, &key)?;
+                        self.pending_sender_resolution_partition.remove_wtx(
+                            &mut wtx,
+                            &PendingResolutionKey {
+                                accepting_daa_score: (*daa).into(),
+                                tx_id: *tx_id,
+                            },
+                        );
+                        chunk_txs += 1;
+                    }
+                }
+                if wtx.commit()?.is_ok() {
+                    cleared_blocks += chunk_blocks;
+                    cleared_txs += chunk_txs;
+                    break;
+                } else {
+                    debug!("Conflict detected while clearing acceptance window");
+                }
+            }
+        }
+
+        Ok((cleared_blocks, cleared_txs))
     }
 
     fn spawn_syncer(&self, syncer_id: u64, from: [u8; 32]) -> Sender<NotificationAck> {

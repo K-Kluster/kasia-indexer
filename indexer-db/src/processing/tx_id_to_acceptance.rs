@@ -166,6 +166,27 @@ impl TxIDToAcceptancePartition {
         })
     }
 
+    pub fn clear_acceptance_wtx(
+        &self,
+        wtx: &mut WriteTransaction,
+        k: &AcceptanceKey,
+    ) -> anyhow::Result<LookupOutput> {
+        let old_value = wtx.fetch_update(&self.0, k.as_bytes(), |old_value| {
+            let old_value = old_value?;
+            let mut v = Vec::with_capacity(old_value.len());
+            v.extend_from_slice(AcceptanceValueHeader::new_zeroed().as_bytes());
+            v.extend_from_slice(old_value[size_of::<AcceptanceValueHeader>()..].as_ref());
+            Some(v.into())
+        })?;
+        Ok(match old_value {
+            None => LookupOutput::KeyDoesNotExist,
+            Some(value) if value.len() > size_of::<AcceptanceValueHeader>() => {
+                LookupOutput::KeysExistsWithEntries
+            }
+            Some(_) => LookupOutput::KeyExistsNoEntries,
+        })
+    }
+
     pub fn resolve_entries_wtx(
         &self,
         wtx: &mut WriteTransaction,

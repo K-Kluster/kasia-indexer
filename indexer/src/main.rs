@@ -26,6 +26,7 @@ use indexer_db::messages::self_stash::{SelfStashByOwnerPartition, TxIdToSelfStas
 use indexer_db::metadata::MetadataPartition;
 use indexer_db::migration::apply_migrations;
 use indexer_db::processing::accepting_block_to_txs::AcceptingBlockToTxIDPartition;
+use indexer_db::processing::acceptance_gaps::AcceptanceGapsPartition;
 use indexer_db::processing::pending_senders::PendingSenderResolutionPartition;
 use indexer_db::processing::tx_id_to_acceptance::TxIDToAcceptancePartition;
 use kaspa_rpc_core::RpcBlueWorkType;
@@ -82,6 +83,7 @@ async fn main() -> anyhow::Result<()> {
     let tx_id_to_acceptance_partition = TxIDToAcceptancePartition::new(&tx_keyspace)?;
     let block_compact_header_partition = BlockCompactHeaderPartition::new(&tx_keyspace)?;
     let acceptance_to_tx_id_partition = AcceptingBlockToTxIDPartition::new(&tx_keyspace)?;
+    let acceptance_gaps_partition = AcceptanceGapsPartition::new(&tx_keyspace)?;
     let pending_sender_resolution_partition = PendingSenderResolutionPartition::new(&tx_keyspace)?;
     let handshake_by_sender_partition = HandshakeBySenderPartition::new(&tx_keyspace)?;
     let payment_by_sender_partition = PaymentBySenderPartition::new(&tx_keyspace)?;
@@ -164,6 +166,8 @@ async fn main() -> anyhow::Result<()> {
         .command_tx(command_channel.sender.clone())
         .tx_keyspace(tx_keyspace.clone())
         .metadata_partition(metadata_partition.clone())
+        .acceptance_gaps_partition(acceptance_gaps_partition.clone())
+        .daa_index_partition(block_daa_index_partition.clone())
         .tx_id_to_acceptance_partition(tx_id_to_acceptance_partition.clone())
         .accepting_block_to_tx_id_partition(acceptance_to_tx_id_partition.clone())
         .pending_sender_resolution_partition(pending_sender_resolution_partition.clone())
