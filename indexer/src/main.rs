@@ -25,8 +25,8 @@ use indexer_db::messages::payment::{
 use indexer_db::messages::self_stash::{SelfStashByOwnerPartition, TxIdToSelfStashPartition};
 use indexer_db::metadata::MetadataPartition;
 use indexer_db::migration::apply_migrations;
-use indexer_db::processing::accepting_block_to_txs::AcceptingBlockToTxIDPartition;
 use indexer_db::processing::acceptance_gaps::AcceptanceGapsPartition;
+use indexer_db::processing::accepting_block_to_txs::AcceptingBlockToTxIDPartition;
 use indexer_db::processing::pending_senders::PendingSenderResolutionPartition;
 use indexer_db::processing::tx_id_to_acceptance::TxIDToAcceptancePartition;
 use kaspa_rpc_core::RpcBlueWorkType;
