@@ -6,6 +6,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
+use indexer_actors::metrics::SharedMetrics;
 use indexer_db::AddressPayload;
 use indexer_db::messages::self_stash::{SelfStashByOwnerPartition, TxIdToSelfStashPartition};
 use indexer_db::processing::tx_id_to_acceptance::TxIDToAcceptancePartition;
@@ -21,6 +22,7 @@ pub struct SelfStashApi {
     self_stash_by_owner_partition: SelfStashByOwnerPartition,
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
     tx_id_to_self_stash_partition: TxIdToSelfStashPartition,
+    metrics: SharedMetrics,
     context: IndexerContext,
 }
 
@@ -30,6 +32,7 @@ impl SelfStashApi {
         self_stash_by_owner_partition: SelfStashByOwnerPartition,
         tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
         tx_id_to_self_stash_partition: TxIdToSelfStashPartition,
+        metrics: SharedMetrics,
         context: IndexerContext,
     ) -> Self {
         Self {
@@ -37,6 +40,7 @@ impl SelfStashApi {
             self_stash_by_owner_partition,
             tx_id_to_acceptance_partition,
             tx_id_to_self_stash_partition,
+            metrics,
             context,
         }
     }
@@ -135,6 +139,8 @@ async fn get_self_stash_by_owner(
         }
     };
 
+    let metrics = state.metrics.clone();
+    let db_read_started = std::time::Instant::now();
     let result = spawn_blocking(move || {
         let rtx = state.tx_keyspace.read_tx();
         let mut seen_tx_ids = HashSet::with_capacity(limit);
@@ -185,6 +191,13 @@ async fn get_self_stash_by_owner(
             .flatten()
     })
     .await;
+    metrics.increment_db_read_ops_total(1);
+    metrics.increment_db_read_time_ms_total(
+        db_read_started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+    );
+    if result.as_ref().is_err() || matches!(&result, Ok(Err(_))) {
+        metrics.increment_db_errors_total();
+    }
 
     match result {
         Ok(Ok(messages)) => Ok(Json(messages)),

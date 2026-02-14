@@ -31,6 +31,7 @@ rayon = "1.11.0"
 ringmap = "0.1.4"
 rolling-file = "0.2.0"
 serde = "1.0"
+serde_json = "1.0"
 smallvec = { version = "1.15.1", features = ["const_generics"] }
 thiserror = "2.0.12"
 time = "0.3.41"
@@ -48,6 +49,17 @@ dotenv = "0.15.0"
 zerocopy = "0.8.26"
 envy = "0.4"
 itertools = "0.14.0"
+jsonwebtoken = "9.3.1"
+reqwest = { version = "0.12.12", default-features = false, features = [
+    "http2",
+    "json",
+    "rustls-tls",
+] }
+secp256k1 = "0.29.1"
+sha2 = "0.10.9"
+rand = "0.8.5"
+base64 = "0.22.1"
+ring = "0.17.14"
 
 protocol = { path = "protocol" }
 

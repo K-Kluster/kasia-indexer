@@ -1,0 +1,21 @@
+services:
+  kaspa-node:
+    restart: always
+    stdin_open: true
+    tty: true
+    image: docker.io/supertypo/rusty-kaspad:latest
+    command: kaspad --disable-upnp --rpclisten-borsh=0.0.0.0:17110 --yes
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    ports:
+      - 0.0.0.0:16111:16111
+      - 127.0.0.1:16110:16110
+      - 127.0.0.1:17110:17110
+      - 127.0.0.1:18110:18110
+    volumes:
+      - kaspad-data:/app/data
+
+volumes:
+  kaspad-data:

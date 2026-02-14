@@ -94,6 +94,7 @@ pub enum SealedOperation<'a> {
      */
     ContextualMessageV1(SealedContextualMessageV1<'a>),
     /**
+     * "ciph_msg:1:pay:{{SealedPayment_as_json_string_as_hex}}"
      * "ciph_msg:1:payment:{{SealedPayment_as_json_string_as_hex}}"
      */
     PaymentV1(SealedPaymentV1<'a>),

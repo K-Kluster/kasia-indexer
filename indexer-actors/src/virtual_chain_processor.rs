@@ -1,20 +1,25 @@
 pub mod message;
 
 use crate::data_source::{Command, Request};
+use crate::push::{PushEvent, PushEventKind, parse_self_stash_alias};
 use crate::util::ToHex64;
 use crate::virtual_chain_syncer::{NotificationAck, VirtualChainSyncer};
 use fjall::{TxKeyspace, WriteTransaction};
 use indexer_db::messages::contextual_message::{
     ContextualMessageBySenderKey, ContextualMessageBySenderPartition,
+    TxIdToContextualMessagePartition,
 };
 use indexer_db::messages::handshake::{
     HandshakeByReceiverPartition, HandshakeBySenderPartition, HandshakeKeyByReceiver,
-    HandshakeKeyBySender,
+    HandshakeKeyBySender, TxIdToHandshakePartition,
 };
 use indexer_db::messages::payment::{
     PaymentByReceiverPartition, PaymentBySenderPartition, PaymentKeyByReceiver, PaymentKeyBySender,
+    TxIdToPaymentPartition,
 };
-use indexer_db::messages::self_stash::{SelfStashByOwnerPartition, SelfStashKeyByOwner};
+use indexer_db::messages::self_stash::{
+    SelfStashByOwnerPartition, SelfStashKeyByOwner, TxIdToSelfStashPartition,
+};
 use indexer_db::metadata::{Cursor as DbCursor, MetadataPartition};
 use indexer_db::processing::accepting_block_to_txs::AcceptingBlockToTxIDPartition;
 use indexer_db::processing::pending_senders::{
@@ -23,7 +28,7 @@ use indexer_db::processing::pending_senders::{
 use indexer_db::processing::tx_id_to_acceptance::{
     Action, LookupOutput, TxIDToAcceptancePartition,
 };
-use indexer_db::{AddressPayload, PartitionId, TryFromBytes};
+use indexer_db::{AddressPayload, IntoBytes, PartitionId, TryFromBytes};
 use kaspa_consensus_core::BlueWorkType;
 use kaspa_rpc_core::{
     GetVirtualChainFromBlockResponse, RpcAcceptedTransactionIds, RpcAddress, RpcHash,
@@ -59,8 +64,14 @@ pub struct VirtualProcessor {
 
     payment_by_receiver_partition: PaymentByReceiverPartition,
     payment_by_sender_partition: PaymentBySenderPartition,
+    tx_id_to_payment_partition: TxIdToPaymentPartition,
+
+    tx_id_to_handshake_partition: TxIdToHandshakePartition,
+    tx_id_to_contextual_message_partition: TxIdToContextualMessagePartition,
+    tx_id_to_self_stash_partition: TxIdToSelfStashPartition,
 
     runtime: tokio::runtime::Handle,
+    push_tx: Option<flume::Sender<PushEvent>>,
 }
 
 struct State {
@@ -737,6 +748,8 @@ impl VirtualProcessor {
             .expect("Key must exists");
         loop {
             let mut wtx = self.tx_keyspace.write_tx()?;
+            let push_events = std::cell::RefCell::new(Vec::new());
+            let rtx = self.tx_keyspace.read_tx();
             self.pending_sender_resolution_partition.remove_wtx(
                 &mut wtx,
                 &PendingResolutionKey {
@@ -786,12 +799,31 @@ impl VirtualProcessor {
                         if !matches!(entry.action, Action::UpdateValueSender) {
                             panic!("Unexpected action")
                         }
+                        let key = HandshakeKeyByReceiver::try_ref_from_bytes(entry.key)
+                            .map_err(|_| anyhow::anyhow!("Key conversion error"))?;
+                        let payload = self
+                            .tx_id_to_handshake_partition
+                            .get_rtx(&rtx, &key.tx_id)
+                            .ok()
+                            .flatten()
+                            .map(|bytes| String::from_utf8_lossy(bytes.as_ref()).to_string());
                         self.handshake_by_receiver_partition.insert_wtx(
                             wtx,
-                            HandshakeKeyByReceiver::try_ref_from_bytes(entry.key)
-                                .map_err(|_| anyhow::anyhow!("Key conversion error"))?,
+                            key,
                             Some(sender),
                         )?;
+                        push_events.borrow_mut().push(PushEvent {
+                            kind: PushEventKind::Handshake,
+                            watched_address: key.receiver,
+                            sender,
+                            receiver: key.receiver,
+                            alias: None,
+                            tx_id: key.tx_id,
+                            amount: None,
+                            payload,
+                            timestamp: key.block_time.into(),
+                            daa_score: daa,
+                        });
                         Ok(())
                     }
                     PartitionId::HandshakeBySender => {
@@ -813,18 +845,69 @@ impl VirtualProcessor {
                         key.sender = sender;
                         self.contextual_message_by_sender_partition
                             .insert(wtx, &key);
+                        let payload = self
+                            .tx_id_to_contextual_message_partition
+                            .get_rtx(&rtx, &key.tx_id)
+                            .ok()
+                            .flatten()
+                            .map(|bytes| String::from_utf8_lossy(bytes.as_ref()).to_string());
+                        let alias_len = key
+                            .alias
+                            .iter()
+                            .position(|byte| *byte == 0)
+                            .unwrap_or(key.alias.len());
+                        let alias = String::from_utf8_lossy(&key.alias[..alias_len]).to_string();
+                        push_events.borrow_mut().push(PushEvent {
+                            kind: PushEventKind::Contextual,
+                            watched_address: sender,
+                            sender,
+                            receiver: key.receiver,
+                            alias: Some(alias),
+                            tx_id: key.tx_id,
+                            amount: None,
+                            payload,
+                            timestamp: key.block_time.into(),
+                            daa_score: daa,
+                        });
                         Ok(())
                     }
                     PartitionId::PaymentByReceiver => {
                         if !matches!(entry.action, Action::UpdateValueSender) {
                             panic!("Unexpected action")
                         }
+                        let key = PaymentKeyByReceiver::try_ref_from_bytes(entry.key)
+                            .map_err(|_| anyhow::anyhow!("Key conversion error"))?;
+                        let payment = self
+                            .tx_id_to_payment_partition
+                            .get_rtx(&rtx, &key.tx_id)
+                            .ok()
+                            .flatten();
+                        let amount = payment.as_ref().map(|data| data.amount());
+                        let payload = payment
+                            .as_ref()
+                            .map(|data| String::from_utf8_lossy(data.sealed_hex()).to_string());
                         self.payment_by_receiver_partition.insert_wtx(
                             wtx,
-                            PaymentKeyByReceiver::try_ref_from_bytes(entry.key)
-                                .map_err(|_| anyhow::anyhow!("Key conversion error"))?,
+                            key,
                             Some(sender),
-                        )
+                        )?;
+                        if sender != key.receiver {
+                            push_events.borrow_mut().push(PushEvent {
+                                kind: PushEventKind::Payment,
+                                watched_address: key.receiver,
+                                sender,
+                                receiver: key.receiver,
+                                alias: None,
+                                tx_id: key.tx_id,
+                                amount,
+                                payload,
+                                timestamp: key.block_time.into(),
+                                daa_score: daa,
+                            });
+                        } else {
+                            trace!(sender = ?sender, "Skipping payment push: receiver matches sender");
+                        }
+                        Ok(())
                     }
                     PartitionId::PaymentBySender => {
                         if !matches!(entry.action, Action::InsertByKeySender) {
@@ -843,13 +926,39 @@ impl VirtualProcessor {
                         let mut key = SelfStashKeyByOwner::try_read_from_bytes(entry.key)
                             .map_err(|_| anyhow::anyhow!("Key conversion error"))?;
                         key.owner = sender;
+                        let self_stash_alias = parse_self_stash_alias(key.scope.as_bytes());
                         self.self_stash_by_owner_partition.insert_wtx(wtx, &key);
+                        let payload = self
+                            .tx_id_to_self_stash_partition
+                            .get_rtx(&rtx, &key.tx_id)
+                            .ok()
+                            .flatten()
+                            .map(|bytes| String::from_utf8_lossy(bytes.as_ref()).to_string());
+                        push_events.borrow_mut().push(PushEvent {
+                            kind: PushEventKind::SelfStash,
+                            watched_address: sender,
+                            sender,
+                            receiver: AddressPayload::default(),
+                            alias: self_stash_alias,
+                            tx_id: key.tx_id,
+                            amount: None,
+                            payload,
+                            timestamp: key.block_time.into(),
+                            daa_score: daa,
+                        });
                         Ok(())
                     }
                 },
             )?;
 
             if wtx.commit()?.is_ok() {
+                if let Some(push_tx) = &self.push_tx {
+                    for event in push_events.into_inner() {
+                        if let Err(err) = push_tx.try_send(event) {
+                            warn!(?err, "Dropping push event; queue is full");
+                        }
+                    }
+                }
                 return Ok(());
             } else {
                 warn!("Conflict detected, retry handling sender update")

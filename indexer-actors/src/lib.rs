@@ -4,6 +4,7 @@ pub mod data_source;
 pub mod fifo_set;
 pub mod metrics;
 pub mod periodic_processor;
+pub mod push;
 pub mod ticker;
 pub mod virtual_chain_processor;
 pub mod virtual_chain_syncer;

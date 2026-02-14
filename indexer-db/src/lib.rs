@@ -14,6 +14,7 @@ pub mod messages;
 pub mod metadata;
 pub mod migration;
 pub mod processing;
+pub mod push;
 
 pub const EMPTY_VERSION: u8 = 0; // used when we don't know address at all
 

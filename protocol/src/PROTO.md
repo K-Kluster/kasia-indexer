@@ -64,7 +64,7 @@ with:
 
 #### Payment (tx sent to someone's address)
 
-`ciph_msg:1:payment:{{SealedPayment_as_json_string_as_hex}}`
+`ciph_msg:1:pay:{{SealedPayment_as_json_string_as_hex}}` or `ciph_msg:1:payment:{{SealedPayment_as_json_string_as_hex}}`
 
 with:
 
