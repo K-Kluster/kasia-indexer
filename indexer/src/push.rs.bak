@@ -22,12 +22,20 @@ const MAX_ALIAS_LEN_BYTES: usize = 64;
 const MAX_ADDRESS_LEN_BYTES: usize = 128;
 const MAX_PLATFORM_LEN_BYTES: usize = 16;
 const WALLET_PUBKEY_HEX_LEN: usize = 64;
-const SUPPORTED_PLATFORMS: &[&str] = &["ios", "macos"];
+const SUPPORTED_PLATFORM: &str = "ios";
+
+#[derive(Debug, Clone)]
+pub struct AppAttestBinding {
+    pub key_id: String,
+    pub public_key_spki_b64: String,
+    pub sign_count: u32,
+}
 
 #[derive(Debug, Clone)]
 pub struct WalletBinding {
     pub wallet_pubkey: String,
     pub wallet_address: String,
+    pub app_attest: Option<AppAttestBinding>,
 }
 
 #[derive(Clone)]
@@ -87,6 +95,18 @@ impl PushRegistry {
         let effective_wallet_address = effective_wallet_binding
             .as_ref()
             .map(|binding| binding.wallet_address.clone());
+        let effective_app_attest_key_id = effective_wallet_binding
+            .as_ref()
+            .and_then(|binding| binding.app_attest.as_ref())
+            .map(|attest| attest.key_id.clone());
+        let effective_app_attest_public_key = effective_wallet_binding
+            .as_ref()
+            .and_then(|binding| binding.app_attest.as_ref())
+            .map(|attest| attest.public_key_spki_b64.clone());
+        let effective_app_attest_sign_count = effective_wallet_binding
+            .as_ref()
+            .and_then(|binding| binding.app_attest.as_ref())
+            .map(|attest| attest.sign_count);
         let created_at = existing.as_ref().map(|reg| reg.created_at).unwrap_or(now);
         let last_seen_refresh = existing
             .as_ref()
@@ -115,6 +135,9 @@ impl PushRegistry {
             .map(|reg| {
                 reg.wallet_pubkey == effective_wallet_pubkey
                     && reg.wallet_address == effective_wallet_address
+                    && reg.app_attest_key_id == effective_app_attest_key_id
+                    && reg.app_attest_public_key_spki_b64 == effective_app_attest_public_key
+                    && reg.app_attest_sign_count == effective_app_attest_sign_count
             })
             .unwrap_or(false);
         if addresses_unchanged
@@ -139,9 +162,9 @@ impl PushRegistry {
             primary_address: normalized_primary_address.clone(),
             wallet_pubkey: effective_wallet_pubkey,
             wallet_address: effective_wallet_address,
-            app_attest_key_id: None,
-            app_attest_public_key_spki_b64: None,
-            app_attest_sign_count: None,
+            app_attest_key_id: effective_app_attest_key_id,
+            app_attest_public_key_spki_b64: effective_app_attest_public_key,
+            app_attest_sign_count: effective_app_attest_sign_count,
             created_at,
             last_seen: now,
         };
@@ -241,6 +264,18 @@ impl PushRegistry {
         let effective_wallet_address = effective_wallet_binding
             .as_ref()
             .map(|binding| binding.wallet_address.clone());
+        let effective_app_attest_key_id = effective_wallet_binding
+            .as_ref()
+            .and_then(|binding| binding.app_attest.as_ref())
+            .map(|attest| attest.key_id.clone());
+        let effective_app_attest_public_key = effective_wallet_binding
+            .as_ref()
+            .and_then(|binding| binding.app_attest.as_ref())
+            .map(|attest| attest.public_key_spki_b64.clone());
+        let effective_app_attest_sign_count = effective_wallet_binding
+            .as_ref()
+            .and_then(|binding| binding.app_attest.as_ref())
+            .map(|attest| attest.sign_count);
         let created_at = existing.as_ref().map(|reg| reg.created_at).unwrap_or(now);
         let platform = existing
             .as_ref()
@@ -269,6 +304,9 @@ impl PushRegistry {
             .map(|reg| {
                 reg.wallet_pubkey == effective_wallet_pubkey
                     && reg.wallet_address == effective_wallet_address
+                    && reg.app_attest_key_id == effective_app_attest_key_id
+                    && reg.app_attest_public_key_spki_b64 == effective_app_attest_public_key
+                    && reg.app_attest_sign_count == effective_app_attest_sign_count
             })
             .unwrap_or(false);
         if addresses_unchanged
@@ -291,9 +329,9 @@ impl PushRegistry {
             primary_address: normalized_primary_address.clone(),
             wallet_pubkey: effective_wallet_pubkey,
             wallet_address: effective_wallet_address,
-            app_attest_key_id: None,
-            app_attest_public_key_spki_b64: None,
-            app_attest_sign_count: None,
+            app_attest_key_id: effective_app_attest_key_id,
+            app_attest_public_key_spki_b64: effective_app_attest_public_key,
+            app_attest_sign_count: effective_app_attest_sign_count,
             created_at,
             last_seen: now,
         };
@@ -1099,7 +1137,7 @@ fn normalize_platform(platform: String) -> anyhow::Result<String> {
     if normalized.len() > MAX_PLATFORM_LEN_BYTES {
         anyhow::bail!("platform is too long");
     }
-    if !SUPPORTED_PLATFORMS.contains(&normalized.as_str()) {
+    if normalized != SUPPORTED_PLATFORM {
         anyhow::bail!("Unsupported platform");
     }
     Ok(normalized)
@@ -1159,9 +1197,21 @@ fn normalize_wallet_pubkey(pubkey: &str) -> anyhow::Result<String> {
 fn registration_wallet_binding(registration: &DeviceRegistration) -> Option<WalletBinding> {
     let wallet_pubkey = registration.wallet_pubkey.clone()?;
     let wallet_address = registration.wallet_address.clone()?;
+    let app_attest = match (
+        registration.app_attest_key_id.clone(),
+        registration.app_attest_public_key_spki_b64.clone(),
+    ) {
+        (Some(key_id), Some(public_key_spki_b64)) => Some(AppAttestBinding {
+            key_id,
+            public_key_spki_b64,
+            sign_count: registration.app_attest_sign_count.unwrap_or(0),
+        }),
+        _ => None,
+    };
     Some(WalletBinding {
         wallet_pubkey,
         wallet_address,
+        app_attest,
     })
 }
 
@@ -1179,9 +1229,29 @@ fn resolve_wallet_binding(
                 anyhow::bail!("device token is bound to another wallet");
             }
 
+            let app_attest = match (&existing_binding.app_attest, &provided_binding.app_attest) {
+                (Some(existing_attest), Some(provided_attest)) => {
+                    if existing_attest.key_id == provided_attest.key_id
+                        && existing_attest.public_key_spki_b64
+                            == provided_attest.public_key_spki_b64
+                        && provided_attest.sign_count < existing_attest.sign_count
+                    {
+                        anyhow::bail!("App Attest signCount replay detected");
+                    }
+                    // Verified API layer may rotate/re-bind App Attest key for the same wallet-bound token.
+                    Some(provided_attest.clone())
+                }
+                (Some(_), None) => {
+                    anyhow::bail!("app attest assertion is required for a bound device token")
+                }
+                (None, Some(provided_attest)) => Some(provided_attest.clone()),
+                (None, None) => None,
+            };
+
             Ok(Some(WalletBinding {
                 wallet_pubkey: existing_binding.wallet_pubkey,
                 wallet_address: existing_binding.wallet_address,
+                app_attest,
             }))
         }
         (Some(_existing_binding), None) => {
@@ -1192,6 +1262,7 @@ fn resolve_wallet_binding(
             Ok(Some(WalletBinding {
                 wallet_pubkey: provided_pubkey,
                 wallet_address: provided_binding.wallet_address,
+                app_attest: provided_binding.app_attest,
             }))
         }
         (None, None) => Ok(None),
@@ -1331,25 +1402,21 @@ fn unix_time_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        DeviceRegistration, MAX_ADDRESS_LEN_BYTES, MAX_ALIAS_LEN_BYTES, MAX_ALIASES,
-        MAX_WATCHED_ADDRESSES, WalletBinding, normalize_platform, normalize_wallet_pubkey,
-        resolve_wallet_binding, validate_registration_limits,
+        AppAttestBinding, DeviceRegistration, MAX_ADDRESS_LEN_BYTES, MAX_ALIAS_LEN_BYTES,
+        MAX_ALIASES, MAX_WATCHED_ADDRESSES, WalletBinding, normalize_platform,
+        normalize_wallet_pubkey, resolve_wallet_binding, validate_registration_limits,
     };
 
     #[test]
-    fn normalize_platform_accepts_ios_and_macos() {
+    fn normalize_platform_accepts_ios() {
         assert_eq!(
             normalize_platform(" iOS ".to_string()).expect("ios should be accepted"),
             "ios"
         );
-        assert_eq!(
-            normalize_platform("macOS".to_string()).expect("macos should be accepted"),
-            "macos"
-        );
     }
 
     #[test]
-    fn normalize_platform_rejects_unsupported() {
+    fn normalize_platform_rejects_non_ios() {
         assert!(normalize_platform("android".to_string()).is_err());
         assert!(normalize_platform("".to_string()).is_err());
     }
@@ -1389,15 +1456,20 @@ mod tests {
             primary_address: None,
             wallet_pubkey: Some("a".repeat(64)),
             wallet_address: Some("kaspa:qwalletbound".to_string()),
-            app_attest_key_id: None,
-            app_attest_public_key_spki_b64: None,
-            app_attest_sign_count: None,
+            app_attest_key_id: Some("key_id".to_string()),
+            app_attest_public_key_spki_b64: Some("public_key".to_string()),
+            app_attest_sign_count: Some(2),
             created_at: 0,
             last_seen: 0,
         };
         let wrong = WalletBinding {
             wallet_pubkey: "b".repeat(64),
             wallet_address: existing.wallet_address.clone().unwrap_or_default(),
+            app_attest: Some(AppAttestBinding {
+                key_id: "key_id".to_string(),
+                public_key_spki_b64: "public_key".to_string(),
+                sign_count: 3,
+            }),
         };
 
         assert!(resolve_wallet_binding(Some(&existing), None).is_err());
@@ -1408,6 +1480,26 @@ mod tests {
                 Some(WalletBinding {
                     wallet_pubkey: "a".repeat(64),
                     wallet_address: existing.wallet_address.clone().unwrap_or_default(),
+                    app_attest: Some(AppAttestBinding {
+                        key_id: "key_id".to_string(),
+                        public_key_spki_b64: "public_key".to_string(),
+                        sign_count: 3,
+                    }),
+                })
+            )
+            .is_ok()
+        );
+        assert!(
+            resolve_wallet_binding(
+                Some(&existing),
+                Some(WalletBinding {
+                    wallet_pubkey: "a".repeat(64),
+                    wallet_address: existing.wallet_address.clone().unwrap_or_default(),
+                    app_attest: Some(AppAttestBinding {
+                        key_id: "rotated_key_id".to_string(),
+                        public_key_spki_b64: "rotated_public_key".to_string(),
+                        sign_count: 0,
+                    }),
                 })
             )
             .is_ok()

@@ -44,7 +44,6 @@ use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt, util::Subscribe
 use workflow_core::channel::Channel;
 
 mod api;
-mod app_attest;
 mod config;
 mod context;
 mod push;

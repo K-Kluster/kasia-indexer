@@ -1,5 +1,6 @@
+use crate::app_attest::{AppAttestVerifier, canonical_key_id};
 use crate::config::PushAuthMode;
-use crate::push::{PushRegistry, WalletBinding};
+use crate::push::{AppAttestBinding, DeviceRegistration, PushRegistry, WalletBinding};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -30,6 +31,7 @@ pub struct PushApi {
     auth_mode: PushAuthMode,
     network_type: RpcNetworkType,
     nonces: Arc<StdMutex<NonceStore>>,
+    app_attest_verifier: Option<AppAttestVerifier>,
 }
 
 impl PushApi {
@@ -37,14 +39,19 @@ impl PushApi {
         registry: PushRegistry,
         network_type: RpcNetworkType,
         auth_mode: PushAuthMode,
-        _app_attest_team_id: Option<String>,
-        _app_attest_bundle_id: Option<String>,
+        app_attest_team_id: Option<String>,
+        app_attest_bundle_id: Option<String>,
     ) -> Self {
+        let app_attest_verifier = match (app_attest_team_id, app_attest_bundle_id) {
+            (Some(team_id), Some(bundle_id)) => AppAttestVerifier::new(&team_id, &bundle_id),
+            _ => None,
+        };
         Self {
             registry,
             auth_mode,
             network_type,
             nonces: Arc::new(StdMutex::new(NonceStore::default())),
+            app_attest_verifier,
         }
     }
 
@@ -112,16 +119,12 @@ pub struct PushAuthRequest {
     #[serde(default)]
     #[serde(rename = "devicecheck_token")]
     pub devicecheck_token: Option<String>,
-    /// Kept as optional for backwards compatibility with old clients that still send these fields.
-    #[allow(dead_code)]
     #[serde(default)]
     #[serde(rename = "app_attest_key_id")]
     pub app_attest_key_id: Option<String>,
-    #[allow(dead_code)]
     #[serde(default)]
     #[serde(rename = "app_attest_attestation")]
     pub app_attest_attestation: Option<String>,
-    #[allow(dead_code)]
     #[serde(default)]
     #[serde(rename = "app_attest_assertion")]
     pub app_attest_assertion: Option<String>,
@@ -436,10 +439,172 @@ fn authenticate_push_request(
         ));
     }
 
+    let existing_registration = state
+        .registry
+        .get_registration(&normalized_device_token)
+        .map_err(|_| PushApiError::internal("Failed to load device registration"))?;
+    let app_attest_binding = verify_app_attest(
+        state,
+        auth,
+        &preimage,
+        existing_registration.as_ref(),
+        &wallet_pubkey,
+    )?;
+
     Ok(Some(WalletBinding {
         wallet_pubkey,
         wallet_address,
+        app_attest: app_attest_binding,
     }))
+}
+
+fn verify_app_attest(
+    state: &PushApi,
+    auth: &PushAuthRequest,
+    challenge: &str,
+    existing_registration: Option<&DeviceRegistration>,
+    wallet_pubkey: &str,
+) -> Result<Option<AppAttestBinding>, PushApiError> {
+    let existing_app_attest = existing_registration.and_then(existing_app_attest_binding);
+    let should_enforce = matches!(state.auth_mode, PushAuthMode::Strict)
+        || existing_app_attest.is_some()
+        || auth.app_attest_key_id.is_some()
+        || auth.app_attest_attestation.is_some()
+        || auth.app_attest_assertion.is_some();
+    if !should_enforce {
+        return Ok(existing_app_attest);
+    }
+
+    let verifier = state.app_attest_verifier.as_ref().ok_or_else(|| {
+        PushApiError::internal(
+            "App Attest verification is not configured (missing APNS_TEAM_ID/APNS_TOPIC)",
+        )
+    })?;
+
+    let key_id = auth
+        .app_attest_key_id
+        .as_deref()
+        .ok_or_else(|| PushApiError::unauthorized("app_attest_key_id is required"))?;
+    let key_id = canonical_key_id(key_id).map_err(PushApiError::bad_request)?;
+
+    match existing_app_attest {
+        Some(existing) => {
+            if existing.key_id != key_id {
+                if let Some(attestation) = auth.app_attest_attestation.as_deref() {
+                    let attested_key = verifier
+                        .verify_attestation(attestation, &key_id, challenge)
+                        .map_err(PushApiError::unauthorized)?;
+                    if existing_registration
+                        .and_then(|registration| registration.wallet_pubkey.as_deref())
+                        .is_some_and(|existing_wallet_pubkey| {
+                            existing_wallet_pubkey != wallet_pubkey
+                        })
+                    {
+                        return Err(PushApiError::unauthorized(
+                            "device token is bound to another wallet",
+                        ));
+                    }
+                    return Ok(Some(AppAttestBinding {
+                        key_id: attested_key.key_id,
+                        public_key_spki_b64: attested_key.public_key_spki_b64,
+                        sign_count: attested_key.sign_count,
+                    }));
+                }
+                return Err(PushApiError::unauthorized(
+                    "device token is bound to another App Attest key",
+                ));
+            }
+
+            if let Some(assertion) = auth.app_attest_assertion.as_deref() {
+                match verifier.verify_assertion(
+                    assertion,
+                    &existing.public_key_spki_b64,
+                    challenge,
+                    existing.sign_count,
+                ) {
+                    Ok(new_sign_count) => {
+                        return Ok(Some(AppAttestBinding {
+                            key_id: existing.key_id,
+                            public_key_spki_b64: existing.public_key_spki_b64,
+                            sign_count: new_sign_count,
+                        }));
+                    }
+                    Err(assertion_err) => {
+                        // Recovery path for stale/corrupt stored binding:
+                        // if client provides fresh attestation for the same key, re-bind.
+                        if let Some(attestation) = auth.app_attest_attestation.as_deref() {
+                            let attested_key = verifier
+                                .verify_attestation(attestation, &key_id, challenge)
+                                .map_err(PushApiError::unauthorized)?;
+                            if attested_key.key_id != existing.key_id {
+                                return Err(PushApiError::unauthorized(
+                                    "device token is bound to another App Attest key",
+                                ));
+                            }
+                            return Ok(Some(AppAttestBinding {
+                                key_id: attested_key.key_id,
+                                public_key_spki_b64: attested_key.public_key_spki_b64,
+                                sign_count: attested_key.sign_count,
+                            }));
+                        }
+                        return Err(PushApiError::unauthorized(assertion_err));
+                    }
+                }
+            }
+
+            if let Some(attestation) = auth.app_attest_attestation.as_deref() {
+                let attested_key = verifier
+                    .verify_attestation(attestation, &key_id, challenge)
+                    .map_err(PushApiError::unauthorized)?;
+                if attested_key.key_id != existing.key_id {
+                    return Err(PushApiError::unauthorized(
+                        "device token is bound to another App Attest key",
+                    ));
+                }
+                return Ok(Some(AppAttestBinding {
+                    key_id: attested_key.key_id,
+                    public_key_spki_b64: attested_key.public_key_spki_b64,
+                    sign_count: attested_key.sign_count,
+                }));
+            }
+
+            Err(PushApiError::unauthorized(
+                "app_attest_assertion is required for bound token",
+            ))
+        }
+        None => {
+            let attestation = auth.app_attest_attestation.as_deref().ok_or_else(|| {
+                PushApiError::unauthorized("app_attest_attestation is required for enrollment")
+            })?;
+            let attested_key = verifier
+                .verify_attestation(attestation, &key_id, challenge)
+                .map_err(PushApiError::unauthorized)?;
+            if existing_registration
+                .and_then(|registration| registration.wallet_pubkey.as_deref())
+                .is_some_and(|existing_wallet_pubkey| existing_wallet_pubkey != wallet_pubkey)
+            {
+                return Err(PushApiError::unauthorized(
+                    "device token is bound to another wallet",
+                ));
+            }
+            Ok(Some(AppAttestBinding {
+                key_id: attested_key.key_id,
+                public_key_spki_b64: attested_key.public_key_spki_b64,
+                sign_count: attested_key.sign_count,
+            }))
+        }
+    }
+}
+
+fn existing_app_attest_binding(registration: &DeviceRegistration) -> Option<AppAttestBinding> {
+    let key_id = registration.app_attest_key_id.as_ref()?;
+    let public_key = registration.app_attest_public_key_spki_b64.as_ref()?;
+    let canonical_key_id = canonical_key_id(key_id).ok()?;
+    Some(AppAttestBinding {
+        key_id: canonical_key_id,
+        public_key_spki_b64: public_key.clone(),
+        sign_count: registration.app_attest_sign_count.unwrap_or(0),
+    })
 }
 
 fn validate_auth_timing(auth: &PushAuthRequest, now_ms: u64) -> Result<(), PushApiError> {
