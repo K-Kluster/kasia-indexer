@@ -1,13 +1,16 @@
 use crate::config::PushAuthMode;
-use crate::push::{PushRegistry, WalletBinding};
+use crate::push::{DeviceKeyBinding, PushRegistry, WalletBinding};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{delete, post, put};
 use axum::{Json, Router};
+use base64::Engine;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE, URL_SAFE_NO_PAD};
 use kaspa_addresses::{Address, Version};
 use kaspa_rpc_core::{RpcAddress, RpcNetworkType};
 use rand::RngCore;
+use ring::signature::{ECDSA_P256_SHA256_ASN1, ECDSA_P256_SHA256_FIXED, UnparsedPublicKey};
 use secp256k1::schnorr::Signature as SchnorrSignature;
 use secp256k1::{Message, Secp256k1, XOnlyPublicKey};
 use serde::{Deserialize, Serialize};
@@ -19,6 +22,8 @@ use tracing::{error, warn};
 use utoipa::ToSchema;
 
 const AUTH_DOMAIN: &str = "kasia-push-auth:v1";
+const DEVICE_AUTH_DOMAIN: &str = "kasia-push-device-auth:v1";
+const DEVICE_AUTH_SCHEME: &str = "device_key_v1";
 const NONCE_TTL_MS: u64 = 60_000;
 const MAX_SIGNATURE_WINDOW_MS: u64 = 60_000;
 const MAX_CLOCK_SKEW_MS: u64 = 60_000;
@@ -125,6 +130,25 @@ pub struct PushAuthRequest {
     #[serde(default)]
     #[serde(rename = "app_attest_assertion")]
     pub app_attest_assertion: Option<String>,
+    #[serde(default)]
+    #[serde(rename = "device_auth")]
+    pub device_auth: Option<PushDeviceAuthRequest>,
+}
+
+#[derive(Debug, Deserialize, ToSchema, Clone)]
+pub struct PushDeviceAuthRequest {
+    pub scheme: String,
+    #[serde(rename = "key_id")]
+    pub key_id: String,
+    pub pubkey: String,
+    pub counter: u64,
+    pub signature: String,
+}
+
+#[derive(Debug)]
+struct VerifiedPushAuth {
+    wallet_binding: Option<WalletBinding>,
+    device_binding: Option<DeviceKeyBinding>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -193,7 +217,7 @@ async fn register_device(
     State(state): State<PushApi>,
     Json(payload): Json<PushRegistrationRequest>,
 ) -> impl IntoResponse {
-    let auth_binding = match authenticate_push_request(
+    let verified_auth = match authenticate_push_request(
         &state,
         "POST",
         "/v1/push/register",
@@ -218,7 +242,8 @@ async fn register_device(
             payload.watched_addresses,
             payload.primary_address,
             payload.aliases,
-            auth_binding,
+            verified_auth.wallet_binding,
+            verified_auth.device_binding,
         )
     })
     .await;
@@ -260,7 +285,7 @@ async fn update_registration(
     State(state): State<PushApi>,
     Json(payload): Json<PushUpdateRequest>,
 ) -> impl IntoResponse {
-    let auth_binding = match authenticate_push_request(
+    let verified_auth = match authenticate_push_request(
         &state,
         "PUT",
         "/v1/push/update",
@@ -284,7 +309,8 @@ async fn update_registration(
             payload.watched_addresses,
             payload.primary_address,
             payload.aliases,
-            auth_binding,
+            verified_auth.wallet_binding,
+            verified_auth.device_binding,
         )
     })
     .await;
@@ -326,14 +352,9 @@ async fn unregister_device(
     State(state): State<PushApi>,
     Json(payload): Json<PushUnregisterRequest>,
 ) -> impl IntoResponse {
-    let auth_binding = match authenticate_push_request(
+    let verified_auth = match authenticate_unregister_request(
         &state,
-        "DELETE",
-        "/v1/push/unregister",
         &payload.device_token,
-        &[],
-        None,
-        &[],
         payload.auth.as_ref(),
     ) {
         Ok(binding) => binding,
@@ -343,12 +364,57 @@ async fn unregister_device(
         }
     };
 
-    let wallet_pubkey = auth_binding.map(|binding| binding.wallet_pubkey);
+    let normalized_token = match normalize_device_token(&payload.device_token) {
+        Ok(token) => token,
+        Err(err) => return Err(err.into_response()),
+    };
+
+    let existing = match state.registry.get_registration(&normalized_token) {
+        Ok(existing) => existing,
+        Err(err) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: err.to_string(),
+                }),
+            ));
+        }
+    };
+
+    let wallet_pubkey = verified_auth
+        .wallet_binding
+        .as_ref()
+        .map(|binding| binding.wallet_pubkey.clone());
+    let mut allow_device_fallback = false;
+    if let Some(device_binding) = verified_auth.device_binding.as_ref() {
+        allow_device_fallback = device_binding_matches_registration(existing.as_ref(), device_binding);
+    }
+
     let registry = state.registry.clone();
-    let token = payload.device_token;
-    let result =
-        tokio::task::spawn_blocking(move || registry.unregister_authorized(token, wallet_pubkey))
-            .await;
+    let token = normalized_token;
+    let result = tokio::task::spawn_blocking(move || {
+        if let Some(wallet_pubkey) = wallet_pubkey {
+            match registry.unregister_authorized(token.clone(), Some(wallet_pubkey)) {
+                Ok(()) => Ok(()),
+                Err(err) => {
+                    let message = err.to_string().to_ascii_lowercase();
+                    if allow_device_fallback
+                        && (message.contains("bound to another wallet")
+                            || message.contains("auth is required"))
+                    {
+                        registry.unregister(token)
+                    } else {
+                        Err(err)
+                    }
+                }
+            }
+        } else if allow_device_fallback {
+            registry.unregister(token)
+        } else {
+            registry.unregister_authorized(token, None)
+        }
+    })
+    .await;
 
     match result {
         Ok(Ok(())) => Ok(Json(PushResponse {
@@ -381,19 +447,122 @@ fn authenticate_push_request(
     primary_address: Option<&str>,
     aliases: &[String],
     auth: Option<&PushAuthRequest>,
-) -> Result<Option<WalletBinding>, PushApiError> {
+) -> Result<VerifiedPushAuth, PushApiError> {
     let Some(auth) = auth else {
         return match state.auth_mode {
             PushAuthMode::Strict => Err(PushApiError::unauthorized(
                 "Signed auth is required for push mutations",
             )),
-            PushAuthMode::Legacy | PushAuthMode::Mixed => Ok(None),
+            PushAuthMode::Legacy | PushAuthMode::Mixed => Ok(VerifiedPushAuth {
+                wallet_binding: None,
+                device_binding: None,
+            }),
         };
     };
 
     let now_ms = unix_time_ms();
     validate_auth_timing(auth, now_ms)?;
+    let normalized_device_token = normalize_device_token(device_token)?;
+    let normalized_primary = normalize_primary_for_auth(primary_address)?;
+    let wallet_binding = verify_wallet_binding_from_auth(
+        state,
+        method,
+        path,
+        &normalized_device_token,
+        watched_addresses,
+        &normalized_primary,
+        aliases,
+        auth,
+    )?;
+    let device_binding =
+        verify_device_key_binding_from_auth(method, path, &normalized_device_token, auth)?;
 
+    consume_nonce(state, auth, now_ms)?;
+
+    Ok(VerifiedPushAuth {
+        wallet_binding: Some(wallet_binding),
+        device_binding,
+    })
+}
+
+fn authenticate_unregister_request(
+    state: &PushApi,
+    device_token: &str,
+    auth: Option<&PushAuthRequest>,
+) -> Result<VerifiedPushAuth, PushApiError> {
+    let Some(auth) = auth else {
+        return match state.auth_mode {
+            PushAuthMode::Strict => Err(PushApiError::unauthorized(
+                "Signed auth is required for push mutations",
+            )),
+            PushAuthMode::Legacy | PushAuthMode::Mixed => Ok(VerifiedPushAuth {
+                wallet_binding: None,
+                device_binding: None,
+            }),
+        };
+    };
+
+    let now_ms = unix_time_ms();
+    validate_auth_timing(auth, now_ms)?;
+    let normalized_device_token = normalize_device_token(device_token)?;
+    let wallet_binding = verify_wallet_binding_from_auth(
+        state,
+        "DELETE",
+        "/v1/push/unregister",
+        &normalized_device_token,
+        &[],
+        "",
+        &[],
+        auth,
+    )
+    .ok();
+    let device_binding = verify_device_key_binding_from_auth(
+        "DELETE",
+        "/v1/push/unregister",
+        &normalized_device_token,
+        auth,
+    )?;
+
+    if wallet_binding.is_none() && device_binding.is_none() {
+        return Err(PushApiError::unauthorized(
+            "Valid wallet or device auth is required for unregister",
+        ));
+    }
+
+    consume_nonce(state, auth, now_ms)?;
+
+    Ok(VerifiedPushAuth {
+        wallet_binding,
+        device_binding,
+    })
+}
+
+fn consume_nonce(state: &PushApi, auth: &PushAuthRequest, now_ms: u64) -> Result<(), PushApiError> {
+    let nonce_expiry = {
+        let mut nonces = state
+            .nonces
+            .lock()
+            .map_err(|_| PushApiError::internal("Failed to lock nonce store"))?;
+        nonces.consume(auth.nonce.trim(), now_ms)?
+    };
+    if nonce_expiry != auth.expires_at_ms {
+        return Err(PushApiError::unauthorized(
+            "nonce expiry does not match signed payload",
+        ));
+    }
+    Ok(())
+}
+
+fn verify_wallet_binding_from_auth(
+    state: &PushApi,
+    method: &str,
+    path: &str,
+    normalized_device_token: &str,
+    watched_addresses: &[String],
+    normalized_primary: &str,
+    aliases: &[String],
+    auth: &PushAuthRequest,
+) -> Result<WalletBinding, PushApiError> {
     let wallet_pubkey = normalize_hex_field(&auth.wallet_pubkey, 32, "wallet_pubkey")?;
     let wallet_address = normalize_wallet_address(&auth.wallet_address)?;
     let derived_wallet_address = derive_wallet_address(&wallet_pubkey, state.network_type)?;
@@ -403,16 +572,13 @@ fn authenticate_push_request(
         ));
     }
 
-    let normalized_device_token = normalize_device_token(device_token)?;
-    let normalized_primary = normalize_primary_for_auth(primary_address)?;
-
     let preimage = build_auth_preimage(AuthPreimage {
         nonce: auth.nonce.trim(),
         method,
         path,
-        device_token: &normalized_device_token,
+        device_token: normalized_device_token,
         watched_addresses,
-        primary_address: &normalized_primary,
+        primary_address: normalized_primary,
         aliases,
         wallet_pubkey: &wallet_pubkey,
         wallet_address: &wallet_address,
@@ -421,24 +587,55 @@ fn authenticate_push_request(
     });
 
     verify_schnorr_signature(&wallet_pubkey, &preimage, auth.signature.trim())?;
-
-    let nonce_expiry = {
-        let mut nonces = state
-            .nonces
-            .lock()
-            .map_err(|_| PushApiError::internal("Failed to lock nonce store"))?;
-        nonces.consume(auth.nonce.trim(), now_ms)?
-    };
-
-    if nonce_expiry != auth.expires_at_ms {
-        return Err(PushApiError::unauthorized(
-            "nonce expiry does not match signed payload",
-        ));
-    }
-
-    Ok(Some(WalletBinding {
+    Ok(WalletBinding {
         wallet_pubkey,
         wallet_address,
+    })
+}
+
+fn verify_device_key_binding_from_auth(
+    method: &str,
+    path: &str,
+    normalized_device_token: &str,
+    auth: &PushAuthRequest,
+) -> Result<Option<DeviceKeyBinding>, PushApiError> {
+    let Some(device_auth) = auth.device_auth.as_ref() else {
+        return Ok(None);
+    };
+
+    if device_auth.scheme.trim() != DEVICE_AUTH_SCHEME {
+        return Err(PushApiError::unauthorized("Unsupported device auth scheme"));
+    }
+    if device_auth.counter == 0 {
+        return Err(PushApiError::bad_request("device_auth.counter must be > 0"));
+    }
+
+    let public_key = decode_base64_any(&device_auth.pubkey, "device_auth.pubkey")?;
+    if public_key.len() != 65 || public_key[0] != 0x04 {
+        return Err(PushApiError::bad_request(
+            "device_auth.pubkey must be uncompressed P-256 key",
+        ));
+    }
+    let key_id = normalize_device_key_id(&device_auth.key_id, &public_key)?;
+    let signature = decode_base64_any(&device_auth.signature, "device_auth.signature")?;
+    let preimage = build_device_auth_preimage(DeviceAuthPreimage {
+        nonce: auth.nonce.trim(),
+        method,
+        path,
+        device_token: normalized_device_token,
+        key_id: &key_id,
+        counter: device_auth.counter,
+        timestamp_ms: auth.timestamp_ms,
+        expires_at_ms: auth.expires_at_ms,
+    });
+    verify_p256_signature(&public_key, preimage.as_bytes(), &signature).map_err(|_| {
+        PushApiError::unauthorized("Invalid device key signature")
+    })?;
+
+    Ok(Some(DeviceKeyBinding {
+        key_id,
+        public_key_b64: STANDARD.encode(public_key),
+        counter: device_auth.counter,
     }))
 }
 
@@ -599,6 +796,52 @@ fn decode_hex_nibble(value: u8) -> Option<u8> {
     }
 }
 
+fn decode_base64_any(value: &str, field_name: &str) -> Result<Vec<u8>, PushApiError> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(PushApiError::bad_request(format!(
+            "{field_name} must not be empty"
+        )));
+    }
+    if let Ok(decoded) = STANDARD.decode(value) {
+        return Ok(decoded);
+    }
+    if let Ok(decoded) = URL_SAFE_NO_PAD.decode(value) {
+        return Ok(decoded);
+    }
+    if let Ok(decoded) = URL_SAFE.decode(value) {
+        return Ok(decoded);
+    }
+    Err(PushApiError::bad_request(format!(
+        "{field_name} is invalid base64"
+    )))
+}
+
+fn normalize_device_key_id(key_id: &str, public_key: &[u8]) -> Result<String, PushApiError> {
+    let normalized = key_id.trim().to_ascii_lowercase();
+    if normalized.len() != 64 || !normalized.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(PushApiError::bad_request(
+            "device_auth.key_id must be 32-byte hex",
+        ));
+    }
+    let expected: [u8; 32] = Sha256::digest(public_key).into();
+    if normalized != hex_encode(&expected) {
+        return Err(PushApiError::unauthorized(
+            "device_auth.key_id does not match pubkey",
+        ));
+    }
+    Ok(normalized)
+}
+
+fn verify_p256_signature(public_key: &[u8], message: &[u8], signature: &[u8]) -> Result<(), ()> {
+    let verifier_asn1 = UnparsedPublicKey::new(&ECDSA_P256_SHA256_ASN1, public_key);
+    if verifier_asn1.verify(message, signature).is_ok() {
+        return Ok(());
+    }
+    let verifier_fixed = UnparsedPublicKey::new(&ECDSA_P256_SHA256_FIXED, public_key);
+    verifier_fixed.verify(message, signature).map_err(|_| ())
+}
+
 struct AuthPreimage<'a> {
     nonce: &'a str,
     method: &'a str,
@@ -609,6 +852,17 @@ struct AuthPreimage<'a> {
     aliases: &'a [String],
     wallet_pubkey: &'a str,
     wallet_address: &'a str,
+    timestamp_ms: u64,
+    expires_at_ms: u64,
+}
+
+struct DeviceAuthPreimage<'a> {
+    nonce: &'a str,
+    method: &'a str,
+    path: &'a str,
+    device_token: &'a str,
+    key_id: &'a str,
+    counter: u64,
     timestamp_ms: u64,
     expires_at_ms: u64,
 }
@@ -634,6 +888,42 @@ fn build_auth_preimage(preimage: AuthPreimage<'_>) -> String {
         format!("expires_at_ms={}", preimage.expires_at_ms),
     ]
     .join("\n")
+}
+
+fn build_device_auth_preimage(preimage: DeviceAuthPreimage<'_>) -> String {
+    let device_token_hash = hash_string(preimage.device_token);
+    [
+        format!("domain={DEVICE_AUTH_DOMAIN}"),
+        format!("nonce={}", preimage.nonce),
+        format!("method={}", preimage.method),
+        format!("path={}", preimage.path),
+        format!("device_token_hash={device_token_hash}"),
+        format!("key_id={}", preimage.key_id),
+        format!("counter={}", preimage.counter),
+        format!("timestamp_ms={}", preimage.timestamp_ms),
+        format!("expires_at_ms={}", preimage.expires_at_ms),
+    ]
+    .join("\n")
+}
+
+fn device_binding_matches_registration(
+    registration: Option<&crate::push::DeviceRegistration>,
+    device_binding: &DeviceKeyBinding,
+) -> bool {
+    let Some(registration) = registration else {
+        return false;
+    };
+    let Some(existing_key_id) = registration.device_key_id.as_ref() else {
+        return false;
+    };
+    let Some(existing_pubkey) = registration.device_key_public_key_b64.as_ref() else {
+        return false;
+    };
+    if existing_key_id != &device_binding.key_id || existing_pubkey != &device_binding.public_key_b64 {
+        return false;
+    }
+    let last_counter = registration.device_key_counter.unwrap_or(0);
+    device_binding.counter > last_counter
 }
 
 fn canonicalize_watched_addresses(values: &[String]) -> Vec<String> {

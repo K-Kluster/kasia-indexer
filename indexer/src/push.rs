@@ -30,6 +30,13 @@ pub struct WalletBinding {
     pub wallet_address: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct DeviceKeyBinding {
+    pub key_id: String,
+    pub public_key_b64: String,
+    pub counter: u64,
+}
+
 #[derive(Clone)]
 pub struct PushRegistry {
     tx_keyspace: fjall::TxKeyspace,
@@ -65,6 +72,7 @@ impl PushRegistry {
         primary_address: Option<String>,
         aliases: Vec<String>,
         wallet_binding: Option<WalletBinding>,
+        device_key_binding: Option<DeviceKeyBinding>,
     ) -> anyhow::Result<()> {
         self.metrics.increment_push_register_calls_total();
         validate_registration_limits(&watched_addresses, &aliases)?;
@@ -87,6 +95,15 @@ impl PushRegistry {
         let effective_wallet_address = effective_wallet_binding
             .as_ref()
             .map(|binding| binding.wallet_address.clone());
+        let effective_device_binding =
+            resolve_device_key_binding(existing.as_ref(), device_key_binding)?;
+        let effective_device_key_id = effective_device_binding
+            .as_ref()
+            .map(|binding| binding.key_id.clone());
+        let effective_device_public_key = effective_device_binding
+            .as_ref()
+            .map(|binding| binding.public_key_b64.clone());
+        let effective_device_counter = effective_device_binding.as_ref().map(|binding| binding.counter);
         let created_at = existing.as_ref().map(|reg| reg.created_at).unwrap_or(now);
         let last_seen_refresh = existing
             .as_ref()
@@ -117,11 +134,20 @@ impl PushRegistry {
                     && reg.wallet_address == effective_wallet_address
             })
             .unwrap_or(false);
+        let device_binding_unchanged = existing
+            .as_ref()
+            .map(|reg| {
+                reg.device_key_id == effective_device_key_id
+                    && reg.device_key_public_key_b64 == effective_device_public_key
+                    && reg.device_key_counter == effective_device_counter
+            })
+            .unwrap_or(false);
         if addresses_unchanged
             && platform_unchanged
             && aliases_unchanged
             && primary_unchanged
             && wallet_binding_unchanged
+            && device_binding_unchanged
             && !last_seen_refresh
         {
             // Fast path: payload unchanged and heartbeat refresh is not due yet.
@@ -139,6 +165,9 @@ impl PushRegistry {
             primary_address: normalized_primary_address.clone(),
             wallet_pubkey: effective_wallet_pubkey,
             wallet_address: effective_wallet_address,
+            device_key_id: effective_device_key_id,
+            device_key_public_key_b64: effective_device_public_key,
+            device_key_counter: effective_device_counter,
             app_attest_key_id: None,
             app_attest_public_key_spki_b64: None,
             app_attest_sign_count: None,
@@ -220,6 +249,7 @@ impl PushRegistry {
         primary_address: Option<String>,
         aliases: Vec<String>,
         wallet_binding: Option<WalletBinding>,
+        device_key_binding: Option<DeviceKeyBinding>,
     ) -> anyhow::Result<()> {
         self.metrics.increment_push_update_calls_total();
         validate_registration_limits(&watched_addresses, &aliases)?;
@@ -241,6 +271,15 @@ impl PushRegistry {
         let effective_wallet_address = effective_wallet_binding
             .as_ref()
             .map(|binding| binding.wallet_address.clone());
+        let effective_device_binding =
+            resolve_device_key_binding(existing.as_ref(), device_key_binding)?;
+        let effective_device_key_id = effective_device_binding
+            .as_ref()
+            .map(|binding| binding.key_id.clone());
+        let effective_device_public_key = effective_device_binding
+            .as_ref()
+            .map(|binding| binding.public_key_b64.clone());
+        let effective_device_counter = effective_device_binding.as_ref().map(|binding| binding.counter);
         let created_at = existing.as_ref().map(|reg| reg.created_at).unwrap_or(now);
         let platform = existing
             .as_ref()
@@ -271,10 +310,19 @@ impl PushRegistry {
                     && reg.wallet_address == effective_wallet_address
             })
             .unwrap_or(false);
+        let device_binding_unchanged = existing
+            .as_ref()
+            .map(|reg| {
+                reg.device_key_id == effective_device_key_id
+                    && reg.device_key_public_key_b64 == effective_device_public_key
+                    && reg.device_key_counter == effective_device_counter
+            })
+            .unwrap_or(false);
         if addresses_unchanged
             && aliases_unchanged
             && primary_unchanged
             && wallet_binding_unchanged
+            && device_binding_unchanged
             && !last_seen_refresh
         {
             self.metrics.increment_push_fast_path_skips_total();
@@ -291,6 +339,9 @@ impl PushRegistry {
             primary_address: normalized_primary_address.clone(),
             wallet_pubkey: effective_wallet_pubkey,
             wallet_address: effective_wallet_address,
+            device_key_id: effective_device_key_id,
+            device_key_public_key_b64: effective_device_public_key,
+            device_key_counter: effective_device_counter,
             app_attest_key_id: None,
             app_attest_public_key_spki_b64: None,
             app_attest_sign_count: None,
@@ -622,6 +673,12 @@ pub struct DeviceRegistration {
     pub wallet_pubkey: Option<String>,
     #[serde(default)]
     pub wallet_address: Option<String>,
+    #[serde(default)]
+    pub device_key_id: Option<String>,
+    #[serde(default)]
+    pub device_key_public_key_b64: Option<String>,
+    #[serde(default)]
+    pub device_key_counter: Option<u64>,
     #[serde(default)]
     pub app_attest_key_id: Option<String>,
     #[serde(default)]
@@ -1165,6 +1222,17 @@ fn registration_wallet_binding(registration: &DeviceRegistration) -> Option<Wall
     })
 }
 
+fn registration_device_key_binding(registration: &DeviceRegistration) -> Option<DeviceKeyBinding> {
+    let key_id = registration.device_key_id.clone()?;
+    let public_key_b64 = registration.device_key_public_key_b64.clone()?;
+    let counter = registration.device_key_counter.unwrap_or(0);
+    Some(DeviceKeyBinding {
+        key_id,
+        public_key_b64,
+        counter,
+    })
+}
+
 fn resolve_wallet_binding(
     existing: Option<&DeviceRegistration>,
     provided: Option<WalletBinding>,
@@ -1194,6 +1262,26 @@ fn resolve_wallet_binding(
                 wallet_address: provided_binding.wallet_address,
             }))
         }
+        (None, None) => Ok(None),
+    }
+}
+
+fn resolve_device_key_binding(
+    existing: Option<&DeviceRegistration>,
+    provided: Option<DeviceKeyBinding>,
+) -> anyhow::Result<Option<DeviceKeyBinding>> {
+    let existing_binding = existing.and_then(registration_device_key_binding);
+    match (existing_binding, provided) {
+        (Some(existing_binding), Some(provided_binding)) => {
+            if existing_binding.key_id == provided_binding.key_id
+                && provided_binding.counter <= existing_binding.counter
+            {
+                anyhow::bail!("device key counter did not increase");
+            }
+            Ok(Some(provided_binding))
+        }
+        (Some(existing_binding), None) => Ok(Some(existing_binding)),
+        (None, Some(provided_binding)) => Ok(Some(provided_binding)),
         (None, None) => Ok(None),
     }
 }
@@ -1389,6 +1477,9 @@ mod tests {
             primary_address: None,
             wallet_pubkey: Some("a".repeat(64)),
             wallet_address: Some("kaspa:qwalletbound".to_string()),
+            device_key_id: None,
+            device_key_public_key_b64: None,
+            device_key_counter: None,
             app_attest_key_id: None,
             app_attest_public_key_spki_b64: None,
             app_attest_sign_count: None,
