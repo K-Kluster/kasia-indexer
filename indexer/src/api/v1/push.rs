@@ -913,12 +913,16 @@ fn device_binding_matches_registration(
     let Some(registration) = registration else {
         return false;
     };
-    let Some(existing_key_id) = registration.device_key_id.as_ref() else {
-        return false;
-    };
-    let Some(existing_pubkey) = registration.device_key_public_key_b64.as_ref() else {
-        return false;
-    };
+
+    // Migration compatibility: old wallet-bound registrations may not have a stored
+    // device key yet. In that case we allow a verified device-auth request to
+    // perform unregister so the token can be re-bound by a newer client.
+    if registration.device_key_id.is_none() || registration.device_key_public_key_b64.is_none() {
+        return true;
+    }
+
+    let Some(existing_key_id) = registration.device_key_id.as_ref() else { return false };
+    let Some(existing_pubkey) = registration.device_key_public_key_b64.as_ref() else { return false };
     if existing_key_id != &device_binding.key_id || existing_pubkey != &device_binding.public_key_b64 {
         return false;
     }
