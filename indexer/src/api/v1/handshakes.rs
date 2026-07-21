@@ -6,6 +6,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
+use indexer_actors::metrics::SharedMetrics;
 use indexer_db::AddressPayload;
 use indexer_db::messages::handshake::{
     HandshakeByReceiverPartition, HandshakeBySenderPartition, TxIdToHandshakePartition,
@@ -25,6 +26,7 @@ pub struct HandshakeApi {
     handshake_by_receiver_partition: HandshakeByReceiverPartition,
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
     tx_id_to_handshake_partition: TxIdToHandshakePartition,
+    metrics: SharedMetrics,
     context: IndexerContext,
 }
 
@@ -35,6 +37,7 @@ impl HandshakeApi {
         handshake_by_receiver_partition: HandshakeByReceiverPartition,
         tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
         tx_id_to_handshake_partition: TxIdToHandshakePartition,
+        metrics: SharedMetrics,
         context: IndexerContext,
     ) -> Self {
         Self {
@@ -43,6 +46,7 @@ impl HandshakeApi {
             handshake_by_receiver_partition,
             tx_id_to_acceptance_partition,
             tx_id_to_handshake_partition,
+            metrics,
             context,
         }
     }
@@ -117,6 +121,8 @@ async fn get_handshakes_by_sender(
         }
     };
 
+    let metrics = state.metrics.clone();
+    let db_read_started = std::time::Instant::now();
     let result = spawn_blocking(move || {
         let rtx = state.tx_keyspace.read_tx();
 
@@ -188,6 +194,13 @@ async fn get_handshakes_by_sender(
             .flatten()
     })
     .await;
+    metrics.increment_db_read_ops_total(1);
+    metrics.increment_db_read_time_ms_total(
+        db_read_started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+    );
+    if result.as_ref().is_err() || matches!(&result, Ok(Err(_))) {
+        metrics.increment_db_errors_total();
+    }
 
     match result {
         Ok(Ok(handshakes)) => Ok(Json(handshakes)),
@@ -246,6 +259,8 @@ async fn get_handshakes_by_receiver(
         }
     };
 
+    let metrics = state.metrics.clone();
+    let db_read_started = std::time::Instant::now();
     let result = spawn_blocking(move || {
         let rtx = state.tx_keyspace.read_tx();
 
@@ -320,6 +335,13 @@ async fn get_handshakes_by_receiver(
             .flatten()
     })
     .await;
+    metrics.increment_db_read_ops_total(1);
+    metrics.increment_db_read_time_ms_total(
+        db_read_started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+    );
+    if result.as_ref().is_err() || matches!(&result, Ok(Err(_))) {
+        metrics.increment_db_errors_total();
+    }
 
     match result {
         Ok(Ok(handshakes)) => Ok(Json(handshakes)),

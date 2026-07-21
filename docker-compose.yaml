@@ -7,7 +7,7 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
-      KASPA_NODE_WBORSH_URL: ${KASPA_NODE_WBORSH_URL}
+      KASPA_NODE_WBORSH_URL: ${KASPA_NODE_WBORSH_URL:-ws://kasia-indexer_kaspa-node_1:17110}
       RUST_LOG: ${RUST_LOG}
       KASIA_INDEXER_DB_ROOT: /app/data
       NETWORK_TYPE: ${NETWORK_TYPE}

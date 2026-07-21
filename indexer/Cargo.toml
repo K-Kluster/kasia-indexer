@@ -18,6 +18,7 @@ kaspa-wrpc-client = { workspace = true }
 rayon.workspace = true
 rolling-file = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 time = { workspace = true, features = ["macros"] }
 tokio = { workspace = true, features = ["signal"] }
 tower-http = { workspace = true, features = ["cors"] }
@@ -31,6 +32,16 @@ utoipa = { workspace = true, features = ["axum_extras"] }
 utoipa-swagger-ui = { workspace = true, features = ["axum"] }
 workflow-core = { workspace = true }
 itertools = { workspace = true }
+jsonwebtoken.workspace = true
+reqwest.workspace = true
+secp256k1.workspace = true
+sha2.workspace = true
+rand.workspace = true
+base64.workspace = true
+ring.workspace = true
 
 indexer-db = { path = "../indexer-db" }
 indexer-actors = { path = "../indexer-actors", features = ["serde", "utoipa"] }
+
+[dev-dependencies]
+tempfile = "3.20"

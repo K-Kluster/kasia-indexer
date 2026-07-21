@@ -4,6 +4,7 @@ use crate::BlockGap;
 use crate::block_gap_filler::BlockGapFiller;
 use crate::data_source::Command;
 use crate::metrics::SharedMetrics;
+use crate::push::{PushEvent, PushEventKind, parse_self_stash_alias};
 use crate::util::{ToHex, ToHex64};
 use crate::virtual_chain_processor::CompactHeader;
 use fjall::{TxKeyspace, WriteTransaction};
@@ -31,7 +32,7 @@ use indexer_db::processing::tx_id_to_acceptance::{
 };
 use indexer_db::{AddressPayload, IntoBytes, PartitionId};
 use kaspa_consensus_core::tx::Transaction;
-use kaspa_rpc_core::{RpcBlock, RpcHeader, RpcTransaction, RpcTransactionId};
+use kaspa_rpc_core::{RpcBlock, RpcHeader, RpcTransaction, RpcTransactionId, RpcTransactionOutput};
 pub use message::*;
 use protocol::operation::deserializer::parse_sealed_operation;
 use protocol::operation::{
@@ -68,6 +69,7 @@ pub struct BlockProcessor {
     tx_id_to_payment_partition: TxIdToPaymentPartition,
     tx_id_to_acceptance_partition: TxIDToAcceptancePartition,
     shared_metrics: SharedMetrics,
+    push_tx: Option<flume::Sender<PushEvent>>,
     #[builder(default)]
     gaps_filling_in_progress: usize,
 }
@@ -339,6 +341,14 @@ impl BlockProcessor {
         Ok(())
     }
 
+    fn emit_push(&self, event: PushEvent) {
+        if let Some(push_tx) = &self.push_tx {
+            if let Err(err) = push_tx.try_send(event) {
+                warn!(?err, "Dropping push event; queue is full");
+            }
+        }
+    }
+
     fn handle_transaction(
         &self,
         wtx: &mut WriteTransaction,
@@ -358,13 +368,6 @@ impl BlockProcessor {
             return Ok(());
         };
 
-        let (amount, receiver) = tx
-            .outputs
-            .first()
-            .map(|o| AddressPayload::try_from(&o.script_public_key).map(|addr| (o.value, addr)))
-            .transpose()?
-            .unwrap_or_default();
-        debug!(receiver=?receiver, "Handling transaction");
         let sender_outpoint = tx.inputs.first().unwrap().previous_outpoint;
         let sender = if sender_outpoint.index == 0
             && let Some(acceptance_key) = self
@@ -375,6 +378,8 @@ impl BlockProcessor {
         } else {
             None
         };
+        let (amount, receiver) = resolve_primary_receiver(&tx.outputs, sender)?;
+        debug!(receiver=?receiver, "Handling transaction");
         let mut entries: SmallVec<[_; 1]> = SmallVec::new();
         iter::once(op).try_for_each(|op| match op {
             SealedOperation::SealedMessageOrSealedHandshakeVNone(hk) => {
@@ -528,6 +533,18 @@ impl BlockProcessor {
             trace!(sender = ?sender, "Inserting handshake by sender");
             self.handshake_by_sender_partition
                 .insert_wtx(wtx, &by_sender_key);
+            self.emit_push(PushEvent {
+                kind: PushEventKind::Handshake,
+                watched_address: receiver,
+                sender,
+                receiver,
+                alias: None,
+                tx_id: tx_id.as_bytes(),
+                amount: None,
+                payload: Some(String::from_utf8_lossy(op.sealed_hex).to_string()),
+                timestamp: block.timestamp,
+                daa_score: block.daa_score,
+            });
         } else {
             trace!("No sender resolved for handshake");
             entries.push(InsertionEntry {
@@ -578,6 +595,18 @@ impl BlockProcessor {
             trace!(sender = ?sender, "Inserting handshake v2 by sender");
             self.handshake_by_sender_partition
                 .insert_wtx(wtx, &by_sender_key);
+            self.emit_push(PushEvent {
+                kind: PushEventKind::Handshake,
+                watched_address: receiver,
+                sender,
+                receiver,
+                alias: None,
+                tx_id: tx_id.as_bytes(),
+                amount: None,
+                payload: Some(String::from_utf8_lossy(op.sealed_hex).to_string()),
+                timestamp: block.timestamp,
+                daa_score: block.daa_score,
+            });
         } else {
             trace!("No sender resolved for handshake v2");
             entries.push(InsertionEntry {
@@ -605,6 +634,7 @@ impl BlockProcessor {
         receiver: AddressPayload,
     ) {
         debug!(%tx_id, sender = ?sender, receiver = ?receiver, alias = %cm.alias.to_hex(), "Handling contextual message");
+        let alias_string = String::from_utf8_lossy(cm.alias).to_string();
         let mut alias = [0u8; 16];
         let len = cm.alias.len().min(16);
         alias[..len].copy_from_slice(&cm.alias[..len]);
@@ -622,6 +652,20 @@ impl BlockProcessor {
         if sender.is_some() {
             self.contextual_message_by_sender_partition
                 .insert(wtx, &cmk);
+            if let Some(sender) = sender {
+                self.emit_push(PushEvent {
+                    kind: PushEventKind::Contextual,
+                    watched_address: sender,
+                    sender,
+                    receiver,
+                    alias: Some(alias_string),
+                    tx_id: tx_id.as_bytes(),
+                    amount: None,
+                    payload: Some(String::from_utf8_lossy(cm.sealed_hex).to_string()),
+                    timestamp: header.timestamp,
+                    daa_score: header.daa_score,
+                });
+            }
         } else {
             entries.push(InsertionEntry {
                 partition_id: PartitionId::ContextualMessageBySender,
@@ -666,6 +710,22 @@ impl BlockProcessor {
             trace!(sender = ?sender, "Inserting payment by sender");
             self.payment_by_sender_partition
                 .insert_wtx(wtx, &by_sender_key);
+            if sender != receiver {
+                self.emit_push(PushEvent {
+                    kind: PushEventKind::Payment,
+                    watched_address: receiver,
+                    sender,
+                    receiver,
+                    alias: None,
+                    tx_id: tx_id.as_bytes(),
+                    amount: Some(amount),
+                    payload: Some(String::from_utf8_lossy(pm.sealed_hex).to_string()),
+                    timestamp: header.timestamp,
+                    daa_score: header.daa_score,
+                });
+            } else {
+                trace!(sender = ?sender, "Skipping payment push: receiver matches sender");
+            }
         } else {
             trace!("No sender resolved for payment");
             entries.push(InsertionEntry {
@@ -692,6 +752,7 @@ impl BlockProcessor {
         sss: SealedSelfStashV1,
         _receiver: AddressPayload,
     ) {
+        let self_stash_alias = sss.key.and_then(parse_self_stash_alias);
         self.tx_id_to_self_stash_partition
             .insert_wtx(wtx, tx_id.as_ref(), sss.sealed_hex);
         let key = SelfStashKeyByOwner {
@@ -704,6 +765,20 @@ impl BlockProcessor {
         };
         if sender.is_some() {
             self.self_stash_by_owner_partition.insert_wtx(wtx, &key);
+            if let Some(sender) = sender {
+                self.emit_push(PushEvent {
+                    kind: PushEventKind::SelfStash,
+                    watched_address: sender,
+                    sender,
+                    receiver: AddressPayload::default(),
+                    alias: self_stash_alias,
+                    tx_id: tx_id.as_bytes(),
+                    amount: None,
+                    payload: Some(String::from_utf8_lossy(sss.sealed_hex).to_string()),
+                    timestamp: block_header.timestamp,
+                    daa_score: block_header.daa_score,
+                });
+            }
         } else {
             entries.push(InsertionEntry {
                 partition_id: PartitionId::SelfStashByOwner,
@@ -712,6 +787,30 @@ impl BlockProcessor {
             });
         }
     }
+}
+
+fn resolve_primary_receiver(
+    outputs: &[RpcTransactionOutput],
+    sender: Option<AddressPayload>,
+) -> anyhow::Result<(u64, AddressPayload)> {
+    let mut parsed = Vec::new();
+    for output in outputs {
+        if let Ok(addr) = AddressPayload::try_from(&output.script_public_key) {
+            parsed.push((output.value, addr));
+        }
+    }
+
+    if parsed.is_empty() {
+        return Ok((0, AddressPayload::default()));
+    }
+
+    if let Some(sender_addr) = sender {
+        if let Some((amount, addr)) = parsed.iter().find(|(_, addr)| *addr != sender_addr) {
+            return Ok((*amount, *addr));
+        }
+    }
+
+    Ok(parsed[0])
 }
 
 impl Drop for BlockProcessor {

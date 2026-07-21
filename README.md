@@ -46,6 +46,17 @@ Useful commands:
 ## API
 
 - http://localhost:8080/swagger-ui/
+- `GET http://localhost:8080/metrics` exposes Prometheus text metrics.
+
+## Reverse Proxy Hardening
+
+For internet-exposed deployments, place the indexer behind nginx and enforce push endpoint limits at the edge.
+
+- Example hardened snippet: `nginx/push-security.conf`
+- Enforces:
+  - `/v1/push/*` request body cap (`64k`)
+  - rate limiting for push mutation endpoints
+  - blocking deprecated unversioned `/push/*` paths
 
 ## Env vars
 
@@ -61,4 +72,19 @@ NETWORK_TYPE=mainnet
 
 # if not defined, fallback to public kaspa network, if specified, the `ws://{ip}:{port}` node url
 #KASPA_NODE_WBORSH_URL=
+
+# APNs push (optional)
+#APNS_TEAM_ID=5V64BP2H3P
+#APNS_KEY_ID=
+#APNS_TOPIC=com.kasia.messenger # iOS bundle id, e.g. fyi.kasia.app
+#APNS_KEY_PATH= # path to .p8 key file
+#APNS_KEY=" # raw PEM key contents (optional alternative to APNS_KEY_PATH)
+#APNS_ENVIRONMENT=sandbox # sandbox or production (default: sandbox)
+
+# push mutation auth mode: legacy, mixed, strict (default: mixed)
+# - legacy: no signature required
+# - mixed: accepts signed + legacy, but wallet-bound tokens require auth
+# - strict: signature + nonce + App Attest required for register/update/unregister
+#   (requires APNS_TEAM_ID and APNS_TOPIC to derive App Attest App ID)
+#PUSH_AUTH_MODE=mixed
 ```
