@@ -1,6 +1,8 @@
 use crate::config::get_indexer_config;
 use crate::context::{IndexerContext, get_indexer_context};
-use crate::push::{PushDispatcher, PushRegistry};
+use crate::push::{
+    PUSH_REGISTRY_COMMAND_CAPACITY, PushDispatcher, PushRegistry, PushRegistryActor,
+};
 use dotenv::dotenv;
 use fjall::Config;
 use futures_util::TryFutureExt;
@@ -147,6 +149,11 @@ async fn main() -> anyhow::Result<()> {
         watched_address_partition,
         metrics.clone(),
     );
+    let (push_registry_actor, push_registry) =
+        PushRegistryActor::new(push_registry, PUSH_REGISTRY_COMMAND_CAPACITY);
+    let _push_registry_actor_handle = std::thread::Builder::new()
+        .name("push-registry".to_string())
+        .spawn(move || push_registry_actor.process())?;
     let (push_tx, push_rx) = flume::bounded(2048);
     let push_dispatcher = PushDispatcher::new(push_rx, push_registry.clone(), &context);
     let _push_handle = tokio::spawn(push_dispatcher.run());

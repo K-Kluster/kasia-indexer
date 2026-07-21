@@ -42,3 +42,6 @@ ring.workspace = true
 
 indexer-db = { path = "../indexer-db" }
 indexer-actors = { path = "../indexer-actors", features = ["serde", "utoipa"] }
+
+[dev-dependencies]
+tempfile = "3.20"

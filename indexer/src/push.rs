@@ -11,9 +11,8 @@ use kaspa_rpc_core::{RpcAddress, RpcNetworkType};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, oneshot};
 use tracing::{info, warn};
 
 const MAX_WATCHED_ADDRESSES: usize = 256;
@@ -23,6 +22,7 @@ const MAX_ADDRESS_LEN_BYTES: usize = 128;
 const MAX_PLATFORM_LEN_BYTES: usize = 16;
 const WALLET_PUBKEY_HEX_LEN: usize = 64;
 const SUPPORTED_PLATFORMS: &[&str] = &["ios", "macos"];
+pub const PUSH_REGISTRY_COMMAND_CAPACITY: usize = 256;
 
 #[derive(Debug, Clone)]
 pub struct WalletBinding {
@@ -37,14 +37,13 @@ pub struct DeviceKeyBinding {
     pub counter: u64,
 }
 
-#[derive(Clone)]
 pub struct PushRegistry {
     tx_keyspace: fjall::TxKeyspace,
     device_partition: DeviceRegistrationPartition,
     watched_partition: WatchedAddressPartition,
     metrics: SharedMetrics,
-    alias_cache: Arc<StdMutex<HashMap<String, HashSet<String>>>>,
-    primary_cache: Arc<StdMutex<HashMap<String, Option<AddressPayload>>>>,
+    alias_cache: HashMap<String, HashSet<String>>,
+    primary_cache: HashMap<String, Option<AddressPayload>>,
 }
 
 impl PushRegistry {
@@ -59,13 +58,13 @@ impl PushRegistry {
             device_partition,
             watched_partition,
             metrics,
-            alias_cache: Arc::new(StdMutex::new(HashMap::new())),
-            primary_cache: Arc::new(StdMutex::new(HashMap::new())),
+            alias_cache: HashMap::new(),
+            primary_cache: HashMap::new(),
         }
     }
 
     pub fn register(
-        &self,
+        &mut self,
         token: String,
         platform: String,
         watched_addresses: Vec<String>,
@@ -103,7 +102,9 @@ impl PushRegistry {
         let effective_device_public_key = effective_device_binding
             .as_ref()
             .map(|binding| binding.public_key_b64.clone());
-        let effective_device_counter = effective_device_binding.as_ref().map(|binding| binding.counter);
+        let effective_device_counter = effective_device_binding
+            .as_ref()
+            .map(|binding| binding.counter);
         let created_at = existing.as_ref().map(|reg| reg.created_at).unwrap_or(now);
         let last_seen_refresh = existing
             .as_ref()
@@ -243,7 +244,7 @@ impl PushRegistry {
     }
 
     pub fn update(
-        &self,
+        &mut self,
         token: String,
         watched_addresses: Vec<String>,
         primary_address: Option<String>,
@@ -279,7 +280,9 @@ impl PushRegistry {
         let effective_device_public_key = effective_device_binding
             .as_ref()
             .map(|binding| binding.public_key_b64.clone());
-        let effective_device_counter = effective_device_binding.as_ref().map(|binding| binding.counter);
+        let effective_device_counter = effective_device_binding
+            .as_ref()
+            .map(|binding| binding.counter);
         let created_at = existing.as_ref().map(|reg| reg.created_at).unwrap_or(now);
         let platform = existing
             .as_ref()
@@ -416,24 +419,8 @@ impl PushRegistry {
         }
     }
 
-    pub fn unregister(&self, token: String) -> anyhow::Result<()> {
-        self.unregister_inner(token, None, false)
-    }
-
-    pub fn unregister_authorized(
-        &self,
-        token: String,
-        wallet_pubkey: Option<String>,
-    ) -> anyhow::Result<()> {
-        let wallet_pubkey = wallet_pubkey
-            .as_deref()
-            .map(normalize_wallet_pubkey)
-            .transpose()?;
-        self.unregister_inner(token, wallet_pubkey, true)
-    }
-
     fn unregister_inner(
-        &self,
+        &mut self,
         token: String,
         wallet_pubkey: Option<String>,
         enforce_binding: bool,
@@ -480,6 +467,44 @@ impl PushRegistry {
                 self.metrics.increment_db_errors_total();
                 Err(err.into())
             }
+        }
+    }
+
+    fn unregister_authenticated(
+        &mut self,
+        token: String,
+        wallet_pubkey: Option<String>,
+        device_binding: Option<DeviceKeyBinding>,
+    ) -> anyhow::Result<()> {
+        let token = normalize_device_token(&token)?;
+        let existing = self.get_registration(&token)?;
+        let allow_device_fallback = device_binding
+            .as_ref()
+            .is_some_and(|binding| device_binding_matches_registration(existing.as_ref(), binding));
+        let wallet_pubkey = wallet_pubkey
+            .as_deref()
+            .map(normalize_wallet_pubkey)
+            .transpose()?;
+
+        if let Some(wallet_pubkey) = wallet_pubkey {
+            match self.unregister_inner(token.clone(), Some(wallet_pubkey), true) {
+                Ok(()) => Ok(()),
+                Err(err) => {
+                    let message = err.to_string().to_ascii_lowercase();
+                    if allow_device_fallback
+                        && (message.contains("bound to another wallet")
+                            || message.contains("auth is required"))
+                    {
+                        self.unregister_inner(token, None, false)
+                    } else {
+                        Err(err)
+                    }
+                }
+            }
+        } else if allow_device_fallback {
+            self.unregister_inner(token, None, false)
+        } else {
+            self.unregister_inner(token, None, true)
         }
     }
 
@@ -569,94 +594,340 @@ impl PushRegistry {
         result
     }
 
-    pub fn token_allows_alias(&self, token: &str, alias: &str) -> bool {
-        {
-            let cache = self.alias_cache.lock().ok();
-            let Some(cache) = cache else { return false };
-            if let Some(aliases) = cache.get(token) {
-                if aliases.is_empty() {
-                    return true;
-                }
-                return aliases.contains(alias);
-            }
+    fn token_allows_alias(&mut self, token: &str, alias: &str) -> bool {
+        if let Some(aliases) = self.alias_cache.get(token) {
+            return aliases.is_empty() || aliases.contains(alias);
         }
 
         self.hydrate_filter_caches(token);
 
-        let cache = self.alias_cache.lock().ok();
-        let Some(cache) = cache else { return false };
-        match cache.get(token) {
+        match self.alias_cache.get(token) {
             Some(aliases) if aliases.is_empty() => true,
             Some(aliases) => aliases.contains(alias),
             None => false,
         }
     }
 
-    pub fn token_primary_matches(&self, token: &str, receiver: &AddressPayload) -> bool {
-        {
-            let cache = self.primary_cache.lock().ok();
-            let Some(cache) = cache else { return false };
-            if let Some(primary) = cache.get(token) {
-                return primary
-                    .as_ref()
-                    .map(|primary| primary == receiver)
-                    .unwrap_or(false);
-            }
+    fn token_primary_matches(&mut self, token: &str, receiver: &AddressPayload) -> bool {
+        if let Some(primary) = self.primary_cache.get(token) {
+            return primary
+                .as_ref()
+                .map(|primary| primary == receiver)
+                .unwrap_or(false);
         }
 
         self.hydrate_filter_caches(token);
 
-        let cache = self.primary_cache.lock().ok();
-        let Some(cache) = cache else { return false };
-        match cache.get(token) {
+        match self.primary_cache.get(token) {
             Some(Some(primary)) => primary == receiver,
             None => false,
             Some(None) => false,
         }
     }
 
-    fn update_aliases(&self, token: &str, aliases: Vec<String>) {
+    fn update_aliases(&mut self, token: &str, aliases: Vec<String>) {
         let normalized = normalize_aliases(aliases);
-        let Ok(mut cache) = self.alias_cache.lock() else {
-            return;
-        };
         // Keep empty set as an explicit "allow all aliases" marker to avoid DB re-hydration loops.
-        cache.insert(token.to_string(), normalized);
+        self.alias_cache.insert(token.to_string(), normalized);
     }
 
-    fn clear_aliases(&self, token: &str) {
-        let Ok(mut cache) = self.alias_cache.lock() else {
-            return;
-        };
-        cache.remove(token);
+    fn clear_aliases(&mut self, token: &str) {
+        self.alias_cache.remove(token);
     }
 
-    fn update_primary_address(&self, token: &str, address: Option<String>) {
-        let Ok(mut cache) = self.primary_cache.lock() else {
-            return;
-        };
+    fn update_primary_address(&mut self, token: &str, address: Option<String>) {
         let payload = address.and_then(|address| address_to_payload(&address).ok());
         // Keep None as an explicit "no primary" marker to avoid DB re-hydration loops.
-        cache.insert(token.to_string(), payload);
+        self.primary_cache.insert(token.to_string(), payload);
     }
 
-    fn clear_primary_address(&self, token: &str) {
-        let Ok(mut cache) = self.primary_cache.lock() else {
-            return;
-        };
-        cache.remove(token);
+    fn clear_primary_address(&mut self, token: &str) {
+        self.primary_cache.remove(token);
     }
 
     pub fn metrics(&self) -> SharedMetrics {
         self.metrics.clone()
     }
 
-    fn hydrate_filter_caches(&self, token: &str) {
+    fn hydrate_filter_caches(&mut self, token: &str) {
         let Ok(Some(registration)) = self.get_registration(token) else {
             return;
         };
         self.update_aliases(token, registration.aliases);
         self.update_primary_address(token, registration.primary_address);
+    }
+
+    fn matching_tokens(
+        &mut self,
+        watched_address: &AddressPayload,
+        alias: Option<&str>,
+        receiver: Option<&AddressPayload>,
+    ) -> anyhow::Result<Vec<String>> {
+        let tokens = self.tokens_for_address(watched_address)?;
+        self.metrics
+            .increment_push_tokens_looked_up_total(tokens.len() as u64);
+
+        if tokens.is_empty() {
+            self.prune_address_watchers(watched_address)?;
+            return Ok(tokens);
+        }
+
+        let mut matching = Vec::with_capacity(tokens.len());
+        for token in tokens {
+            if alias.is_some_and(|alias| !self.token_allows_alias(&token, alias)) {
+                self.metrics.increment_push_filtered_alias_total();
+                continue;
+            }
+            if receiver.is_some_and(|receiver| !self.token_primary_matches(&token, receiver)) {
+                self.metrics.increment_push_filtered_primary_total();
+                continue;
+            }
+            matching.push(token);
+        }
+        Ok(matching)
+    }
+}
+
+type RegistryResponse<T> = oneshot::Sender<anyhow::Result<T>>;
+
+enum PushRegistryCommand {
+    Register {
+        token: String,
+        platform: String,
+        watched_addresses: Vec<String>,
+        primary_address: Option<String>,
+        aliases: Vec<String>,
+        wallet_binding: Option<WalletBinding>,
+        device_key_binding: Option<DeviceKeyBinding>,
+        response: RegistryResponse<()>,
+    },
+    Update {
+        token: String,
+        watched_addresses: Vec<String>,
+        primary_address: Option<String>,
+        aliases: Vec<String>,
+        wallet_binding: Option<WalletBinding>,
+        device_key_binding: Option<DeviceKeyBinding>,
+        response: RegistryResponse<()>,
+    },
+    Unregister {
+        token: String,
+        response: RegistryResponse<()>,
+    },
+    UnregisterAuthenticated {
+        token: String,
+        wallet_pubkey: Option<String>,
+        device_binding: Option<DeviceKeyBinding>,
+        response: RegistryResponse<()>,
+    },
+    MatchTokens {
+        watched_address: AddressPayload,
+        alias: Option<String>,
+        receiver: Option<AddressPayload>,
+        response: RegistryResponse<Vec<String>>,
+    },
+}
+
+pub struct PushRegistryActor {
+    registry: PushRegistry,
+    commands: flume::Receiver<PushRegistryCommand>,
+}
+
+impl PushRegistryActor {
+    pub fn new(registry: PushRegistry, capacity: usize) -> (Self, PushRegistryHandle) {
+        let metrics = registry.metrics();
+        let (commands_tx, commands) = flume::bounded(capacity);
+        (
+            Self { registry, commands },
+            PushRegistryHandle {
+                commands: commands_tx,
+                metrics,
+            },
+        )
+    }
+
+    pub fn process(mut self) {
+        info!("[PushRegistry] actor started");
+        while let Ok(command) = self.commands.recv() {
+            match command {
+                PushRegistryCommand::Register {
+                    token,
+                    platform,
+                    watched_addresses,
+                    primary_address,
+                    aliases,
+                    wallet_binding,
+                    device_key_binding,
+                    response,
+                } => {
+                    let result = self.registry.register(
+                        token,
+                        platform,
+                        watched_addresses,
+                        primary_address,
+                        aliases,
+                        wallet_binding,
+                        device_key_binding,
+                    );
+                    let _ = response.send(result);
+                }
+                PushRegistryCommand::Update {
+                    token,
+                    watched_addresses,
+                    primary_address,
+                    aliases,
+                    wallet_binding,
+                    device_key_binding,
+                    response,
+                } => {
+                    let result = self.registry.update(
+                        token,
+                        watched_addresses,
+                        primary_address,
+                        aliases,
+                        wallet_binding,
+                        device_key_binding,
+                    );
+                    let _ = response.send(result);
+                }
+                PushRegistryCommand::Unregister { token, response } => {
+                    let result = self.registry.unregister_inner(token, None, false);
+                    let _ = response.send(result);
+                }
+                PushRegistryCommand::UnregisterAuthenticated {
+                    token,
+                    wallet_pubkey,
+                    device_binding,
+                    response,
+                } => {
+                    let result = self.registry.unregister_authenticated(
+                        token,
+                        wallet_pubkey,
+                        device_binding,
+                    );
+                    let _ = response.send(result);
+                }
+                PushRegistryCommand::MatchTokens {
+                    watched_address,
+                    alias,
+                    receiver,
+                    response,
+                } => {
+                    let result = self.registry.matching_tokens(
+                        &watched_address,
+                        alias.as_deref(),
+                        receiver.as_ref(),
+                    );
+                    let _ = response.send(result);
+                }
+            }
+        }
+        info!("[PushRegistry] actor stopped");
+    }
+}
+
+#[derive(Clone)]
+pub struct PushRegistryHandle {
+    commands: flume::Sender<PushRegistryCommand>,
+    metrics: SharedMetrics,
+}
+
+impl PushRegistryHandle {
+    async fn request<T>(
+        &self,
+        command: impl FnOnce(RegistryResponse<T>) -> PushRegistryCommand,
+    ) -> anyhow::Result<T> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.commands
+            .send_async(command(response_tx))
+            .await
+            .map_err(|_| anyhow::anyhow!("push registry actor is not running"))?;
+        response_rx
+            .await
+            .map_err(|_| anyhow::anyhow!("push registry actor dropped its response"))?
+    }
+
+    pub async fn register(
+        &self,
+        token: String,
+        platform: String,
+        watched_addresses: Vec<String>,
+        primary_address: Option<String>,
+        aliases: Vec<String>,
+        wallet_binding: Option<WalletBinding>,
+        device_key_binding: Option<DeviceKeyBinding>,
+    ) -> anyhow::Result<()> {
+        self.request(|response| PushRegistryCommand::Register {
+            token,
+            platform,
+            watched_addresses,
+            primary_address,
+            aliases,
+            wallet_binding,
+            device_key_binding,
+            response,
+        })
+        .await
+    }
+
+    pub async fn update(
+        &self,
+        token: String,
+        watched_addresses: Vec<String>,
+        primary_address: Option<String>,
+        aliases: Vec<String>,
+        wallet_binding: Option<WalletBinding>,
+        device_key_binding: Option<DeviceKeyBinding>,
+    ) -> anyhow::Result<()> {
+        self.request(|response| PushRegistryCommand::Update {
+            token,
+            watched_addresses,
+            primary_address,
+            aliases,
+            wallet_binding,
+            device_key_binding,
+            response,
+        })
+        .await
+    }
+
+    pub async fn unregister(&self, token: String) -> anyhow::Result<()> {
+        self.request(|response| PushRegistryCommand::Unregister { token, response })
+            .await
+    }
+
+    pub async fn unregister_authenticated(
+        &self,
+        token: String,
+        wallet_pubkey: Option<String>,
+        device_binding: Option<DeviceKeyBinding>,
+    ) -> anyhow::Result<()> {
+        self.request(|response| PushRegistryCommand::UnregisterAuthenticated {
+            token,
+            wallet_pubkey,
+            device_binding,
+            response,
+        })
+        .await
+    }
+
+    pub async fn matching_tokens(
+        &self,
+        watched_address: AddressPayload,
+        alias: Option<String>,
+        receiver: Option<AddressPayload>,
+    ) -> anyhow::Result<Vec<String>> {
+        self.request(|response| PushRegistryCommand::MatchTokens {
+            watched_address,
+            alias,
+            receiver,
+            response,
+        })
+        .await
+    }
+
+    pub fn metrics(&self) -> SharedMetrics {
+        self.metrics.clone()
     }
 }
 
@@ -691,7 +962,7 @@ pub struct DeviceRegistration {
 
 pub struct PushDispatcher {
     rx: flume::Receiver<PushEvent>,
-    registry: PushRegistry,
+    registry: PushRegistryHandle,
     metrics: SharedMetrics,
     apns: Option<ApnsClient>,
     network_type: RpcNetworkType,
@@ -702,7 +973,7 @@ pub struct PushDispatcher {
 impl PushDispatcher {
     pub fn new(
         rx: flume::Receiver<PushEvent>,
-        registry: PushRegistry,
+        registry: PushRegistryHandle,
         context: &IndexerContext,
     ) -> Self {
         let apns = match ApnsClient::from_context(context) {
@@ -747,27 +1018,6 @@ impl PushDispatcher {
         };
         let sender = sender_addr.to_string();
 
-        let tokens = tokio::task::spawn_blocking({
-            let registry = self.registry.clone();
-            let watched = event.watched_address;
-            move || registry.tokens_for_address(&watched)
-        })
-        .await??;
-        self.metrics
-            .increment_push_tokens_looked_up_total(tokens.len() as u64);
-
-        if tokens.is_empty() {
-            let registry = self.registry.clone();
-            let watched = event.watched_address;
-            tokio::task::spawn_blocking(move || {
-                let _ = registry.prune_address_watchers(&watched);
-            })
-            .await
-            .ok();
-            return Ok(());
-        }
-
-        let alias_filter = event.alias.as_deref();
         let receiver_filter = if matches!(
             event.kind,
             PushEventKind::Payment | PushEventKind::Handshake
@@ -776,6 +1026,14 @@ impl PushDispatcher {
         } else {
             None
         };
+        let tokens = self
+            .registry
+            .matching_tokens(event.watched_address, event.alias.clone(), receiver_filter)
+            .await?;
+        if tokens.is_empty() {
+            return Ok(());
+        }
+
         let tx_id = event.tx_id.to_hex();
         if !self.sent_cache.mark_seen(&tx_id) {
             self.metrics.increment_push_dedup_dropped_total();
@@ -824,18 +1082,6 @@ impl PushDispatcher {
         };
 
         for token in tokens {
-            if let Some(alias) = alias_filter {
-                if !self.registry.token_allows_alias(&token, alias) {
-                    self.metrics.increment_push_filtered_alias_total();
-                    continue;
-                }
-            }
-            if let Some(receiver) = receiver_filter {
-                if !self.registry.token_primary_matches(&token, &receiver) {
-                    self.metrics.increment_push_filtered_primary_total();
-                    continue;
-                }
-            }
             let token_short = token
                 .get(token.len().saturating_sub(8)..)
                 .unwrap_or(token.as_str());
@@ -849,11 +1095,7 @@ impl PushDispatcher {
                     warn!("[Push] Unregistered token ...{}, removing", token_short);
                     self.metrics.increment_push_send_failed_total();
                     self.metrics.increment_push_unregistered_removed_total();
-                    let registry = self.registry.clone();
-                    let token_clone = token.clone();
-                    tokio::task::spawn_blocking(move || registry.unregister(token_clone))
-                        .await
-                        .ok();
+                    let _ = self.registry.unregister(token.clone()).await;
                     self.invalid_token_counts.remove(&token);
                 }
                 Err(ApnsError::Auth(err)) => {
@@ -878,11 +1120,7 @@ impl PushDispatcher {
                             token_short
                         );
                         self.metrics.increment_push_unregistered_removed_total();
-                        let registry = self.registry.clone();
-                        let token_clone = token.clone();
-                        tokio::task::spawn_blocking(move || registry.unregister(token_clone))
-                            .await
-                            .ok();
+                        let _ = self.registry.unregister(token.clone()).await;
                         self.invalid_token_counts.remove(&token);
                     }
                 }
@@ -1305,6 +1543,36 @@ fn validate_unregister_binding(
     Ok(())
 }
 
+fn device_binding_matches_registration(
+    registration: Option<&DeviceRegistration>,
+    device_binding: &DeviceKeyBinding,
+) -> bool {
+    let Some(registration) = registration else {
+        return false;
+    };
+
+    // Migration compatibility: old wallet-bound registrations may not have a stored
+    // device key yet. In that case a verified device-auth request may unregister the
+    // token so a newer client can bind it again.
+    if registration.device_key_id.is_none() || registration.device_key_public_key_b64.is_none() {
+        return true;
+    }
+
+    let Some(existing_key_id) = registration.device_key_id.as_ref() else {
+        return false;
+    };
+    let Some(existing_pubkey) = registration.device_key_public_key_b64.as_ref() else {
+        return false;
+    };
+    if existing_key_id != &device_binding.key_id
+        || existing_pubkey != &device_binding.public_key_b64
+    {
+        return false;
+    }
+    let last_counter = registration.device_key_counter.unwrap_or(0);
+    device_binding.counter > last_counter
+}
+
 fn token_from_watched_key_bytes(key: &[u8]) -> Option<String> {
     let address_prefix_len = std::mem::size_of::<AddressPayload>();
     if key.len() <= address_prefix_len {
@@ -1420,9 +1688,13 @@ fn unix_time_secs() -> u64 {
 mod tests {
     use super::{
         DeviceRegistration, MAX_ADDRESS_LEN_BYTES, MAX_ALIAS_LEN_BYTES, MAX_ALIASES,
-        MAX_WATCHED_ADDRESSES, WalletBinding, normalize_platform, normalize_wallet_pubkey,
-        resolve_wallet_binding, validate_registration_limits,
+        MAX_WATCHED_ADDRESSES, PushRegistry, PushRegistryActor, WalletBinding, address_to_payload,
+        normalize_platform, normalize_wallet_pubkey, resolve_wallet_binding,
+        validate_registration_limits,
     };
+    use indexer_actors::metrics::create_shared_metrics;
+    use indexer_db::push::{DeviceRegistrationPartition, WatchedAddressPartition};
+    use kaspa_addresses::{Address, Prefix, Version};
 
     #[test]
     fn normalize_platform_accepts_ios_and_macos() {
@@ -1503,5 +1775,84 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn registry_actor_serializes_registration_and_filtering() {
+        let db_dir = tempfile::tempdir().expect("temporary database directory");
+        let tx_keyspace = fjall::Config::new(db_dir.path())
+            .open_transactional()
+            .expect("transactional keyspace");
+        let registry = PushRegistry::new(
+            tx_keyspace.clone(),
+            DeviceRegistrationPartition::new(&tx_keyspace).expect("device partition"),
+            WatchedAddressPartition::new(&tx_keyspace).expect("watched partition"),
+            create_shared_metrics(),
+        );
+        let (actor, handle) = PushRegistryActor::new(registry, 8);
+        let actor_thread = std::thread::spawn(move || actor.process());
+
+        let watched_address = Address::new(Prefix::Mainnet, Version::PubKey, &[7; 32]).to_string();
+        let watched_payload =
+            address_to_payload(&watched_address).expect("valid watched address payload");
+        let token = "ab".repeat(32);
+
+        handle
+            .register(
+                token.clone(),
+                "ios".to_string(),
+                vec![watched_address.clone()],
+                Some(watched_address.clone()),
+                vec!["alice".to_string()],
+                None,
+                None,
+            )
+            .await
+            .expect("registration succeeds");
+
+        let matching = handle
+            .matching_tokens(
+                watched_payload,
+                Some("alice".to_string()),
+                Some(watched_payload),
+            )
+            .await
+            .expect("filter succeeds");
+        assert_eq!(matching, vec![token.clone()]);
+
+        handle
+            .update(
+                token.clone(),
+                vec![watched_address.clone()],
+                Some(watched_address),
+                vec!["bob".to_string()],
+                None,
+                None,
+            )
+            .await
+            .expect("update succeeds");
+
+        let stale_alias = handle
+            .matching_tokens(
+                watched_payload,
+                Some("alice".to_string()),
+                Some(watched_payload),
+            )
+            .await
+            .expect("filter succeeds");
+        assert!(stale_alias.is_empty());
+
+        let updated_alias = handle
+            .matching_tokens(
+                watched_payload,
+                Some("bob".to_string()),
+                Some(watched_payload),
+            )
+            .await
+            .expect("filter succeeds");
+        assert_eq!(updated_alias, vec![token]);
+
+        drop(handle);
+        actor_thread.join().expect("actor exits cleanly");
     }
 }

@@ -1,5 +1,5 @@
 use crate::config::PushAuthMode;
-use crate::push::{DeviceKeyBinding, PushRegistry, WalletBinding};
+use crate::push::{DeviceKeyBinding, PushRegistryHandle, WalletBinding};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{error, warn};
+use tracing::warn;
 use utoipa::ToSchema;
 
 const AUTH_DOMAIN: &str = "kasia-push-auth:v1";
@@ -31,7 +31,7 @@ const MAX_NONCE_STORE_ENTRIES: usize = 50_000;
 
 #[derive(Clone)]
 pub struct PushApi {
-    registry: PushRegistry,
+    registry: PushRegistryHandle,
     auth_mode: PushAuthMode,
     network_type: RpcNetworkType,
     nonces: Arc<StdMutex<NonceStore>>,
@@ -39,7 +39,7 @@ pub struct PushApi {
 
 impl PushApi {
     pub fn new(
-        registry: PushRegistry,
+        registry: PushRegistryHandle,
         network_type: RpcNetworkType,
         auth_mode: PushAuthMode,
         _app_attest_team_id: Option<String>,
@@ -234,9 +234,9 @@ async fn register_device(
         }
     };
 
-    let registry = state.registry.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        registry.register(
+    let result = state
+        .registry
+        .register(
             payload.device_token,
             payload.platform,
             payload.watched_addresses,
@@ -245,28 +245,18 @@ async fn register_device(
             verified_auth.wallet_binding,
             verified_auth.device_binding,
         )
-    })
-    .await;
+        .await;
 
     match result {
-        Ok(Ok(())) => Ok(Json(PushResponse {
+        Ok(()) => Ok(Json(PushResponse {
             status: "ok".to_string(),
         })),
-        Ok(Err(err)) => Err((
+        Err(err) => Err((
             status_code_for_push_error(&err),
             Json(ErrorResponse {
                 error: err.to_string(),
             }),
         )),
-        Err(err) => {
-            error!("Push register failed: {err}");
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "Internal server error".to_string(),
-                }),
-            ))
-        }
     }
 }
 
@@ -302,9 +292,9 @@ async fn update_registration(
         }
     };
 
-    let registry = state.registry.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        registry.update(
+    let result = state
+        .registry
+        .update(
             payload.device_token,
             payload.watched_addresses,
             payload.primary_address,
@@ -312,28 +302,18 @@ async fn update_registration(
             verified_auth.wallet_binding,
             verified_auth.device_binding,
         )
-    })
-    .await;
+        .await;
 
     match result {
-        Ok(Ok(())) => Ok(Json(PushResponse {
+        Ok(()) => Ok(Json(PushResponse {
             status: "ok".to_string(),
         })),
-        Ok(Err(err)) => Err((
+        Err(err) => Err((
             status_code_for_push_error(&err),
             Json(ErrorResponse {
                 error: err.to_string(),
             }),
         )),
-        Err(err) => {
-            error!("Push update failed: {err}");
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "Internal server error".to_string(),
-                }),
-            ))
-        }
     }
 }
 
@@ -352,89 +332,44 @@ async fn unregister_device(
     State(state): State<PushApi>,
     Json(payload): Json<PushUnregisterRequest>,
 ) -> impl IntoResponse {
-    let verified_auth = match authenticate_unregister_request(
-        &state,
-        &payload.device_token,
-        payload.auth.as_ref(),
-    ) {
-        Ok(binding) => binding,
-        Err(err) => {
-            warn!("Push unregister auth rejected: {}", err.message);
-            return Err(err.into_response());
-        }
-    };
+    let verified_auth =
+        match authenticate_unregister_request(&state, &payload.device_token, payload.auth.as_ref())
+        {
+            Ok(binding) => binding,
+            Err(err) => {
+                warn!("Push unregister auth rejected: {}", err.message);
+                return Err(err.into_response());
+            }
+        };
 
     let normalized_token = match normalize_device_token(&payload.device_token) {
         Ok(token) => token,
         Err(err) => return Err(err.into_response()),
     };
 
-    let existing = match state.registry.get_registration(&normalized_token) {
-        Ok(existing) => existing,
-        Err(err) => {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: err.to_string(),
-                }),
-            ));
-        }
-    };
-
     let wallet_pubkey = verified_auth
         .wallet_binding
         .as_ref()
         .map(|binding| binding.wallet_pubkey.clone());
-    let mut allow_device_fallback = false;
-    if let Some(device_binding) = verified_auth.device_binding.as_ref() {
-        allow_device_fallback = device_binding_matches_registration(existing.as_ref(), device_binding);
-    }
-
-    let registry = state.registry.clone();
-    let token = normalized_token;
-    let result = tokio::task::spawn_blocking(move || {
-        if let Some(wallet_pubkey) = wallet_pubkey {
-            match registry.unregister_authorized(token.clone(), Some(wallet_pubkey)) {
-                Ok(()) => Ok(()),
-                Err(err) => {
-                    let message = err.to_string().to_ascii_lowercase();
-                    if allow_device_fallback
-                        && (message.contains("bound to another wallet")
-                            || message.contains("auth is required"))
-                    {
-                        registry.unregister(token)
-                    } else {
-                        Err(err)
-                    }
-                }
-            }
-        } else if allow_device_fallback {
-            registry.unregister(token)
-        } else {
-            registry.unregister_authorized(token, None)
-        }
-    })
-    .await;
+    let result = state
+        .registry
+        .unregister_authenticated(
+            normalized_token,
+            wallet_pubkey,
+            verified_auth.device_binding,
+        )
+        .await;
 
     match result {
-        Ok(Ok(())) => Ok(Json(PushResponse {
+        Ok(()) => Ok(Json(PushResponse {
             status: "ok".to_string(),
         })),
-        Ok(Err(err)) => Err((
+        Err(err) => Err((
             status_code_for_push_error(&err),
             Json(ErrorResponse {
                 error: err.to_string(),
             }),
         )),
-        Err(err) => {
-            error!("Push unregister failed: {err}");
-            Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "Internal server error".to_string(),
-                }),
-            ))
-        }
     }
 }
 
@@ -628,9 +563,8 @@ fn verify_device_key_binding_from_auth(
         timestamp_ms: auth.timestamp_ms,
         expires_at_ms: auth.expires_at_ms,
     });
-    verify_p256_signature(&public_key, preimage.as_bytes(), &signature).map_err(|_| {
-        PushApiError::unauthorized("Invalid device key signature")
-    })?;
+    verify_p256_signature(&public_key, preimage.as_bytes(), &signature)
+        .map_err(|_| PushApiError::unauthorized("Invalid device key signature"))?;
 
     Ok(Some(DeviceKeyBinding {
         key_id,
@@ -906,30 +840,6 @@ fn build_device_auth_preimage(preimage: DeviceAuthPreimage<'_>) -> String {
     .join("\n")
 }
 
-fn device_binding_matches_registration(
-    registration: Option<&crate::push::DeviceRegistration>,
-    device_binding: &DeviceKeyBinding,
-) -> bool {
-    let Some(registration) = registration else {
-        return false;
-    };
-
-    // Migration compatibility: old wallet-bound registrations may not have a stored
-    // device key yet. In that case we allow a verified device-auth request to
-    // perform unregister so the token can be re-bound by a newer client.
-    if registration.device_key_id.is_none() || registration.device_key_public_key_b64.is_none() {
-        return true;
-    }
-
-    let Some(existing_key_id) = registration.device_key_id.as_ref() else { return false };
-    let Some(existing_pubkey) = registration.device_key_public_key_b64.as_ref() else { return false };
-    if existing_key_id != &device_binding.key_id || existing_pubkey != &device_binding.public_key_b64 {
-        return false;
-    }
-    let last_counter = registration.device_key_counter.unwrap_or(0);
-    device_binding.counter > last_counter
-}
-
 fn canonicalize_watched_addresses(values: &[String]) -> Vec<String> {
     canonicalize_set(values, |value| {
         let trimmed = value.trim();
@@ -1064,6 +974,8 @@ fn status_code_for_push_error(err: &anyhow::Error) -> StatusCode {
         || message.contains("unauthorized")
     {
         StatusCode::UNAUTHORIZED
+    } else if message.contains("push registry actor") {
+        StatusCode::INTERNAL_SERVER_ERROR
     } else {
         StatusCode::BAD_REQUEST
     }
