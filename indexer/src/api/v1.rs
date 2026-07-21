@@ -4,10 +4,11 @@ use crate::api::v1::payments::PaymentApi;
 use crate::api::v1::push::PushApi;
 use crate::api::v1::self_stash::SelfStashApi;
 use crate::context::IndexerContext;
+use axum::Router;
 use axum::extract::{DefaultBodyLimit, State};
+use axum::http::header::CONTENT_TYPE;
 use axum::response::IntoResponse;
 use axum::routing::get;
-use axum::{Json, Router};
 use indexer_actors::metrics::{IndexerMetricsSnapshot, SharedMetrics};
 use indexer_db::messages::contextual_message::{
     ContextualMessageBySenderPartition, TxIdToContextualMessagePartition,
@@ -27,6 +28,7 @@ use utoipa_swagger_ui::SwaggerUi;
 pub mod contextual_messages;
 pub mod handshakes;
 pub mod payments;
+mod prometheus;
 pub mod push;
 pub mod self_stash;
 
@@ -185,9 +187,12 @@ impl Api {
     get,
     path = "/metrics",
     responses(
-        (status = 200, description = "Get system metrics", body = IndexerMetricsSnapshot)
+        (status = 200, description = "Get Prometheus metrics", content_type = "text/plain", body = String)
     )
 )]
 async fn get_metrics(State(metrics): State<SharedMetrics>) -> impl IntoResponse {
-    Json(metrics.snapshot())
+    (
+        [(CONTENT_TYPE, prometheus::CONTENT_TYPE)],
+        prometheus::render(&metrics.snapshot()),
+    )
 }

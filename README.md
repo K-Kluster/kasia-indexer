@@ -46,6 +46,7 @@ Useful commands:
 ## API
 
 - http://localhost:8080/swagger-ui/
+- `GET http://localhost:8080/metrics` exposes Prometheus text metrics.
 
 ## Reverse Proxy Hardening
 
